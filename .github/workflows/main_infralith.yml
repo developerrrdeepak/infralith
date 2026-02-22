@@ -75,7 +75,8 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: 'infralith-epd3e7akbyf0a2ce'
+          app-name: 'infralith'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_3623F74E7A2942D4B05EB622D6E7F7CB }}
           package: release.zip
+
