@@ -36,14 +36,24 @@ jobs:
 
       - name: Prepare standalone for deployment
         run: |
-          # Copy static and public to standalone
+          # Create necessary directory inside standalone
           mkdir -p .next/standalone/.next/static
-          cp -r .next/static/* .next/standalone/.next/static/
-          cp -r public .next/standalone/public/
+          
+          # Copy static files if they exist
+          if [ -d ".next/static" ]; then
+            cp -r .next/static/* .next/standalone/.next/static/
+          fi
+          
+          # Copy public folder if it exists
+          if [ -d "public" ]; then
+            mkdir -p .next/standalone/public
+            cp -r public/* .next/standalone/public/
+          fi
           
           # Create deployment package
           cd .next/standalone
           zip -r ../../release.zip .
+
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
