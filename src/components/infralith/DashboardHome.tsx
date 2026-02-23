@@ -174,109 +174,84 @@ export default function DashboardHome() {
                 <div className="absolute top-0 right-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-[120px] opacity-50" />
                 <div className="absolute bottom-0 left-1/4 w-[400px] h-[400px] bg-accent/5 rounded-full blur-[100px] opacity-30" />
             </div>
-            {/* Just the Gist Section - Redesigned for Premium Look */}
-            <motion.div variants={item}>
-                <Card className="premium-glass relative overflow-hidden group border-none shadow-2xl">
-                    {/* Dynamic Ambient Background */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-primary/0 to-accent/5 transition-opacity duration-1000 group-hover:opacity-100" />
-                    <div className="absolute -right-20 -top-20 w-96 h-96 bg-primary/10 rounded-full blur-[100px] pointer-events-none opacity-20 group-hover:opacity-40 transition-opacity" />
-                    <div className="absolute -left-20 -bottom-20 w-64 h-64 bg-accent/10 rounded-full blur-[100px] pointer-events-none opacity-10 group-hover:opacity-30 transition-opacity" />
-
-                    {/* Aesthetic Grid Mask */}
-                    <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] mix-blend-overlay"></div>
-
-                    <CardContent className="flex flex-col lg:flex-row items-center justify-between gap-10 p-8 lg:p-10 relative z-10 transition-colors">
-                        <div className="flex items-center gap-8 flex-1 w-full lg:w-auto">
+            {/* Top Dashboard Row - Profile & Quick Actions */}
+            <motion.div variants={item} className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                {/* User Profile Card */}
+                <Card className="xl:col-span-2 premium-glass relative overflow-hidden group border-none shadow-2xl bg-slate-50 dark:bg-slate-950/80">
+                    <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/5 opacity-50 pointer-events-none" />
+                    <CardContent className="flex flex-col md:flex-row items-center justify-between gap-10 p-8 lg:p-12 relative z-10 h-full">
+                        {/* Avatar & Info */}
+                        <div className="flex flex-col md:flex-row items-center md:items-start gap-8 flex-1">
                             <div className="relative shrink-0">
-                                {/* Decorative Ring */}
-                                <div className="absolute -inset-2 bg-gradient-to-tr from-primary via-orange-500 to-yellow-400 rounded-full opacity-20 group-hover:opacity-40 blur-sm transition-opacity" />
+                                {/* Glow ring */}
+                                <div className="absolute -inset-4 bg-gradient-to-br from-orange-200 to-amber-100 dark:from-primary/20 dark:to-accent/20 rounded-full opacity-50 blur-xl pointer-events-none" />
                                 <button
                                     onClick={() => handleNavigate('profile')}
-                                    className="h-24 w-24 md:h-28 md:w-28 rounded-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center text-4xl font-black text-primary border-4 border-white dark:border-slate-800 shadow-xl hover:scale-105 transition-all duration-500 cursor-pointer overflow-hidden z-20 relative outline-none"
+                                    className="h-32 w-32 md:h-40 md:w-40 rounded-full bg-slate-50 dark:bg-slate-900 flex items-center justify-center text-6xl font-black text-orange-500 dark:text-primary border-[12px] border-white dark:border-slate-800 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] hover:scale-105 transition-all duration-500 cursor-pointer overflow-hidden z-20 relative outline-none"
                                     title="View Profile"
                                 >
                                     {user?.avatar
                                         ? <img src={user.avatar} alt={user.name} className="h-full w-full object-cover" />
-                                        : (user?.name?.[0] || 'U')
+                                        : (user?.name?.[0].toLowerCase() || 'e')
                                     }
                                 </button>
-                                <div className="absolute -bottom-1 -right-1 h-8 w-8 rounded-full bg-primary border-4 border-white dark:border-slate-900 flex items-center justify-center text-white z-30 shadow-lg animate-in fade-in zoom-in duration-700">
-                                    <CheckCircle className="h-4 w-4 animate-pulse" />
-                                </div>
+                                {/* Status dot */}
+                                <div className="absolute bottom-4 right-4 h-5 w-5 rounded-full bg-emerald-500 border-4 border-white dark:border-slate-900 z-30 shadow-sm" />
                             </div>
 
-                            <div className="space-y-4">
-                                <div className="space-y-1">
-                                    <h2 className="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 dark:text-white leading-[0.9]">{user?.name || 'Infralith User'}</h2>
-                                    <div className="flex items-center gap-3 pt-2">
-                                        <Badge variant="secondary" className="px-4 py-1.5 bg-slate-900 dark:bg-primary/10 hover:bg-black dark:hover:bg-primary/20 border-none text-[11px] font-black tracking-widest uppercase text-white dark:text-primary transition-all shadow-lg shadow-black/10">
-                                            {config.title}
-                                        </Badge>
-                                    </div>
+                            <div className="space-y-4 text-center md:text-left pt-2 flex-1">
+                                <h2 className="text-5xl md:text-[64px] font-black tracking-tighter text-slate-900 dark:text-white leading-none lowercase">
+                                    {user?.name || 'engineer'}
+                                </h2>
+                                <div className="pt-1">
+                                    <Badge variant="secondary" className="px-5 py-2 bg-[#141b2d] dark:bg-primary/20 hover:bg-black border-none text-[12px] font-black tracking-widest uppercase text-white transition-all shadow-md rounded-full">
+                                        {config.title === 'Sr. Structural Engineer' ? 'Lead Structural Engineer' : config.title}
+                                    </Badge>
                                 </div>
+                                <p className="text-sm md:text-[15px] text-slate-500 dark:text-slate-400 max-w-sm font-medium leading-relaxed pt-2">
+                                    Welcome back to Infralith. Your compliance and risk analysis engines are online.
+                                </p>
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-center gap-10 md:gap-14 border-t lg:border-t-0 lg:border-l border-slate-200 dark:border-white/10 pt-10 lg:pt-0 lg:pl-14 w-full lg:w-auto">
-                            {config.metrics.map((m: any, idx: number) => (
-                                <CircularProgress key={idx} value={m.value} label={m.label} color={m.color} />
-                            ))}
-
-                            <div className="flex flex-col gap-3 shrink-0">
-                                <Button
-                                    className="bg-primary text-slate-900 hover:bg-primary/90 font-black text-[11px] uppercase tracking-widest h-11 px-8 rounded-xl shadow-[0_8px_20px_-4px_rgba(245,158,11,0.4)] transition-all hover:scale-105"
-                                    onClick={() => handleNavigate('profile')}
-                                >
-                                    Intel Report
-                                </Button>
+                        {/* Tri-Metrics */}
+                        <div className="flex flex-col gap-6 shrink-0 relative w-full md:w-auto items-center justify-center md:items-end">
+                            <div className="flex justify-center md:justify-center w-full mb-2 lg:pr-14">
+                                <CircularProgress value={config.metrics[0].value} label={config.metrics[0].label} color={config.metrics[0].color} />
+                            </div>
+                            <div className="flex gap-10 justify-center">
+                                <CircularProgress value={config.metrics[1].value} label={config.metrics[1].label} color={config.metrics[1].color} />
+                                <CircularProgress value={config.metrics[2].value} label={config.metrics[2].label} color={config.metrics[2].color} />
                             </div>
                         </div>
                     </CardContent>
+                </Card>
 
-                    {/* Subtle Scanline effect for that high-tech feel */}
-                    <div className="absolute inset-0 pointer-events-none opacity-[0.03] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]" />
+                {/* Quick Actions Card */}
+                <Card className="xl:col-span-1 premium-glass relative overflow-hidden group border-none shadow-xl bg-slate-50/50 dark:bg-slate-950/50">
+                    <CardContent className="p-8 h-full flex flex-col">
+                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-6">Quick Actions</h3>
+                        <div className="grid grid-cols-2 gap-4 flex-1">
+                            {config.actions.map((action: any, idx: number) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => handleNavigate(action.route)}
+                                    className="flex flex-col items-center justify-center gap-3 p-4 rounded-[2rem] bg-white dark:bg-slate-900 border border-slate-100 dark:border-white/5 hover:border-primary/30 hover:shadow-lg transition-all group outline-none"
+                                >
+                                    <div className="h-12 w-12 rounded-full bg-slate-50 dark:bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-primary group-hover:bg-primary/10 transition-colors">
+                                        <action.icon className="h-5 w-5" />
+                                    </div>
+                                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                                        {action.label}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    </CardContent>
                 </Card>
             </motion.div>
 
             <div className="space-y-6">
-                {/* Role-Based Quick Actions */}
-                <motion.div
-                    variants={{
-                        show: { transition: { staggerChildren: 0.05 } }
-                    }}
-                    className="flex flex-wrap items-center justify-around gap-4 md:gap-8 py-8 px-6 bg-slate-100/40 dark:bg-white/5 backdrop-blur-xl rounded-[2.5rem] border border-slate-200 dark:border-white/10 shadow-[inset_0_2px_20px_rgba(0,0,0,0.02)]"
-                >
-                    {config.actions.map((action: any, idx: number) => (
-                        <motion.button
-                            key={idx}
-                            variants={{
-                                hidden: { opacity: 0, scale: 0.8 },
-                                show: { opacity: 1, scale: 1 }
-                            }}
-                            whileHover={{ y: -8, scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={() => handleNavigate(action.route)}
-                            className="flex flex-col items-center gap-4 group outline-none"
-                        >
-                            <div className="relative">
-                                {/* Hover Glow */}
-                                <div className="absolute inset-x-0 -bottom-3 bg-primary/40 h-10 w-20 mx-auto rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-all duration-500 scale-150" />
-
-                                <div className="h-20 w-20 md:h-24 md:w-24 rounded-[2rem] bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/10 flex items-center justify-center text-slate-400 dark:text-slate-500 group-hover:text-primary group-hover:border-primary/50 transition-all duration-500 relative overflow-hidden shadow-sm group-hover:shadow-[0_20px_40px_-10px_rgba(0,0,0,0.1)] dark:group-hover:shadow-[0_20px_40px_-10px_rgba(0,0,0,0.5)]">
-                                    <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                                    <action.icon className="h-9 w-9 md:h-11 md:w-11 relative z-10 transition-transform duration-500 group-hover:rotate-3 group-hover:scale-110" />
-
-                                    {/* Corner Accent */}
-                                    <div className="absolute top-0 right-0 h-4 w-4 bg-primary/0 group-hover:bg-primary/20 transition-colors rounded-bl-xl border-b border-l border-primary/30" />
-                                </div>
-                            </div>
-                            <span className="text-[10px] md:text-[11px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-white/30 group-hover:text-slate-900 dark:group-hover:text-white transition-all">
-                                {action.label}
-                            </span>
-                        </motion.button>
-                    ))}
-                </motion.div>
-
                 {role === 'Supervisor' && (
                     <motion.div variants={item}>
                         <Card className="premium-glass premium-glass-hover relative overflow-hidden group border-primary/20">
@@ -356,90 +331,93 @@ export default function DashboardHome() {
                             </CardContent>
                         </Card>
                     </motion.div>
-                )}
+                )
+                }
 
 
 
-                {role === 'Admin' && (
-                    <motion.div variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+                {
+                    role === 'Admin' && (
+                        <motion.div variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
 
-                        {/* Workspace Members Card */}
-                        <Card className="premium-glass premium-glass-hover relative overflow-hidden group border-indigo-500/20 h-full flex flex-col">
-                            <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-[80px] pointer-events-none -translate-y-1/2 translate-x-1/3" />
-                            <CardHeader className="flex flex-row items-center justify-between relative z-10 border-b border-indigo-500/10 pb-4">
-                                <div className="space-y-1">
-                                    <CardTitle className="text-xl font-bold flex items-center gap-2">
-                                        <Users className="h-6 w-6 text-indigo-500" /> Workspace Members
-                                    </CardTitle>
-                                    <CardDescription className="text-xs font-medium text-foreground/70">
-                                        Manage your enterprise organization's seats and role assignments.
-                                    </CardDescription>
-                                </div>
-                                <Button variant="outline" size="sm" className="h-8 border-indigo-500/30 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 hover:text-indigo-300">
-                                    Manage Directory
-                                </Button>
-                            </CardHeader>
-                            <CardContent className="p-6 relative z-10 space-y-4 flex-1">
-                                {[
-                                    { n: "Dr. Sarah Chen", r: "Lead Engineer", s: "Active" },
-                                    { n: "Marcus Thorne", r: "Regional Supervisor", s: "Online" },
-                                    { n: "David Lin", r: "Engineer", s: "Away" },
-                                ].map((mem, i) => (
-                                    <div key={i} className="flex justify-between items-center p-3 bg-white/5 border border-white/5 rounded-lg hover:border-indigo-500/30 transition-colors">
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-8 w-8 rounded-full bg-indigo-500/20 flex items-center justify-center font-bold text-indigo-400 text-xs shadow-sm">
-                                                {mem.n[0]}
+                            {/* Workspace Members Card */}
+                            <Card className="premium-glass premium-glass-hover relative overflow-hidden group border-indigo-500/20 h-full flex flex-col">
+                                <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-[80px] pointer-events-none -translate-y-1/2 translate-x-1/3" />
+                                <CardHeader className="flex flex-row items-center justify-between relative z-10 border-b border-indigo-500/10 pb-4">
+                                    <div className="space-y-1">
+                                        <CardTitle className="text-xl font-bold flex items-center gap-2">
+                                            <Users className="h-6 w-6 text-indigo-500" /> Workspace Members
+                                        </CardTitle>
+                                        <CardDescription className="text-xs font-medium text-foreground/70">
+                                            Manage your enterprise organization's seats and role assignments.
+                                        </CardDescription>
+                                    </div>
+                                    <Button variant="outline" size="sm" className="h-8 border-indigo-500/30 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 hover:text-indigo-300">
+                                        Manage Directory
+                                    </Button>
+                                </CardHeader>
+                                <CardContent className="p-6 relative z-10 space-y-4 flex-1">
+                                    {[
+                                        { n: "Dr. Sarah Chen", r: "Lead Engineer", s: "Active" },
+                                        { n: "Marcus Thorne", r: "Regional Supervisor", s: "Online" },
+                                        { n: "David Lin", r: "Engineer", s: "Away" },
+                                    ].map((mem, i) => (
+                                        <div key={i} className="flex justify-between items-center p-3 bg-white/5 border border-white/5 rounded-lg hover:border-indigo-500/30 transition-colors">
+                                            <div className="flex items-center gap-3">
+                                                <div className="h-8 w-8 rounded-full bg-indigo-500/20 flex items-center justify-center font-bold text-indigo-400 text-xs shadow-sm">
+                                                    {mem.n[0]}
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-bold text-foreground lead-none">{mem.n}</p>
+                                                    <p className="text-[10px] text-muted-foreground">{mem.r}</p>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <p className="text-sm font-bold text-foreground lead-none">{mem.n}</p>
-                                                <p className="text-[10px] text-muted-foreground">{mem.r}</p>
-                                            </div>
+                                            <Badge variant="outline" className={cn("text-[10px] uppercase font-bold tracking-widest px-2 py-0.5", mem.s === 'Active' ? 'text-green-500 border-green-500/30 bg-green-500/10' : mem.s === 'Online' ? 'text-blue-500 border-blue-500/30 bg-blue-500/10' : 'text-slate-400 border-slate-500/30 bg-slate-500/10')}>{mem.s}</Badge>
                                         </div>
-                                        <Badge variant="outline" className={cn("text-[10px] uppercase font-bold tracking-widest px-2 py-0.5", mem.s === 'Active' ? 'text-green-500 border-green-500/30 bg-green-500/10' : mem.s === 'Online' ? 'text-blue-500 border-blue-500/30 bg-blue-500/10' : 'text-slate-400 border-slate-500/30 bg-slate-500/10')}>{mem.s}</Badge>
+                                    ))}
+                                    <div className="pt-2 text-center">
+                                        <p className="text-xs text-muted-foreground">121 other active members in network.</p>
                                     </div>
-                                ))}
-                                <div className="pt-2 text-center">
-                                    <p className="text-xs text-muted-foreground">121 other active members in network.</p>
-                                </div>
-                            </CardContent>
-                        </Card>
+                                </CardContent>
+                            </Card>
 
-                        {/* Config Toggles */}
-                        <Card className="premium-glass premium-glass-hover relative overflow-hidden group border-cyan-500/20 h-full flex flex-col">
-                            <div className="absolute top-0 right-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-[80px] pointer-events-none -translate-y-1/2 translate-x-1/3" />
-                            <CardHeader className="flex flex-row items-center justify-between relative z-10 border-b border-cyan-500/10 pb-4">
-                                <div className="space-y-1">
-                                    <CardTitle className="text-xl font-bold flex items-center gap-2">
-                                        <Settings className="h-6 w-6 text-cyan-500" /> Platform Configuration
-                                    </CardTitle>
-                                    <CardDescription className="text-xs font-medium text-foreground/70">
-                                        Toggle AI capabilities exposed to your organization. Backend engines are managed automatically.
-                                    </CardDescription>
-                                </div>
-                            </CardHeader>
-                            <CardContent className="p-6 relative z-10 space-y-4 flex-1">
-                                {[
-                                    { label: "Enable 6th Agent (Predictive Schedule)", on: true },
-                                    { label: "Auto-Draft AI RFIs for Engineers", on: true },
-                                    { label: "Allow Dynamic Material Substitution", on: true },
-                                    { label: "Enforce Multi-Factor Auth (Admin Only)", on: false },
-                                ].map((tog, i) => (
-                                    <div key={i} className="flex justify-between items-center bg-black/40 border border-white/5 p-4 rounded-xl hover:bg-white/5 transition-colors">
-                                        <span className="text-sm font-semibold">{tog.label}</span>
-                                        <button className={cn("relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2", tog.on ? "bg-cyan-500" : "bg-slate-700")}>
-                                            <span aria-hidden="true" className={cn("pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out", tog.on ? "translate-x-2" : "-translate-x-2")} />
-                                        </button>
+                            {/* Config Toggles */}
+                            <Card className="premium-glass premium-glass-hover relative overflow-hidden group border-cyan-500/20 h-full flex flex-col">
+                                <div className="absolute top-0 right-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-[80px] pointer-events-none -translate-y-1/2 translate-x-1/3" />
+                                <CardHeader className="flex flex-row items-center justify-between relative z-10 border-b border-cyan-500/10 pb-4">
+                                    <div className="space-y-1">
+                                        <CardTitle className="text-xl font-bold flex items-center gap-2">
+                                            <Settings className="h-6 w-6 text-cyan-500" /> Platform Configuration
+                                        </CardTitle>
+                                        <CardDescription className="text-xs font-medium text-foreground/70">
+                                            Toggle AI capabilities exposed to your organization. Backend engines are managed automatically.
+                                        </CardDescription>
                                     </div>
-                                ))}
-                            </CardContent>
-                            <div className="p-4 border-t border-white/5 bg-black/40 flex justify-between items-center mt-auto">
-                                <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold flex items-center gap-2">
-                                    <ShieldCheck className="h-3 w-3 text-cyan-500" /> Master regulations synced via Azure
-                                </p>
-                            </div>
-                        </Card>
-                    </motion.div>
-                )}
+                                </CardHeader>
+                                <CardContent className="p-6 relative z-10 space-y-4 flex-1">
+                                    {[
+                                        { label: "Enable 6th Agent (Predictive Schedule)", on: true },
+                                        { label: "Auto-Draft AI RFIs for Engineers", on: true },
+                                        { label: "Allow Dynamic Material Substitution", on: true },
+                                        { label: "Enforce Multi-Factor Auth (Admin Only)", on: false },
+                                    ].map((tog, i) => (
+                                        <div key={i} className="flex justify-between items-center bg-black/40 border border-white/5 p-4 rounded-xl hover:bg-white/5 transition-colors">
+                                            <span className="text-sm font-semibold">{tog.label}</span>
+                                            <button className={cn("relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2", tog.on ? "bg-cyan-500" : "bg-slate-700")}>
+                                                <span aria-hidden="true" className={cn("pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out", tog.on ? "translate-x-2" : "-translate-x-2")} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </CardContent>
+                                <div className="p-4 border-t border-white/5 bg-black/40 flex justify-between items-center mt-auto">
+                                    <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold flex items-center gap-2">
+                                        <ShieldCheck className="h-3 w-3 text-cyan-500" /> Master regulations synced via Azure
+                                    </p>
+                                </div>
+                            </Card>
+                        </motion.div>
+                    )
+                }
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
                     {/* Trending Insights */}
@@ -517,7 +495,7 @@ export default function DashboardHome() {
                         </Card>
                     </motion.div>
                 </div>
-            </div>
-        </motion.div>
+            </div >
+        </motion.div >
     );
 }
