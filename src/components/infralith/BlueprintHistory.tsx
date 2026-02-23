@@ -1,30 +1,30 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { FileText, CheckCircle, AlertTriangle, Clock, Eye, Trash2, RefreshCw, Database, UploadCloud } from 'lucide-react';
+import {
+    FileText,
+    CheckCircle,
+    AlertCircle,
+    XCircle,
+    Database,
+    UploadCloud,
+    ChevronRight
+} from 'lucide-react';
 import { useAppContext } from '@/contexts/app-context';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { formatDistanceToNow } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
+import { infralithService } from '@/lib/services';
+import { format } from 'date-fns';
 
 type BlueprintRecord = {
     id: string;
     fileName: string;
     projectScope: string;
-    role: string;
     timestamp: string;
     overallStatus: 'Warning' | 'Pass' | 'Fail';
-    riskIndex: number;
-    totalCost: number;
-    currency: string;
-    conflictCount: number;
 };
-
-import { infralithService } from '@/lib/services';
 
 export default function BlueprintHistory() {
     const { user, handleNavigate } = useAppContext();
@@ -40,15 +40,10 @@ export default function BlueprintHistory() {
                 const data = await infralithService.getEvaluations(user.uid);
                 const mapped: BlueprintRecord[] = data.map((res: any) => ({
                     id: res.id,
-                    fileName: 'blueprint_analysis.pdf',
+                    fileName: res.fileName || 'blueprint.pdf',
                     projectScope: res.projectScope || 'Unnamed Project',
-                    role: res.role,
                     timestamp: res.timestamp,
                     overallStatus: res.complianceReport?.overallStatus === 'Pass' ? 'Pass' : res.complianceReport?.overallStatus === 'Fail' ? 'Fail' : 'Warning',
-                    riskIndex: res.riskReport?.riskIndex || 40,
-                    totalCost: res.costEstimate?.total || 0,
-                    currency: res.costEstimate?.currency || 'INR',
-                    conflictCount: res.conflicts?.length || 0,
                 }));
                 setHistory(mapped);
             } catch (e) {
@@ -60,140 +55,129 @@ export default function BlueprintHistory() {
         loadHistory();
     }, [user?.uid]);
 
-    const deleteRecord = async (id: string) => {
-        if (!user?.uid) return;
-        // Optimization: For this hackathon, we skip the formal service delete and just update local state if needed
-        // but real service would be called here.
-        const updated = history.filter(b => b.id !== id);
-        setHistory(updated);
-
-        // Update the underlying store (Centralized)
-        const currentEvals = await infralithService.getEvaluations(user.uid);
-        const filtered = currentEvals.filter((e: any) => e.id !== id);
-        localStorage.setItem(`evaluations_${user.uid}`, JSON.stringify(filtered));
-
-        toast({ title: 'Record Deleted', description: 'Blueprint record removed from history.' });
-    };
-
     const statusConfig = {
-        Pass: { color: 'text-green-500 bg-green-500/10 border-green-500/20', icon: <CheckCircle className="h-3.5 w-3.5" /> },
-        Warning: { color: 'text-amber-500 bg-amber-500/10 border-amber-500/20', icon: <AlertTriangle className="h-3.5 w-3.5" /> },
-        Fail: { color: 'text-red-500 bg-red-500/10 border-red-500/20', icon: <AlertTriangle className="h-3.5 w-3.5" /> },
+        Pass: { color: 'text-emerald-600', bg: 'bg-emerald-50 dark:bg-emerald-900/30', border: 'border-emerald-100 dark:border-emerald-800', icon: CheckCircle, label: 'Passed' },
+        Warning: { color: 'text-amber-600', bg: 'bg-amber-50 dark:bg-amber-900/30', border: 'border-amber-100 dark:border-amber-800', icon: AlertCircle, label: 'Warnings' },
+        Fail: { color: 'text-rose-600', bg: 'bg-rose-50 dark:bg-rose-900/30', border: 'border-rose-100 dark:border-rose-800', icon: XCircle, label: 'Failed' },
     };
+
+    const stats = [
+        { label: 'Total Analyses', value: history.length, color: 'text-amber-600' },
+        { label: 'Passed', value: history.filter(b => b.overallStatus === 'Pass').length, color: 'text-emerald-500' },
+        { label: 'Warnings', value: history.filter(b => b.overallStatus === 'Warning').length, color: 'text-amber-500' },
+        { label: 'Failed', value: history.filter(b => b.overallStatus === 'Fail').length, color: 'text-rose-500' },
+    ];
 
     return (
-        <div className="max-w-5xl mx-auto space-y-8 pb-12">
+        <div className="w-full space-y-8 pb-12">
+            {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div className="space-y-1">
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-                        <Database className="h-8 w-8 text-primary" />
-                        Blueprint History
-                    </h1>
-                    <p className="text-muted-foreground">All past AI analysis records stored in your Azure Cosmos DB workspace.</p>
+                    <div className="flex items-center gap-3">
+                        <Database className="h-7 w-7 text-amber-500" />
+                        <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white">Blueprint History</h1>
+                    </div>
+                    <p className="text-slate-500 font-semibold ml-10">All past AI analysis records stored in your Azure Cosmos DB workspace.</p>
                 </div>
-                <Button onClick={() => handleNavigate('upload')} className="bg-primary font-bold gap-2 shadow-lg shadow-primary/20">
+                <Button
+                    onClick={() => handleNavigate('upload')}
+                    className="bg-amber-500 hover:bg-amber-400 text-white font-bold h-11 px-6 rounded-xl shadow-lg shadow-amber-500/20 gap-2 shrink-0"
+                >
                     <UploadCloud className="h-4 w-4" /> Upload New Blueprint
                 </Button>
             </div>
 
-            {/* Stats row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                    { label: 'Total Analyses', value: history.length, color: 'text-primary' },
-                    { label: 'Passed', value: history.filter(b => b.overallStatus === 'Pass').length, color: 'text-green-500' },
-                    { label: 'Warnings', value: history.filter(b => b.overallStatus === 'Warning').length, color: 'text-amber-500' },
-                    { label: 'Failed', value: history.filter(b => b.overallStatus === 'Fail').length, color: 'text-red-500' },
-                ].map(stat => (
-                    <Card key={stat.label} className="premium-glass text-center p-4">
-                        <p className={cn("text-3xl font-black", stat.color)}>{stat.value}</p>
-                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mt-1">{stat.label}</p>
-                    </Card>
+            {/* Stats Row */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
+                {stats.map((stat, i) => (
+                    <div key={i} className="bg-white dark:bg-slate-900 rounded-[20px] border border-slate-100 dark:border-slate-800 shadow-sm p-6 text-center">
+                        <p className={cn("text-4xl font-black tracking-tighter mb-1", stat.color)}>{stat.value}</p>
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{stat.label}</p>
+                    </div>
                 ))}
             </div>
 
-            {/* Blueprint list */}
-            <div className="space-y-4">
-                <AnimatePresence>
-                    {history.map((bp, i) => {
-                        const sc = statusConfig[bp.overallStatus];
-                        return (
-                            <motion.div
-                                key={bp.id}
-                                initial={{ opacity: 0, y: 15 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, x: -20 }}
-                                transition={{ delay: i * 0.05 }}
-                            >
-                                <Card className="premium-glass premium-glass-hover overflow-hidden group">
-                                    <CardContent className="p-0">
-                                        <div className="flex flex-col md:flex-row items-start md:items-center gap-4 p-5">
-                                            {/* File Icon */}
-                                            <div className="h-12 w-12 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                                                <FileText className="h-6 w-6 text-primary" />
-                                            </div>
-
-                                            {/* Main Info */}
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex flex-wrap items-center gap-2 mb-1">
-                                                    <h3 className="font-bold text-base truncate">{bp.projectScope}</h3>
-                                                    <Badge className={cn("text-[10px] border font-bold px-2 py-0.5 flex items-center gap-1", sc.color)}>
-                                                        {sc.icon} {bp.overallStatus}
-                                                    </Badge>
-                                                </div>
-                                                <p className="text-xs text-muted-foreground font-mono truncate">{bp.fileName}</p>
-                                                <div className="flex flex-wrap gap-4 mt-2">
-                                                    <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                                        <Clock className="h-3 w-3" />
-                                                        {formatDistanceToNow(new Date(bp.timestamp), { addSuffix: true })}
-                                                    </span>
-                                                    <span className="text-xs font-bold text-primary">
-                                                        {bp.currency} {(bp.totalCost / 1e7).toFixed(1)} Cr
-                                                    </span>
-                                                    <span className={cn("text-xs font-bold", bp.riskIndex > 60 ? 'text-red-500' : bp.riskIndex > 30 ? 'text-amber-500' : 'text-green-500')}>
-                                                        Risk: {bp.riskIndex}/100
-                                                    </span>
-                                                    {bp.conflictCount > 0 && (
-                                                        <span className="text-xs font-bold text-red-400">
-                                                            {bp.conflictCount} conflict{bp.conflictCount > 1 ? 's' : ''}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-
-                                            {/* Actions */}
-                                            <div className="flex gap-2 shrink-0">
-                                                <Button
-                                                    size="sm"
-                                                    variant="outline"
-                                                    className="gap-1 border-primary/30 text-primary hover:bg-primary/10 h-8 text-xs"
-                                                    onClick={() => handleNavigate('report')}
-                                                >
-                                                    <Eye className="h-3.5 w-3.5" /> View Report
-                                                </Button>
-                                                <Button
-                                                    size="sm"
-                                                    variant="ghost"
-                                                    className="h-8 w-8 p-0 hover:text-destructive hover:bg-destructive/10"
-                                                    onClick={() => deleteRecord(bp.id)}
-                                                >
-                                                    <Trash2 className="h-3.5 w-3.5" />
-                                                </Button>
-                                            </div>
+            {/* Table */}
+            <div className="bg-white dark:bg-slate-900 rounded-[28px] shadow-[0_8px_40px_-12px_rgba(0,0,0,0.06)] border border-slate-100 dark:border-slate-800 overflow-hidden">
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="border-b border-slate-100 dark:border-slate-800">
+                                <th className="px-8 py-5 text-[11px] font-black uppercase tracking-[0.15em] text-slate-400">Blueprint Name</th>
+                                <th className="px-8 py-5 text-[11px] font-black uppercase tracking-[0.15em] text-slate-400">Date</th>
+                                <th className="px-8 py-5 text-[11px] font-black uppercase tracking-[0.15em] text-slate-400 text-center">Status</th>
+                                <th className="px-8 py-5 text-[11px] font-black uppercase tracking-[0.15em] text-slate-400 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                            {isLoading ? (
+                                <tr>
+                                    <td colSpan={4} className="py-16 text-center">
+                                        <div className="flex flex-col items-center gap-3">
+                                            <div className="h-8 w-8 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin" />
+                                            <span className="text-sm font-bold text-slate-400">Loading records...</span>
                                         </div>
-                                    </CardContent>
-                                </Card>
-                            </motion.div>
-                        );
-                    })}
-                </AnimatePresence>
-
-                {history.length === 0 && (
-                    <div className="text-center py-20 text-muted-foreground">
-                        <FileText className="h-12 w-12 mx-auto opacity-20 mb-4" />
-                        <p className="font-semibold">No blueprints analyzed yet</p>
-                        <p className="text-sm mt-1">Upload and analyze a blueprint to see it here.</p>
-                    </div>
-                )}
+                                    </td>
+                                </tr>
+                            ) : history.length === 0 ? (
+                                <tr>
+                                    <td colSpan={4} className="py-16 text-center">
+                                        <div className="flex flex-col items-center gap-2 opacity-30">
+                                            <FileText className="h-10 w-10 text-slate-400" />
+                                            <span className="text-sm font-bold text-slate-500">No blueprints analyzed yet.</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ) : (
+                                history.map((record, i) => {
+                                    const config = statusConfig[record.overallStatus];
+                                    return (
+                                        <motion.tr
+                                            key={record.id}
+                                            initial={{ opacity: 0, y: 8 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            transition={{ delay: i * 0.04 }}
+                                            className="group hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
+                                        >
+                                            <td className="px-8 py-5">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="h-9 w-9 rounded-xl bg-slate-50 dark:bg-slate-800 flex items-center justify-center border border-slate-100 dark:border-slate-700 shrink-0">
+                                                        <FileText className="h-4 w-4 text-slate-400" />
+                                                    </div>
+                                                    <span className="font-bold text-slate-800 dark:text-slate-100">{record.projectScope}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-8 py-5">
+                                                <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
+                                                    {format(new Date(record.timestamp), 'MMM dd, yyyy')}
+                                                </span>
+                                            </td>
+                                            <td className="px-8 py-5 text-center">
+                                                <div className="flex justify-center">
+                                                    <span className={cn(
+                                                        "inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-[11px] font-black uppercase tracking-wider",
+                                                        config.bg, config.color, config.border
+                                                    )}>
+                                                        <config.icon className="h-3.5 w-3.5" strokeWidth={2.5} />
+                                                        {config.label}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td className="px-8 py-5 text-right">
+                                                <button
+                                                    onClick={() => handleNavigate('report')}
+                                                    className="text-sm font-black text-slate-400 hover:text-amber-500 dark:hover:text-amber-400 transition-colors uppercase tracking-widest"
+                                                >
+                                                    View
+                                                </button>
+                                            </td>
+                                        </motion.tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     );

@@ -230,20 +230,23 @@ export default function DMPage() {
   );
 
   return (
-    <div className="h-[calc(100vh-200px)] grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div className="h-[calc(100vh-100px)] grid grid-cols-1 md:grid-cols-[340px_1fr] gap-6 p-6 bg-[#f8f9fc]" style={{
+      backgroundImage: `linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px)`,
+      backgroundSize: '20px 20px'
+    }}>
       {/* Left: Chat List */}
-      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-sm", selectedChat ? "hidden md:flex" : "flex")}>
-        <div className="p-4 border-b flex justify-between items-center bg-muted/10">
-          <span className="font-headline font-semibold text-lg flex items-center gap-2">
-            <MessageCircle className="h-5 w-5 text-primary" />
+      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-none rounded-[20px] bg-white", selectedChat ? "hidden md:flex" : "flex")}>
+        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-white z-10">
+          <span className="font-bold text-[18px] tracking-tight flex items-center gap-3 text-slate-800">
+            <MessageCircle className="h-5 w-5 text-[#f59e0b]" strokeWidth={2.5} />
             Team Messages
           </span>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {canCreateGroups && (
               <Dialog open={isGroupDialogActive} onOpenChange={setIsGroupDialogActive}>
                 <DialogTrigger asChild>
-                  <Button variant="ghost" size="icon" className="hover:bg-primary/20 text-primary" title="Create Group of Engineers">
-                    <Users className="h-5 w-5" />
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-[#f59e0b]/10 text-[#f59e0b]">
+                    <Users className="h-4 w-4" strokeWidth={2.5} />
                   </Button>
                 </DialogTrigger>
                 <DialogContent>
@@ -268,7 +271,7 @@ export default function DMPage() {
                         <div className="text-center text-sm text-muted-foreground py-10">No engineers found.</div>
                       )}
                     </ScrollArea>
-                    <Button className="w-full bg-primary font-bold shadow-lg" onClick={async () => {
+                    <Button className="w-full bg-[#f59e0b] hover:bg-[#d97706] text-white font-bold shadow-lg" onClick={async () => {
                       if (!user) return;
                       await dmService.createGroup(user.uid, user.name, user.avatar || '', groupName, selectedEngineers);
                       toast({ title: "Group Created", description: `Added ${selectedEngineers.length} engineers to ${groupName || 'New Group'}` });
@@ -282,8 +285,8 @@ export default function DMPage() {
             )}
             <Dialog open={isNewChatOpen} onOpenChange={setIsNewChatOpen}>
               <DialogTrigger asChild>
-                <Button variant="ghost" size="icon" onClick={openNewChatDialog} className="hover:bg-primary/20 text-primary" title="New Private Message">
-                  <Plus className="h-5 w-5" />
+                <Button variant="ghost" size="icon" onClick={openNewChatDialog} className="h-8 w-8 hover:bg-[#f59e0b]/10 text-[#f59e0b]">
+                  <Plus className="h-4 w-4" strokeWidth={2.5} />
                 </Button>
               </DialogTrigger>
               <DialogContent>
@@ -330,14 +333,16 @@ export default function DMPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto p-4 space-y-2 relative custom-scrollbar bg-white">
+          <div className="absolute top-0 inset-x-0 h-4 bg-gradient-to-b from-white to-transparent pointer-events-none z-10" />
+
           {chats.length === 0 ? (
             <div className="text-center text-muted-foreground py-12 px-4 flex flex-col items-center">
               <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                <MessageCircle className="h-6 w-6 text-primary opacity-50" />
+                <MessageCircle className="h-6 w-6 text-[#f59e0b] opacity-50" />
               </div>
-              <p className="font-medium text-foreground">Secure Workspace Chat</p>
-              <p className="text-xs mt-1">Connect instantly with fellow engineers. Click the + icon to start.</p>
+              <p className="font-medium text-slate-800">Secure Workspace Chat</p>
+              <p className="text-xs mt-1 text-slate-500">Connect instantly with fellow engineers. Click the + icon to start.</p>
             </div>
           ) : (
             chats.map(chat => (
@@ -345,31 +350,31 @@ export default function DMPage() {
                 key={chat.chatId}
                 onClick={() => setSelectedChat(chat)}
                 className={cn(
-                  "w-full flex items-center gap-3 p-3 rounded-lg transition-colors text-left relative",
-                  selectedChat?.chatId === chat.chatId ? "bg-primary/10 dark:bg-primary/20" : "hover:bg-muted"
+                  "w-full flex items-start gap-4 p-4 rounded-[16px] transition-colors text-left relative",
+                  selectedChat?.chatId === chat.chatId ? "bg-[#fef3c7]" : "hover:bg-slate-50 border border-transparent hover:border-slate-100"
                 )}
               >
-                <div className="relative">
-                  <Avatar>
+                <div className="relative shrink-0">
+                  <Avatar className="h-11 w-11 border border-black/5 rounded-full shadow-sm bg-slate-100/50">
                     <AvatarImage src={chat.otherUserAvatar} />
-                    <AvatarFallback>{chat.otherUserName[0]}</AvatarFallback>
+                    <AvatarFallback className="text-slate-600 font-bold bg-slate-100">{chat.otherUserName[0]}</AvatarFallback>
                   </Avatar>
                   {chat.status === 'pending' && (
-                    <span className="absolute -top-1 -right-1 h-3 w-3 bg-blue-500 rounded-full border-2 border-background"></span>
+                    <span className="absolute -top-0.5 -right-0.5 h-3 w-3 bg-[#3b82f6] rounded-full border-2 border-white shadow-sm"></span>
                   )}
                 </div>
-                <div className="flex-1 overflow-hidden">
-                  <div className="flex justify-between items-center">
-                    <span className="font-semibold text-sm truncate">{chat.otherUserName}</span>
-                    <span className="text-[10px] text-muted-foreground whitespace-nowrap ml-2">
+                <div className="flex-1 overflow-hidden pt-0.5">
+                  <div className="flex justify-between items-center mb-0.5">
+                    <span className="font-bold text-[14px] text-slate-800 truncate">{chat.otherUserName}</span>
+                    <span className="text-[11px] text-slate-500 font-medium whitespace-nowrap ml-2">
                       {formatDistanceToNow(chat.timestamp, { addSuffix: false }).replace('about ', '')}
                     </span>
                   </div>
-                  <div className="flex justify-between items-center mt-0.5">
-                    <p className={cn("text-xs truncate max-w-[80%]", chat.status === 'pending' ? "font-semibold text-foreground" : "text-muted-foreground")}>
+                  <div className="flex justify-between items-center mt-1">
+                    <p className={cn("text-[13px] truncate pr-2 leading-snug", chat.status === 'pending' ? "font-bold text-slate-800" : "text-slate-500")}>
                       {chat.status === 'pending' ? "New Message Request" : (chat.lastMessage || 'Sent an attachment')}
                     </p>
-                    {chat.status === 'pending' && <Badge variant="secondary" className="text-[10px] h-4 px-1">Req</Badge>}
+                    {chat.status === 'pending' && <span className="text-[10px] font-black uppercase text-slate-800">Req</span>}
                   </div>
                 </div>
               </button>
@@ -379,40 +384,40 @@ export default function DMPage() {
       </Card>
 
       {/* Right: Chat Window */}
-      <Card className={cn("md:col-span-2 flex flex-col overflow-hidden shadow-sm", !selectedChat ? "hidden md:flex" : "flex")}>
+      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-none rounded-[20px] bg-white", !selectedChat ? "hidden md:flex" : "flex")}>
         {!selectedChat ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-slate-50/50 dark:bg-slate-900/20">
-            <div className="h-20 w-20 rounded-2xl bg-primary/5 border border-primary/20 flex items-center justify-center mb-6">
-              <ShieldCheck className="h-10 w-10 text-primary opacity-80" />
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-500 bg-white">
+            <div className="h-24 w-24 rounded-3xl bg-[#f59e0b]/5 border border-[#f59e0b]/10 flex items-center justify-center mb-6">
+              <ShieldCheck className="h-12 w-12 text-[#f59e0b] opacity-80" />
             </div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">End-to-End Encrypted Team Chat</h3>
-            <p className="text-sm max-w-[300px] text-center">
+            <h3 className="text-xl font-black text-slate-800 tracking-tight mb-2">End-to-End Encrypted Team Chat</h3>
+            <p className="text-[13px] max-w-[320px] text-center leading-relaxed font-medium">
               Select a conversation or start a new one to communicate securely with your team.
             </p>
           </div>
         ) : (
           <>
             {/* Header */}
-            <div className="p-4 border-b flex items-center justify-between bg-card shadow-sm z-10">
-              <div className="flex items-center gap-3">
-                <Button variant="ghost" size="sm" className="md:hidden mr-1" onClick={() => setSelectedChat(null)}>
+            <div className="px-8 py-5 flex items-center justify-between bg-white z-10 border-b border-transparent">
+              <div className="flex items-center gap-4">
+                <Button variant="ghost" size="sm" className="md:hidden mr-1 -ml-3" onClick={() => setSelectedChat(null)}>
                   ←
                 </Button>
-                <Avatar className="h-10 w-10 border border-primary/20">
+                <Avatar className="h-12 w-12 border border-black/5 shadow-sm rounded-full bg-slate-100">
                   <AvatarImage src={selectedChat.otherUserAvatar} />
-                  <AvatarFallback>{selectedChat.otherUserName[0]}</AvatarFallback>
+                  <AvatarFallback className="text-slate-600 font-bold bg-slate-100 text-lg">{selectedChat.otherUserName[0]}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col">
-                  <span className="font-semibold text-sm">{selectedChat.otherUserName}</span>
+                  <span className="font-bold text-[16px] text-slate-800">{selectedChat.otherUserName}</span>
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-pulse"></span>
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">Protected Session</span>
+                    <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full"></span>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Protected Session</span>
                   </div>
                 </div>
               </div>
 
               {canCreateGroups && (
-                <Button size="sm" className="bg-blue-600 hover:bg-blue-500 text-white shadow-md gap-2" onClick={() => {
+                <Button className="bg-[#1d4ed8] hover:bg-[#1e40af] text-white shadow-md shadow-blue-500/20 h-10 px-5 rounded-full font-bold transition-all gap-2" onClick={() => {
                   if (!user || !selectedChat) return;
                   dmService.sendMessage(
                     user.uid,
@@ -426,54 +431,71 @@ export default function DMPage() {
                   );
                   toast({ title: "Meeting Started", description: "Secure video meeting link sent." });
                 }}>
-                  <Video className="h-4 w-4" /> <span className="hidden sm:inline font-bold">Meet</span>
+                  <Video className="h-4 w-4" /> <span className="hidden sm:inline">Meet</span>
                 </Button>
               )}
             </div>
 
             {/* E2E Privacy Banner */}
-            <div className="bg-primary/10 py-1.5 px-4 flex items-center justify-center gap-2 border-b border-primary/20 backdrop-blur-sm shadow-[inset_0_-1px_0_rgba(0,0,0,0.05)]">
-              <ShieldCheck className="h-3 w-3 text-primary" />
-              <span className="text-[9px] font-black text-primary uppercase tracking-[0.2em]">End-to-End Encrypted</span>
-              <span className="text-[9px] text-primary/70 ml-2 hidden sm:inline uppercase font-bold tracking-wider">Messages & files are secured for your privacy.</span>
+            <div className="bg-[#f8f9fa] py-2.5 px-6 flex items-center justify-center gap-2 border-y border-slate-100 z-10 relative">
+              <ShieldCheck className="h-3.5 w-3.5 text-slate-600" />
+              <span className="text-[10px] text-slate-600 tracking-[0.1em] font-medium uppercase font-mono">
+                <strong className="font-bold uppercase text-slate-800 mr-1">End-to-End Encrypted:</strong> Messages & files are secured for your privacy.
+              </span>
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50 dark:bg-slate-950/20 relative" ref={scrollRef}>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-white relative custom-scrollbar" ref={scrollRef}>
               {messages.map((msg, index) => {
                 const isMe = msg.senderId === user?.uid;
                 const showAvatar = index === messages.length - 1 || messages[index + 1]?.senderId !== msg.senderId;
 
                 return (
                   <div key={msg.id} className={cn("flex group", isMe ? "justify-end" : "justify-start")}>
-                    <div className={cn("flex items-end gap-2 max-w-[85%]", isMe ? "flex-row" : "flex-row-reverse")}>
+                    <div className={cn("flex items-end gap-3 max-w-[75%]", isMe ? "flex-row" : "flex-row-reverse")}>
                       {isMe && (
                         <button
                           onClick={() => handleDeleteMessage(msg.id)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-red-500 p-1"
                           title="Delete message"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       )}
                       <div className={cn(
-                        "flex flex-col shadow-sm rounded-2xl px-4 py-2.5 text-sm",
-                        isMe ? "bg-primary text-primary-foreground rounded-br-sm" : "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-bl-sm"
+                        "flex flex-col shadow-sm rounded-[16px] px-5 py-3 text-[14px] leading-relaxed relative",
+                        isMe
+                          ? "bg-white border border-slate-100 text-slate-700 shadow-[0_2px_10px_rgb(0,0,0,0.02)]"
+                          : "bg-white border border-slate-100 text-slate-800 shadow-[0_2px_10px_rgb(0,0,0,0.02)]"
                       )}>
                         {msg.imageUrl && (
-                          <img src={msg.imageUrl} alt="Shared file" className="max-w-full sm:max-w-[250px] object-cover rounded-md mb-2 mt-1 border border-black/10 dark:border-white/10" />
+                          <img src={msg.imageUrl} alt="Shared file" className="max-w-full sm:max-w-[250px] object-cover rounded-[10px] mb-2 mt-1 border border-black/5" />
                         )}
                         {msg.text && <span>{msg.text}</span>}
-                        <div className={cn("text-[9px] mt-1 text-right font-medium", isMe ? "text-primary-foreground/70" : "text-muted-foreground")}>
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+
+                        <div className="text-[9px] text-slate-400 text-right mt-1 w-full relative h-[14px]">
+                          <span className={cn("absolute right-0", isMe ? "" : "right-auto left-0")}>
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
                       </div>
+
                       {!isMe && (
-                        <Avatar className="h-6 w-6 shadow-sm mb-1 opacity-80">
+                        <Avatar className="h-8 w-8 shadow-sm mb-1 bg-slate-100 text-slate-600 font-bold">
                           {showAvatar ? (
                             <>
                               <AvatarImage src={selectedChat.otherUserAvatar} />
-                              <AvatarFallback>{selectedChat.otherUserName[0]}</AvatarFallback>
+                              <AvatarFallback className="bg-slate-100 text-slate-600 font-bold">{selectedChat.otherUserName[0]}</AvatarFallback>
+                            </>
+                          ) : <div className="h-full w-full bg-transparent" />}
+                        </Avatar>
+                      )}
+                      {isMe && (
+                        <Avatar className="h-8 w-8 shadow-sm mb-1 bg-slate-100 text-slate-600 font-bold">
+                          {showAvatar ? (
+                            <>
+                              <AvatarImage src={user?.avatar || ''} />
+                              <AvatarFallback className="bg-slate-100 text-slate-600 font-bold">M</AvatarFallback>
                             </>
                           ) : <div className="h-full w-full bg-transparent" />}
                         </Avatar>
@@ -485,10 +507,10 @@ export default function DMPage() {
             </div>
 
             {isWaitingForAcceptance && !isIncomingRequest && (
-              <div className="px-4 py-2 bg-slate-50/50 dark:bg-slate-950/20">
-                <Alert className="bg-amber-500/10 border-amber-500/20">
-                  <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  <AlertDescription className="text-xs text-amber-700 dark:text-amber-400 ml-2 font-medium">
+              <div className="px-6 py-4 bg-white">
+                <Alert className="bg-amber-50 border border-amber-100 shadow-sm rounded-xl">
+                  <AlertCircle className="h-4 w-4 text-amber-600" />
+                  <AlertDescription className="text-xs text-amber-800 ml-2 font-medium">
                     Message sent. The engineer needs to accept your request before replying.
                   </AlertDescription>
                 </Alert>
@@ -496,24 +518,25 @@ export default function DMPage() {
             )}
 
             {isIncomingRequest && (
-              <div className="p-4 bg-muted/50 border-t backdrop-blur-md">
-                <Alert className="bg-background border-primary/30 shadow-md">
-                  <div className="flex flex-col gap-3 w-full">
+              <div className="px-6 pb-6 pt-2 bg-white z-10">
+                <Alert className="bg-white border border-slate-200 shadow-lg rounded-2xl p-5">
+                  <div className="flex flex-col gap-4 w-full">
                     <div>
-                      <AlertTitle className="font-semibold flex items-center gap-2">
-                        <MessageCircle className="h-4 w-4 text-primary fill-primary/20" />
+                      <AlertTitle className="font-bold flex items-center gap-2 text-slate-800">
+                        <MessageCircle className="h-5 w-5 text-[#f59e0b]" />
                         Workspace Message Request
                       </AlertTitle>
-                      <AlertDescription className="text-xs text-muted-foreground mt-1">
-                        <span className="font-semibold text-foreground">{selectedChat.otherUserName}</span> wants to connect and collaborate.
+                      <AlertDescription className="text-[13px] text-slate-500 mt-2 font-medium leading-relaxed">
+                        <strong className="text-slate-800 mr-1">{selectedChat.otherUserName}</strong>
+                        wants to connect and collaborate on the platform. Accepting will allow them to send messages and files.
                       </AlertDescription>
                     </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" className="flex-1 shadow-sm font-semibold" onClick={handleAcceptRequest}>
-                        <Check className="mr-2 h-4 w-4" /> Accept
+                    <div className="flex gap-3">
+                      <Button className="flex-1 shadow-md font-bold bg-[#10b981] hover:bg-[#059669] text-white h-11 rounded-xl" onClick={handleAcceptRequest}>
+                        <Check className="mr-2 h-4 w-4" strokeWidth={3} /> Accept
                       </Button>
-                      <Button size="sm" variant="outline" className="flex-1 hover:bg-destructive/10 hover:text-destructive font-semibold shadow-sm" onClick={handleDeclineRequest}>
-                        <X className="mr-2 h-4 w-4" /> Decline
+                      <Button variant="outline" className="flex-1 hover:bg-slate-50 font-bold text-slate-600 border-slate-200 h-11 rounded-xl" onClick={handleDeclineRequest}>
+                        <X className="mr-2 h-4 w-4" strokeWidth={3} /> Decline
                       </Button>
                     </div>
                   </div>
@@ -523,48 +546,47 @@ export default function DMPage() {
 
             {/* Input Area */}
             {!isIncomingRequest && (
-              <div className="p-4 border-t bg-card relative">
+              <div className="px-6 py-6 border-t border-slate-100 bg-white relative z-10 w-full flex items-center justify-center">
                 {/* Image Attachment Preview */}
                 {imagePreview && (
-                  <div className="absolute bottom-full left-0 p-3 bg-background border-t border-r border-border rounded-tr-xl flex items-center gap-3 shadow-lg z-20">
+                  <div className="absolute bottom-full left-6 p-4 bg-white border border-slate-100 rounded-2xl flex items-center gap-4 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] mb-4 animate-in fade-in slide-in-from-bottom-2 z-20">
                     <div className="relative">
-                      <img src={imagePreview} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
-                      <button onClick={removeSelectedImage} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-0.5 shadow-md hover:scale-110 transition-transform">
-                        <X className="h-3 w-3" />
+                      <img src={imagePreview} alt="preview" className="h-[72px] w-[72px] object-cover rounded-xl border border-slate-100" />
+                      <button onClick={removeSelectedImage} className="absolute -top-2.5 -right-2.5 bg-red-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform hover:bg-red-600">
+                        <X className="h-3 w-3" strokeWidth={3} />
                       </button>
                     </div>
-                    <span className="text-xs text-muted-foreground font-medium">File attached</span>
+                    <span className="text-[13px] text-slate-600 font-bold tracking-tight">Attachment ready</span>
                   </div>
                 )}
 
-                <div className="flex gap-2 items-end">
-                  <div className="relative flex-1 group">
-                    <label className="absolute left-3 bottom-0 h-10 flex items-center justify-center cursor-pointer text-muted-foreground hover:text-primary transition-colors z-10" title="Attach file">
-                      <ImageIcon className="h-5 w-5" />
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={handleImageSelection}
-                      />
-                    </label>
-                    <Input
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                      placeholder="Write a secure message..."
-                      className="pl-11 pr-4 py-6 rounded-xl bg-muted/50 focus-visible:ring-primary/50 shadow-inner resize-none overflow-hidden group-hover:bg-muted/80 transition-colors border-primary/10"
+                <div className="w-full relative flex items-center border border-slate-200 bg-white rounded-full p-1.5 shadow-sm focus-within:ring-2 focus-within:ring-[#f59e0b]/20 focus-within:border-[#f59e0b]/30 transition-all">
+                  <label className="h-10 w-10 flex items-center justify-center shrink-0 cursor-pointer text-slate-400 hover:text-[#f59e0b] hover:bg-slate-50 rounded-full transition-all ml-1" title="Attach file">
+                    <ImageIcon className="h-5 w-5" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleImageSelection}
                     />
-                  </div>
+                  </label>
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                    placeholder="Write a secure message..."
+                    className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[14px] px-3 font-medium placeholder:text-slate-400 text-slate-800"
+                  />
                   <Button
                     className={cn(
-                      "h-[50px] w-[50px] rounded-xl flex items-center justify-center shadow-md transition-all",
-                      (newMessage.trim() || imagePreview) ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:scale-105" : "bg-muted text-muted-foreground opacity-50 cursor-not-allowed"
+                      "h-10 w-10 rounded-full flex items-center justify-center shadow-md transition-all ml-1 shrink-0 bg-white border border-slate-100",
+                      (newMessage.trim() || imagePreview) ? "text-[#f59e0b] hover:bg-slate-50" : "text-slate-300 pointer-events-none"
                     )}
                     onClick={handleSendMessage}
                     disabled={!newMessage.trim() && !imagePreview}
                   >
-                    <Send className="h-5 w-5 ml-1" />
+                    <Send className="h-4 w-4 shrink-0 translate-x-[1px]" strokeWidth={2.5} />
                   </Button>
                 </div>
               </div>
