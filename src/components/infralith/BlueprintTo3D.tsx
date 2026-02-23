@@ -37,7 +37,7 @@ import {
 function ConflictMarker({ conflict }: { conflict: ConstructionConflict }) {
     const meshRef = useRef<THREE.Mesh>(null);
     useFrame((state) => {
-        if (meshRef.current) meshRef.current.position.y = 2 + Math.sin(state.clock.getElapsedTime() * 3) * 0.2;
+        if (meshRef.current) meshRef.current.position.y = 2 + Math.sin(state.clock.elapsedTime * 3) * 0.2;
     });
     const color = conflict.severity === 'high' ? '#ef4444' : conflict.severity === 'medium' ? '#f59e0b' : '#3b82f6';
     return (
