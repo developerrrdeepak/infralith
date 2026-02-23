@@ -8,19 +8,24 @@ import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 import {
     Loader2, ShieldCheck, AlertCircle, SlidersHorizontal,
-    Calculator, CheckCircle2, TrendingDown, Zap, Clock
+    Calculator, CheckCircle2, TrendingDown, Zap, Clock, ThumbsUp, ThumbsDown, Bell
 } from 'lucide-react';
 import { useAppContext } from '@/contexts/app-context';
+import { useNotifications } from './NotificationBell';
+import { auditLog } from '@/lib/audit-log';
 import { cn } from '@/lib/utils';
 
 export default function DecisionPanel() {
-    const { handleNavigate, user } = useAppContext();
+    const { handleNavigate, user, infralithResult } = useAppContext();
     const { toast } = useToast();
+    const { addNotification } = useNotifications();
 
     const [agreed, setAgreed] = useState({ compliance: false, cost: false, manual: false });
     const [schedule, setSchedule] = useState([0]);
     const [quality, setQuality] = useState([100]);
     const [submitting, setSubmitting] = useState(false);
+    const [decisionMade, setDecisionMade] = useState<'approved' | 'rejected' | null>(null);
+    const [decisionTime, setDecisionTime] = useState<string | null>(null);
 
     const baseCost = 2_500_000;
     const dynamicCost = baseCost + (schedule[0] * -12500) + ((100 - quality[0]) * -5000);
@@ -28,22 +33,53 @@ export default function DecisionPanel() {
     const fmt = (v: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
     const canApprove = agreed.compliance && agreed.cost && agreed.manual;
-    const hasPrivilege = user?.role === 'Engineer' || user?.role === 'Admin';
+    const hasPrivilege = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
     const qualityRisk = quality[0] < 85;
 
     const handleDecision = async (approved: boolean) => {
         if (!hasPrivilege) {
-            toast({ title: "Permission Required", description: "Only Engineers or Administrators can authorize major project progression.", variant: "destructive" });
+            toast({ title: "Permission Required", description: "Only Engineers, Supervisors, or Administrators can authorize project progression.", variant: "destructive" });
             return;
         }
         setSubmitting(true);
         await new Promise(r => setTimeout(r, 1000));
         setSubmitting(false);
+
+        const now = new Date().toISOString();
+        setDecisionMade(approved ? 'approved' : 'rejected');
+        setDecisionTime(now);
+
+        // Audit log the decision
+        if (user) {
+            auditLog.record(
+                approved ? 'PROJECT_APPROVED' : 'PROJECT_REJECTED',
+                { uid: user.uid, name: user.name, role: user.role, email: user.email },
+                {
+                    reportId: infralithResult?.id || 'unknown',
+                    projectScope: infralithResult?.projectScope || 'unknown',
+                    budgetApproved: fmt(dynamicCost),
+                    qualityLevel: quality[0],
+                    scheduleAcceleration: schedule[0],
+                    timestamp: now,
+                }
+            );
+        }
+
+        // Push notification
+        addNotification({
+            type: approved ? 'success' : 'warning',
+            title: approved ? '✅ Project Approved' : '❌ Project Rejected',
+            body: approved
+                ? `${user?.name} authorized the project at ${fmt(dynamicCost)}. Report is now finalized.`
+                : `${user?.name} rejected the project. Requires revision before re-submission.`,
+        });
+
         toast({
             title: approved ? "Project Approved" : "Project Rejected",
-            description: `Action recorded for audit trail by ${user?.name}.`,
+            description: `Action recorded in audit trail by ${user?.name}.`,
             variant: approved ? "default" : "destructive",
         });
+
         if (approved) handleNavigate('report');
     };
 
@@ -210,7 +246,7 @@ export default function DecisionPanel() {
                 </div>
 
                 {/* Actions */}
-                <div className="px-8 pb-8 flex flex-col sm:flex-row gap-3">
+                <div className="px-8 pb-6 flex flex-col sm:flex-row gap-3">
                     <Button
                         variant="ghost"
                         onClick={() => handleDecision(false)}
@@ -233,6 +269,46 @@ export default function DecisionPanel() {
                         {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                         Approve & Generate Report
                     </Button>
+                </div>
+
+                {/* Approval Chain Status */}
+
+                <div className="px-8 pb-8 pt-2">
+                    <div className="p-5 bg-slate-50 dark:bg-slate-800 rounded-[18px] border border-slate-100 dark:border-slate-700">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4">Approval Chain</p>
+                        <div className="flex items-center gap-3">
+                            <div className={cn(
+                                "h-9 w-9 rounded-full flex items-center justify-center shrink-0 border-2 transition-all",
+                                decisionMade === 'approved' ? 'bg-emerald-500 border-emerald-500' :
+                                    decisionMade === 'rejected' ? 'bg-rose-500 border-rose-500' :
+                                        'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-600 animate-pulse'
+                            )}>
+                                {decisionMade === 'approved' ? <ThumbsUp className="h-4 w-4 text-white" /> :
+                                    decisionMade === 'rejected' ? <ThumbsDown className="h-4 w-4 text-white" /> :
+                                        <Clock className="h-4 w-4 text-amber-500" />}
+                            </div>
+                            <div className="flex-1">
+                                <p className="text-sm font-black text-slate-800 dark:text-slate-100">
+                                    {decisionMade === 'approved' ? 'Approved by ' + user?.name :
+                                        decisionMade === 'rejected' ? 'Rejected by ' + user?.name :
+                                            'Awaiting Supervisor Sign-off'}
+                                </p>
+                                <p className="text-xs text-slate-400 font-medium">
+                                    {decisionMade && decisionTime
+                                        ? new Date(decisionTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+                                        : 'Step 1 of 1 — Authorization pending'}
+                                </p>
+                            </div>
+                            <span className={cn(
+                                "text-[10px] font-black px-2.5 py-1 rounded-full border",
+                                decisionMade === 'approved' ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 border-emerald-200 dark:border-emerald-700' :
+                                    decisionMade === 'rejected' ? 'bg-rose-50 dark:bg-rose-900/30 text-rose-600 border-rose-200 dark:border-rose-700' :
+                                        'bg-amber-50 dark:bg-amber-900/30 text-amber-500 border-amber-200 dark:border-amber-700'
+                            )}>
+                                {decisionMade ? decisionMade.toUpperCase() : 'PENDING'}
+                            </span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

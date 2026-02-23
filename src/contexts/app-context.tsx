@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { runInfralithWorkflow } from '@/ai/flows/infralith/workflow-orchestrator';
 import { WorkflowResult } from '@/ai/flows/infralith/types';
+import { auditLog } from '@/lib/audit-log';
 
 export interface EvaluationContext {
   type: 'Mock Interview' | 'Resume Ranking' | 'Resume Roast' | 'Skill Assessment';
@@ -362,6 +363,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
   const handleLogout = async () => {
+    if (user) auditLog.record('USER_LOGOUT', { uid: user.uid, name: user.name, role: user.role, email: user.email });
     signOut({ callbackUrl: '/' });
     setUser(null);
     handleNavigate('home');
@@ -407,6 +409,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const handleDeleteAccount = async () => {
     if (!user) return;
     try {
+      auditLog.record('USER_DELETED', { uid: user.uid, name: user.name, role: user.role, email: user.email }, { reason: 'Self-initiated deletion' });
       await authService.deleteAccount(user.uid);
       toast({ title: 'Account Deleted', description: 'Your account has been permanently deleted.' });
     } catch (error) {
@@ -485,7 +488,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const runInfralithEvaluation = async (input: string | File) => {
     setIsAuthLoading(true);
     setPipelineStage(0);
-    // Pipeline runs silently in background — user stays on upload page
+
+    // Audit: record the upload initiation
+    if (user) {
+      auditLog.record('BLUEPRINT_UPLOADED',
+        { uid: user.uid, name: user.name, role: user.role, email: user.email },
+        { fileName: input instanceof File ? input.name : 'text-input', fileSize: input instanceof File ? input.size : 0 }
+      );
+    }
 
     // Simulate agent progression while server action runs
     const progInterval = setInterval(() => {
@@ -507,6 +517,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await infralithService.saveEvaluation(user.uid, result as any);
       }
 
+      // Audit: record completed analysis with reproducibility metadata
+      if (user) {
+        auditLog.record('ANALYSIS_COMPLETE',
+          { uid: user.uid, name: user.name, role: user.role, email: user.email },
+          {
+            reportId: result.id,
+            runId: result.modelVersion?.runId,
+            modelVersion: result.modelVersion?.orchestratorVersion,
+            llmModel: result.modelVersion?.llmModel,
+            parameterHash: result.modelVersion?.parameterHash,
+            latencyMs: result.pipelineLatencyMs,
+            complianceScore: result.complianceScore,
+            riskLevel: result.riskReport?.level,
+            approvalStatus: 'pending',
+          }
+        );
+      }
+
       toast({
         title: "AI Analysis Complete",
         description: "Specialized agents have successfully processed the blueprint.",
@@ -516,6 +544,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       clearInterval(progInterval);
       setPipelineStage(-1);
       console.error("Infralith workflow failed:", error);
+
+      if (user) {
+        auditLog.record('ANALYSIS_COMPLETE',
+          { uid: user.uid, name: user.name, role: user.role, email: user.email },
+          { error: String(error), status: 'FAILED' }
+        );
+      }
+
       toast({
         variant: "destructive",
         title: "Analysis Failed",
@@ -525,6 +561,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setIsAuthLoading(false);
     }
   };
+
 
   const value: AppContextType = {
     activeRoute,

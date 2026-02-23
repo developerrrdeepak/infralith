@@ -230,14 +230,11 @@ export default function DMPage() {
   );
 
   return (
-    <div className="h-[calc(100vh-100px)] grid grid-cols-1 md:grid-cols-[340px_1fr] gap-6 p-6 bg-[#f8f9fc]" style={{
-      backgroundImage: `linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px)`,
-      backgroundSize: '20px 20px'
-    }}>
+    <div className="h-[calc(100vh-100px)] grid grid-cols-1 md:grid-cols-[340px_1fr] gap-6 p-6 bg-[#f8f9fc] dark:bg-slate-950">
       {/* Left: Chat List */}
-      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-none rounded-[20px] bg-white", selectedChat ? "hidden md:flex" : "flex")}>
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-white z-10">
-          <span className="font-bold text-[18px] tracking-tight flex items-center gap-3 text-slate-800">
+      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-none rounded-[20px] bg-white dark:bg-slate-900", selectedChat ? "hidden md:flex" : "flex")}>
+        <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-white dark:bg-slate-900 z-10">
+          <span className="font-bold text-[18px] tracking-tight flex items-center gap-3 text-slate-800 dark:text-slate-100">
             <MessageCircle className="h-5 w-5 text-[#f59e0b]" strokeWidth={2.5} />
             Team Messages
           </span>
@@ -333,16 +330,16 @@ export default function DMPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-2 relative custom-scrollbar bg-white">
-          <div className="absolute top-0 inset-x-0 h-4 bg-gradient-to-b from-white to-transparent pointer-events-none z-10" />
+        <div className="flex-1 overflow-y-auto p-4 space-y-2 relative custom-scrollbar bg-white dark:bg-slate-900">
+          <div className="absolute top-0 inset-x-0 h-4 bg-gradient-to-b from-white dark:from-slate-900 to-transparent pointer-events-none z-10" />
 
           {chats.length === 0 ? (
             <div className="text-center text-muted-foreground py-12 px-4 flex flex-col items-center">
               <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
                 <MessageCircle className="h-6 w-6 text-[#f59e0b] opacity-50" />
               </div>
-              <p className="font-medium text-slate-800">Secure Workspace Chat</p>
-              <p className="text-xs mt-1 text-slate-500">Connect instantly with fellow engineers. Click the + icon to start.</p>
+              <p className="font-medium text-slate-800 dark:text-slate-100">Secure Workspace Chat</p>
+              <p className="text-xs mt-1 text-slate-500 dark:text-slate-400">Connect instantly with fellow engineers. Click the + icon to start.</p>
             </div>
           ) : (
             chats.map(chat => (
@@ -351,7 +348,7 @@ export default function DMPage() {
                 onClick={() => setSelectedChat(chat)}
                 className={cn(
                   "w-full flex items-start gap-4 p-4 rounded-[16px] transition-colors text-left relative",
-                  selectedChat?.chatId === chat.chatId ? "bg-[#fef3c7]" : "hover:bg-slate-50 border border-transparent hover:border-slate-100"
+                  selectedChat?.chatId === chat.chatId ? "bg-[#fef3c7] dark:bg-amber-900/20" : "hover:bg-slate-50 dark:hover:bg-slate-800 border border-transparent hover:border-slate-100 dark:hover:border-slate-700"
                 )}
               >
                 <div className="relative shrink-0">
@@ -365,16 +362,16 @@ export default function DMPage() {
                 </div>
                 <div className="flex-1 overflow-hidden pt-0.5">
                   <div className="flex justify-between items-center mb-0.5">
-                    <span className="font-bold text-[14px] text-slate-800 truncate">{chat.otherUserName}</span>
-                    <span className="text-[11px] text-slate-500 font-medium whitespace-nowrap ml-2">
+                    <span className="font-bold text-[14px] text-slate-800 dark:text-slate-100 truncate">{chat.otherUserName}</span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap ml-2">
                       {formatDistanceToNow(chat.timestamp, { addSuffix: false }).replace('about ', '')}
                     </span>
                   </div>
                   <div className="flex justify-between items-center mt-1">
-                    <p className={cn("text-[13px] truncate pr-2 leading-snug", chat.status === 'pending' ? "font-bold text-slate-800" : "text-slate-500")}>
+                    <p className={cn("text-[13px] truncate pr-2 leading-snug", chat.status === 'pending' ? "font-bold text-slate-800 dark:text-slate-100" : "text-slate-500 dark:text-slate-400")}>
                       {chat.status === 'pending' ? "New Message Request" : (chat.lastMessage || 'Sent an attachment')}
                     </p>
-                    {chat.status === 'pending' && <span className="text-[10px] font-black uppercase text-slate-800">Req</span>}
+                    {chat.status === 'pending' && <span className="text-[10px] font-black uppercase text-slate-800 dark:text-slate-200">Req</span>}
                   </div>
                 </div>
               </button>
@@ -384,13 +381,13 @@ export default function DMPage() {
       </Card>
 
       {/* Right: Chat Window */}
-      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-none rounded-[20px] bg-white", !selectedChat ? "hidden md:flex" : "flex")}>
+      <Card className={cn("md:col-span-1 flex flex-col overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-none rounded-[20px] bg-white dark:bg-slate-900", !selectedChat ? "hidden md:flex" : "flex")}>
         {!selectedChat ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-500 bg-white">
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-500 bg-white dark:bg-slate-900">
             <div className="h-24 w-24 rounded-3xl bg-[#f59e0b]/5 border border-[#f59e0b]/10 flex items-center justify-center mb-6">
               <ShieldCheck className="h-12 w-12 text-[#f59e0b] opacity-80" />
             </div>
-            <h3 className="text-xl font-black text-slate-800 tracking-tight mb-2">End-to-End Encrypted Team Chat</h3>
+            <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 tracking-tight mb-2">End-to-End Encrypted Team Chat</h3>
             <p className="text-[13px] max-w-[320px] text-center leading-relaxed font-medium">
               Select a conversation or start a new one to communicate securely with your team.
             </p>
@@ -398,7 +395,7 @@ export default function DMPage() {
         ) : (
           <>
             {/* Header */}
-            <div className="px-8 py-5 flex items-center justify-between bg-white z-10 border-b border-transparent">
+            <div className="px-8 py-5 flex items-center justify-between bg-white dark:bg-slate-900 z-10 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-4">
                 <Button variant="ghost" size="sm" className="md:hidden mr-1 -ml-3" onClick={() => setSelectedChat(null)}>
                   ←
@@ -408,10 +405,10 @@ export default function DMPage() {
                   <AvatarFallback className="text-slate-600 font-bold bg-slate-100 text-lg">{selectedChat.otherUserName[0]}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col">
-                  <span className="font-bold text-[16px] text-slate-800">{selectedChat.otherUserName}</span>
+                  <span className="font-bold text-[16px] text-slate-800 dark:text-slate-100">{selectedChat.otherUserName}</span>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full"></span>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Protected Session</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black">Protected Session</span>
                   </div>
                 </div>
               </div>
@@ -437,15 +434,15 @@ export default function DMPage() {
             </div>
 
             {/* E2E Privacy Banner */}
-            <div className="bg-[#f8f9fa] py-2.5 px-6 flex items-center justify-center gap-2 border-y border-slate-100 z-10 relative">
-              <ShieldCheck className="h-3.5 w-3.5 text-slate-600" />
-              <span className="text-[10px] text-slate-600 tracking-[0.1em] font-medium uppercase font-mono">
-                <strong className="font-bold uppercase text-slate-800 mr-1">End-to-End Encrypted:</strong> Messages & files are secured for your privacy.
+            <div className="bg-[#f8f9fa] dark:bg-slate-800/50 py-2.5 px-6 flex items-center justify-center gap-2 border-y border-slate-100 dark:border-slate-700 z-10 relative">
+              <ShieldCheck className="h-3.5 w-3.5 text-slate-600 dark:text-slate-300" />
+              <span className="text-[10px] text-slate-600 dark:text-slate-400 tracking-[0.1em] font-medium uppercase font-mono">
+                <strong className="font-bold uppercase text-slate-800 dark:text-slate-200 mr-1">End-to-End Encrypted:</strong> Messages & files are secured for your privacy.
               </span>
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-white relative custom-scrollbar" ref={scrollRef}>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-white dark:bg-slate-900 relative custom-scrollbar" ref={scrollRef}>
               {messages.map((msg, index) => {
                 const isMe = msg.senderId === user?.uid;
                 const showAvatar = index === messages.length - 1 || messages[index + 1]?.senderId !== msg.senderId;
@@ -465,8 +462,8 @@ export default function DMPage() {
                       <div className={cn(
                         "flex flex-col shadow-sm rounded-[16px] px-5 py-3 text-[14px] leading-relaxed relative",
                         isMe
-                          ? "bg-white border border-slate-100 text-slate-700 shadow-[0_2px_10px_rgb(0,0,0,0.02)]"
-                          : "bg-white border border-slate-100 text-slate-800 shadow-[0_2px_10px_rgb(0,0,0,0.02)]"
+                          ? "bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+                          : "bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100"
                       )}>
                         {msg.imageUrl && (
                           <img src={msg.imageUrl} alt="Shared file" className="max-w-full sm:max-w-[250px] object-cover rounded-[10px] mb-2 mt-1 border border-black/5" />
@@ -507,7 +504,7 @@ export default function DMPage() {
             </div>
 
             {isWaitingForAcceptance && !isIncomingRequest && (
-              <div className="px-6 py-4 bg-white">
+              <div className="px-6 py-4 bg-white dark:bg-slate-900">
                 <Alert className="bg-amber-50 border border-amber-100 shadow-sm rounded-xl">
                   <AlertCircle className="h-4 w-4 text-amber-600" />
                   <AlertDescription className="text-xs text-amber-800 ml-2 font-medium">
@@ -518,8 +515,8 @@ export default function DMPage() {
             )}
 
             {isIncomingRequest && (
-              <div className="px-6 pb-6 pt-2 bg-white z-10">
-                <Alert className="bg-white border border-slate-200 shadow-lg rounded-2xl p-5">
+              <div className="px-6 pb-6 pt-2 bg-white dark:bg-slate-900 z-10">
+                <Alert className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg rounded-2xl p-5">
                   <div className="flex flex-col gap-4 w-full">
                     <div>
                       <AlertTitle className="font-bold flex items-center gap-2 text-slate-800">
@@ -546,21 +543,21 @@ export default function DMPage() {
 
             {/* Input Area */}
             {!isIncomingRequest && (
-              <div className="px-6 py-6 border-t border-slate-100 bg-white relative z-10 w-full flex items-center justify-center">
+              <div className="px-6 py-6 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 relative z-10 w-full flex items-center justify-center">
                 {/* Image Attachment Preview */}
                 {imagePreview && (
-                  <div className="absolute bottom-full left-6 p-4 bg-white border border-slate-100 rounded-2xl flex items-center gap-4 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] mb-4 animate-in fade-in slide-in-from-bottom-2 z-20">
+                  <div className="absolute bottom-full left-6 p-4 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-2xl flex items-center gap-4 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] mb-4 animate-in fade-in slide-in-from-bottom-2 z-20">
                     <div className="relative">
                       <img src={imagePreview} alt="preview" className="h-[72px] w-[72px] object-cover rounded-xl border border-slate-100" />
                       <button onClick={removeSelectedImage} className="absolute -top-2.5 -right-2.5 bg-red-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform hover:bg-red-600">
                         <X className="h-3 w-3" strokeWidth={3} />
                       </button>
                     </div>
-                    <span className="text-[13px] text-slate-600 font-bold tracking-tight">Attachment ready</span>
+                    <span className="text-[13px] text-slate-600 dark:text-slate-300 font-bold tracking-tight">Attachment ready</span>
                   </div>
                 )}
 
-                <div className="w-full relative flex items-center border border-slate-200 bg-white rounded-full p-1.5 shadow-sm focus-within:ring-2 focus-within:ring-[#f59e0b]/20 focus-within:border-[#f59e0b]/30 transition-all">
+                <div className="w-full relative flex items-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-full p-1.5 shadow-sm focus-within:ring-2 focus-within:ring-[#f59e0b]/20 focus-within:border-[#f59e0b]/30 transition-all">
                   <label className="h-10 w-10 flex items-center justify-center shrink-0 cursor-pointer text-slate-400 hover:text-[#f59e0b] hover:bg-slate-50 rounded-full transition-all ml-1" title="Attach file">
                     <ImageIcon className="h-5 w-5" />
                     <input
@@ -576,11 +573,11 @@ export default function DMPage() {
                     onChange={(e) => setNewMessage(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                     placeholder="Write a secure message..."
-                    className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[14px] px-3 font-medium placeholder:text-slate-400 text-slate-800"
+                    className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[14px] px-3 font-medium placeholder:text-slate-400 dark:placeholder:text-slate-600 text-slate-800 dark:text-slate-100"
                   />
                   <Button
                     className={cn(
-                      "h-10 w-10 rounded-full flex items-center justify-center shadow-md transition-all ml-1 shrink-0 bg-white border border-slate-100",
+                      "h-10 w-10 rounded-full flex items-center justify-center shadow-md transition-all ml-1 shrink-0 bg-white dark:bg-slate-700 border border-slate-100 dark:border-slate-600",
                       (newMessage.trim() || imagePreview) ? "text-[#f59e0b] hover:bg-slate-50" : "text-slate-300 pointer-events-none"
                     )}
                     onClick={handleSendMessage}

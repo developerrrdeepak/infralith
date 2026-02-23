@@ -32,6 +32,7 @@ import ConferenceRoom from '@/components/infralith/ConferenceRoom';
 import BlueprintHistory from '@/components/infralith/BlueprintHistory';
 import AnalyticsPanel from '@/components/infralith/AnalyticsPanel';
 import SmartSiteSimulator from '@/components/infralith/SmartSiteSimulator';
+import AuditLogPanel from '@/components/infralith/AuditLogPanel';
 import { NotificationProvider } from '@/components/infralith/NotificationBell';
 
 export default function CareerCompassLayout() {
@@ -62,6 +63,7 @@ export default function CareerCompassLayout() {
     history: gated(<BlueprintHistory />),
     analytics: gated(<AnalyticsPanel />),
     simulation: gated(<SmartSiteSimulator />),
+    audit: gated(<AuditLogPanel />),
   };
 
   const pageVariants = {

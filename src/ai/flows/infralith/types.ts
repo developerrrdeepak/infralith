@@ -7,6 +7,27 @@ export interface DevOpsInsight {
     actionRequired: boolean;
 }
 
+/** Version metadata attached to every analysis run for reproducibility */
+export interface ModelVersion {
+    orchestratorVersion: string;    // e.g. '2.1.0'
+    blueprintParserModel: string;   // e.g. 'azure-doc-intel-v4'
+    llmModel: string;               // e.g. 'gpt-4o-2024-12-01'
+    deploymentName: string;         // Azure deployment name
+    parameterHash: string;          // Checksum of prompt templates
+    runId: string;                  // Unique analysis run ID
+}
+
+/** Approval chain for supervisor sign-off */
+export interface ApprovalStep {
+    stepId: string;
+    role: 'Supervisor' | 'Admin';
+    status: 'pending' | 'approved' | 'rejected';
+    actorId?: string;
+    actorName?: string;
+    timestamp?: string;
+    comment?: string;
+}
+
 export interface WorkflowResult {
     id: string;
     timestamp: string;
@@ -56,4 +77,10 @@ export interface WorkflowResult {
     costImpactEstimate?: number;
     currency?: string;
     complianceScore?: number;
+
+    /** ── ENTERPRISE FIELDS ── */
+    modelVersion?: ModelVersion;        // Reproducibility: exact model + params used
+    approvalChain?: ApprovalStep[];     // Supervisor approval workflow
+    auditEntryId?: string;              // Link back to audit log entry
+    pipelineLatencyMs?: number;         // Total orchestration time in ms
 }
