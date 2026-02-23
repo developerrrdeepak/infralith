@@ -149,33 +149,50 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
 }
 
 function simulateVisionResponse<T>(prompt: string): T {
-    // Return a realistic construction-grade geometric reconstruction for demo/fallback
+    // Return a realistic colored bungalow for demo/fallback
     return {
+        building_name: "Demo Bungalow",
+        exterior_color: "#f5e6d3",
         walls: [
-            { id: "w1", start: [-5, -4], end: [5, -4], thickness: 0.23, height: 2.7 },
-            { id: "w2", start: [5, -4], end: [5, 4], thickness: 0.23, height: 2.7 },
-            { id: "w3", start: [5, 4], end: [-5, 4], thickness: 0.23, height: 2.7 },
-            { id: "w4", start: [-5, 4], end: [-5, -4], thickness: 0.23, height: 2.7 },
-            { id: "w5", start: [0, -4], end: [0, 4], thickness: 0.115, height: 2.7 },
-            { id: "w6", start: [-5, 0], end: [0, 0], thickness: 0.115, height: 2.7 },
+            { id: "w1", start: [-6, -5], end: [6, -5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
+            { id: "w2", start: [6, -5], end: [6, 5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
+            { id: "w3", start: [6, 5], end: [-6, 5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
+            { id: "w4", start: [-6, 5], end: [-6, -5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
+            { id: "w5", start: [0, -5], end: [0, 1], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
+            { id: "w6", start: [-6, 1], end: [0, 1], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
+            { id: "w7", start: [0, 1], end: [6, 1], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
+            { id: "w8", start: [-6, -1.5], end: [0, -1.5], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
         ],
         doors: [
-            { id: "d1", host_wall_id: "w5", position: [0, 1.5], width: 0.9, height: 2.1 },
-            { id: "d2", host_wall_id: "w4", position: [-5, -2], width: 1.0, height: 2.1 },
+            { id: "d1", host_wall_id: "w1", position: [-2, -5], width: 1.0, height: 2.1, color: "#8B4513" },
+            { id: "d2", host_wall_id: "w5", position: [0, -0.5], width: 0.9, height: 2.1, color: "#a0522d" },
+            { id: "d3", host_wall_id: "w6", position: [-3, 1], width: 0.9, height: 2.1, color: "#a0522d" },
+            { id: "d4", host_wall_id: "w7", position: [3, 1], width: 0.9, height: 2.1, color: "#a0522d" },
         ],
         windows: [
-            { id: "win1", host_wall_id: "w1", position: [2.5, -4], width: 1.5, sill_height: 0.9 },
-            { id: "win2", host_wall_id: "w3", position: [-2.5, 4], width: 1.2, sill_height: 0.9 },
-            { id: "win3", host_wall_id: "w2", position: [5, 2], width: 1.5, sill_height: 0.9 },
+            { id: "win1", host_wall_id: "w1", position: [3, -5], width: 1.5, sill_height: 0.9, color: "#87CEEB" },
+            { id: "win2", host_wall_id: "w2", position: [6, -2], width: 1.5, sill_height: 0.9, color: "#87CEEB" },
+            { id: "win3", host_wall_id: "w2", position: [6, 3], width: 1.2, sill_height: 0.9, color: "#87CEEB" },
+            { id: "win4", host_wall_id: "w3", position: [-3, 5], width: 1.5, sill_height: 0.9, color: "#87CEEB" },
+            { id: "win5", host_wall_id: "w3", position: [3, 5], width: 1.2, sill_height: 0.9, color: "#87CEEB" },
+            { id: "win6", host_wall_id: "w4", position: [-6, 3], width: 1.2, sill_height: 0.9, color: "#87CEEB" },
         ],
         rooms: [
-            { id: "r1", name: "Living Room", polygon: [[0, -4], [5, -4], [5, 4], [0, 4]], area: 40 },
-            { id: "r2", name: "Bedroom", polygon: [[-5, 0], [0, 0], [0, 4], [-5, 4]], area: 20 },
-            { id: "r3", name: "Kitchen", polygon: [[-5, -4], [0, -4], [0, 0], [-5, 0]], area: 20 },
+            { id: "r1", name: "Living Room", polygon: [[0, -5], [6, -5], [6, 1], [0, 1]], area: 36, floor_color: "#e8d5b7" },
+            { id: "r2", name: "Kitchen", polygon: [[-6, -1.5], [0, -1.5], [0, 1], [-6, 1]], area: 15, floor_color: "#c9c9c9" },
+            { id: "r3", name: "Bathroom", polygon: [[-6, -5], [0, -5], [0, -1.5], [-6, -1.5]], area: 21, floor_color: "#a8d5e2" },
+            { id: "r4", name: "Master Bedroom", polygon: [[-6, 1], [0, 1], [0, 5], [-6, 5]], area: 24, floor_color: "#d4c4a8" },
+            { id: "r5", name: "Bedroom 2", polygon: [[0, 1], [6, 1], [6, 5], [0, 5]], area: 24, floor_color: "#dcc9a3" },
         ],
+        roof: {
+            type: "gable",
+            polygon: [[-6.3, -5.3], [6.3, -5.3], [6.3, 5.3], [-6.3, 5.3]],
+            height: 1.8,
+            base_height: 2.7,
+            color: "#a0522d",
+        },
         conflicts: [
-            { type: "structural", severity: "medium", description: "Interior wall w5 spans 8m without column support", location: [0, 0] },
-            { type: "code", severity: "low", description: "Kitchen area (20 sqm) exceeds minimum but lacks cross-ventilation", location: [-2.5, -2] },
+            { type: "structural", severity: "medium", description: "Interior wall w5 spans 6m without column support", location: [0, -2] },
         ]
     } as unknown as T;
 }
