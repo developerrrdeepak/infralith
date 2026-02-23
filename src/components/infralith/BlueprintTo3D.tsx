@@ -695,177 +695,192 @@ export default function BlueprintTo3D() {
                     </div>
                 </div>
 
-                {/* Side Panel */}
-                <div className="relative z-10 w-full md:w-[380px] p-6 h-full pointer-events-none flex flex-col">
-                    <div className="mt-auto pointer-events-auto">
-                        {status === 'idle' && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                                className="bg-card/90 backdrop-blur-xl rounded-3xl border border-border shadow-2xl overflow-hidden"
-                            >
-                                {/* Mode Toggle */}
-                                <div className="flex border-b border-border">
-                                    <button
-                                        onClick={() => setMode('upload')}
-                                        className={cn(
-                                            "flex-1 py-3 px-4 text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all",
-                                            mode === 'upload' ? "bg-primary/10 text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"
-                                        )}
-                                    >
-                                        <ImageIcon className="h-4 w-4" /> Upload
-                                    </button>
-                                    <button
-                                        onClick={() => setMode('describe')}
-                                        className={cn(
-                                            "flex-1 py-3 px-4 text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all",
-                                            mode === 'describe' ? "bg-primary/10 text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"
-                                        )}
-                                    >
-                                        <PenLine className="h-4 w-4" /> Describe
-                                    </button>
-                                </div>
+                {/* Centered Idle Screen */}
+                {status === 'idle' && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center p-6 bg-[#f8f9fc]" style={{
+                        backgroundImage: `linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px)`,
+                        backgroundSize: '20px 20px'
+                    }}>
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+                            className="w-full max-w-[500px] bg-white rounded-[24px] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.08)] border border-slate-100 overflow-hidden"
+                        >
+                            {/* Tabs */}
+                            <div className="flex border-b border-slate-100 px-2 relative">
+                                <button
+                                    onClick={() => setMode('upload')}
+                                    className={cn(
+                                        "flex-1 py-4 text-[13px] font-bold transition-colors relative z-10",
+                                        mode === 'upload' ? "text-[#f97316]" : "text-slate-500 hover:text-slate-800"
+                                    )}
+                                >
+                                    Upload
+                                    {mode === 'upload' && <motion.div layoutId="activeTabMode" className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#f97316]" />}
+                                </button>
+                                <button
+                                    onClick={() => setMode('describe')}
+                                    className={cn(
+                                        "flex-1 py-4 text-[13px] font-bold transition-colors relative z-10",
+                                        mode === 'describe' ? "text-[#f97316]" : "text-slate-500 hover:text-slate-800"
+                                    )}
+                                >
+                                    Describe
+                                    {mode === 'describe' && <motion.div layoutId="activeTabMode" className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#f97316]" />}
+                                </button>
+                            </div>
 
-                                <div className="p-6 space-y-5">
-                                    {mode === 'upload' && (
-                                        <>
-                                            <div className="text-center" onDragOver={e => { e.preventDefault(); e.stopPropagation(); }} onDrop={handleDrop}>
-                                                <div className="h-14 w-14 mx-auto rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-3">
-                                                    <Upload className="h-7 w-7 text-primary" />
-                                                </div>
-                                                <h3 className="text-lg font-black mb-1">Upload Blueprint</h3>
-                                                <p className="text-xs text-muted-foreground">Drop your floor plan image or PDF</p>
-                                            </div>
-                                            <Button onClick={() => document.getElementById('blueprint-upload')?.click()} className="w-full bg-primary text-primary-foreground font-bold h-11 rounded-xl">
-                                                Select File
-                                            </Button>
-                                            <input type="file" id="blueprint-upload" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,application/pdf" onChange={handleFileUpload} />
-                                            <div className="flex justify-center gap-2">
-                                                {["PNG", "JPG", "PDF"].map(f => (
-                                                    <Badge key={f} variant="outline" className="bg-muted/50 border-border text-[9px] font-black uppercase">{f}</Badge>
+                            <div className="p-8">
+                                {mode === 'upload' && (
+                                    <div className="space-y-5">
+                                        {/* Dropzone */}
+                                        <div
+                                            className="w-full bg-[#f8f9fa] border-2 border-dashed border-slate-200 rounded-[20px] flex flex-col items-center justify-center p-10 transition-colors hover:bg-slate-50 cursor-pointer"
+                                            onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
+                                            onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
+                                            onDrop={handleDrop}
+                                        >
+                                            <Upload className="h-10 w-10 text-[#f97316] mb-3" strokeWidth={2.5} />
+                                            <h3 className="text-lg font-black text-slate-800 tracking-tight mb-1">Upload Blueprint</h3>
+                                            <p className="text-[13px] text-slate-500 mb-5">Drop your floor plan image or PDF</p>
+                                            <div className="flex items-center gap-2">
+                                                {["PNG", "JPG", "PDF"].map(ext => (
+                                                    <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-white">
+                                                        {ext}
+                                                    </span>
                                                 ))}
                                             </div>
-                                        </>
-                                    )}
-
-                                    {mode === 'describe' && (
-                                        <>
-                                            <div className="text-center">
-                                                <div className="h-14 w-14 mx-auto rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-3">
-                                                    <Sparkles className="h-7 w-7 text-primary" />
-                                                </div>
-                                                <h3 className="text-lg font-black mb-1">Describe Your Building</h3>
-                                                <p className="text-xs text-muted-foreground">AI generates a fully colored 3D model</p>
-                                            </div>
-                                            <textarea
-                                                value={description}
-                                                onChange={e => setDescription(e.target.value)}
-                                                placeholder="Example: A 3BHK bungalow with open living room, kitchen, 2 bathrooms, balcony, covered parking, terracotta roof, cream walls..."
-                                                className="w-full h-28 px-4 py-3 bg-muted/50 border border-border rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground/50"
-                                            />
-                                            <Button onClick={startDescriptionGeneration} className="w-full bg-primary text-primary-foreground font-bold h-11 rounded-xl gap-2" disabled={!description.trim()}>
-                                                <Sparkles className="h-4 w-4" /> Generate 3D Building
-                                            </Button>
-                                            <div className="space-y-1.5">
-                                                <p className="text-[9px] font-black uppercase text-muted-foreground tracking-widest">Quick Templates</p>
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    {[
-                                                        { label: "3BHK Bungalow", desc: "A modern 3-bedroom bungalow with spacious living room, modular kitchen, 2 bathrooms, covered parking, front lawn, terracotta roof and cream exterior walls." },
-                                                        { label: "2BHK Flat", desc: "A compact 2-bedroom apartment with living/dining area, kitchen, balcony, 2 bathrooms, and utility area. Modern finish with beige walls." },
-                                                        { label: "Luxury Villa", desc: "A luxury 4-bedroom villa with double-height living room, home office, family lounge, swimming pool area, landscaped garden, covered parking for 2 cars, terrace with pergola." },
-                                                        { label: "Farmhouse", desc: "A spacious farmhouse with 3 bedrooms, large kitchen, veranda, exposed brick walls, wooden beams, courtyard, and sloped clay tile roof." },
-                                                        { label: "Studio", desc: "A modern studio apartment with open plan living, kitchenette, bathroom, balcony, minimalist design with white walls and wood accents." },
-                                                    ].map(t => (
-                                                        <button key={t.label} onClick={() => setDescription(t.desc)}
-                                                            className="px-2.5 py-1 rounded-lg bg-muted/80 border border-border text-[10px] font-bold hover:bg-primary/10 hover:border-primary/30 hover:text-primary transition-all">
-                                                            {t.label}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                            </motion.div>
-                        )}
-
-                        {/* Analyzing */}
-                        {(status === 'analyzing' || status === 'generating') && (
-                            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                                className="bg-card/90 backdrop-blur-xl p-6 rounded-2xl border border-border shadow-2xl flex flex-col items-center">
-                                {preview && (
-                                    <div className="w-full h-24 rounded-lg overflow-hidden mb-4 border border-border">
-                                        <img src={preview} alt="Analyzing" className="w-full h-full object-cover opacity-60" />
-                                    </div>
-                                )}
-                                <div className="relative h-14 w-14 flex items-center justify-center mb-3">
-                                    <div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-ping" />
-                                    <Wand2 className="h-6 w-6 text-primary animate-pulse" />
-                                </div>
-                                <h4 className="font-black uppercase tracking-widest text-xs mb-1">
-                                    {mode === 'describe' ? 'Constructing Building' : 'Analyzing Blueprint'}
-                                </h4>
-                                <p className="text-[10px] text-muted-foreground mb-3 text-center max-w-[250px] truncate">
-                                    {file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
-                                </p>
-                                <div className="w-full bg-muted h-1.5 rounded-full overflow-hidden">
-                                    <motion.div className="h-full bg-primary rounded-full" initial={{ width: 0 }} animate={{ width: `${progress * 100}%` }} transition={{ ease: 'easeOut' }} />
-                                </div>
-                                <p className="text-[10px] text-muted-foreground mt-2">{Math.round(progress * 100)}%</p>
-                            </motion.div>
-                        )}
-
-                        {/* Complete */}
-                        {status === 'complete' && (
-                            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                                className="bg-card/90 backdrop-blur-xl p-5 rounded-2xl border border-border shadow-2xl space-y-3">
-                                <div className="flex items-center gap-3">
-                                    <div className="h-10 w-10 rounded-lg bg-green-500/20 flex items-center justify-center">
-                                        <CheckCircle2 className="h-6 w-6 text-green-500" />
-                                    </div>
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Built Successfully</p>
-                                        <p className="text-sm font-bold truncate max-w-[200px]">{elements?.building_name || file?.name || 'Custom Building'}</p>
-                                    </div>
-                                </div>
-
-                                {elements?.rooms && elements.rooms.length > 0 && (
-                                    <div className="space-y-1 max-h-28 overflow-y-auto pr-1">
-                                        {elements.rooms.map((r, i) => (
-                                            <div key={i} className="flex items-center gap-2 text-[11px]">
-                                                <div className="h-3 w-3 rounded-sm border border-border" style={{ backgroundColor: r.floor_color || '#e8d5b7' }} />
-                                                <span className="font-bold flex-1 truncate">{r.name}</span>
-                                                <span className="text-muted-foreground text-[10px]">{r.area?.toFixed(0)} sqm</span>
-                                            </div>
-                                        ))}
+                                        </div>
+                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf" onChange={handleFileUpload} />
+                                        <Button
+                                            onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
+                                            className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-12 rounded-[16px] text-[14px] shadow-lg shadow-[#f97316]/20 transition-all hover:-translate-y-0.5"
+                                        >
+                                            Select File
+                                        </Button>
                                     </div>
                                 )}
 
-                                {elements?.conflicts && elements.conflicts.length > 0 && (
-                                    <div className="space-y-1 pt-2 border-t border-border/50">
-                                        <p className="text-[9px] font-black uppercase text-destructive/80">Issues ({elements.conflicts.length})</p>
-                                        {elements.conflicts.slice(0, 3).map((c, i) => (
-                                            <div key={i} className="p-1.5 rounded bg-destructive/10 border border-destructive/20 text-[10px]">
-                                                <span className="font-bold text-destructive">{c.type}:</span>
-                                                <span className="text-muted-foreground ml-1">{c.description}</span>
-                                            </div>
-                                        ))}
+                                {mode === 'describe' && (
+                                    <div className="space-y-5">
+                                        <div className="w-full bg-[#f8f9fa] border-2 border-dashed border-slate-200 rounded-[20px] p-6 text-center">
+                                            <Sparkles className="h-8 w-8 text-[#f97316] mb-2 mx-auto" />
+                                            <h3 className="text-lg font-black text-slate-800 tracking-tight mb-1">Describe Blueprint</h3>
+                                            <p className="text-[12px] text-slate-500 max-w-[280px] mx-auto">AI generates a parametric 3D structure from your text description in seconds.</p>
+                                        </div>
+                                        <textarea
+                                            value={description}
+                                            onChange={e => setDescription(e.target.value)}
+                                            placeholder="Example: A custom 3BHK bungalow with a large open living room, L-shaped kitchen, 2 bathrooms, covered parking, terracotta roof, cream walls..."
+                                            className="w-full h-24 px-4 py-3 bg-white border border-slate-200 rounded-[14px] text-[13px] resize-none focus:outline-none focus:ring-2 focus:ring-[#f97316]/50 placeholder:text-slate-400"
+                                        />
+                                        <Button
+                                            onClick={startDescriptionGeneration}
+                                            disabled={!description.trim()}
+                                            className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-12 rounded-[16px] gap-2 text-[14px] shadow-lg shadow-[#f97316]/20 transition-all hover:-translate-y-0.5"
+                                        >
+                                            <Sparkles className="h-4 w-4" /> Generate
+                                        </Button>
+                                        <div className="flex flex-wrap gap-2 justify-center pt-1">
+                                            {[
+                                                { label: "3BHK Bungalow", desc: "A modern 3-bedroom bungalow with spacious living room, modular kitchen, 2 bathrooms, covered parking, front lawn, terracotta roof and cream exterior walls." },
+                                                { label: "2BHK Flat", desc: "A compact 2-bedroom apartment with living/dining area, kitchen, balcony, 2 bathrooms, and utility area. Modern finish with beige walls." },
+                                                { label: "Luxury Villa", desc: "A luxury 4-bedroom villa with double-height living room, home office, family lounge, swimming pool area, landscaped garden, covered parking for 2 cars, terrace with pergola." }
+                                            ].map((t, idx) => (
+                                                <button key={idx} onClick={() => setDescription(t.desc)} className="px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-slate-600 hover:bg-[#f97316]/10 hover:border-[#f97316]/30 hover:text-[#f97316] text-[10px] font-bold transition-all">
+                                                    {t.label}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
-
-                                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-border/50">
-                                    <Button variant="outline" size="sm" className="bg-muted/50 border-border text-[10px] font-black h-8" onClick={() => {
-                                        if (!elements) return;
-                                        setElements({ ...elements, walls: [...elements.walls, { id: Date.now(), start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7, color: '#f5e6d3', is_exterior: true }] })
-                                    }}>+ Wall</Button>
-                                    <Button variant="outline" size="sm" className="bg-muted/50 border-border text-[10px] font-black h-8" onClick={() => {
-                                        if (!elements) return;
-                                        setElements({ ...elements, doors: [...elements.doors, { id: Date.now(), host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1, color: '#8B4513' }] })
-                                    }}>+ Door</Button>
-                                </div>
-                            </motion.div>
-                        )}
+                            </div>
+                        </motion.div>
                     </div>
-                </div>
+                )}
+
+                {/* Side Panel Overlay (Progress & Completed Status) */}
+                {status !== 'idle' && (
+                    <div className="relative z-10 w-full md:w-[380px] p-6 h-full pointer-events-none flex flex-col ml-auto">
+                        <div className="mt-auto pointer-events-auto">
+                            {/* Analyzing */}
+                            {(status === 'analyzing' || status === 'generating') && (
+                                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+                                    className="bg-white/95 backdrop-blur-xl p-6 rounded-2xl border border-slate-200 shadow-2xl flex flex-col items-center">
+                                    {preview && (
+                                        <div className="w-full h-24 rounded-lg overflow-hidden mb-4 border border-slate-200">
+                                            <img src={preview} alt="Analyzing" className="w-full h-full object-cover opacity-60" />
+                                        </div>
+                                    )}
+                                    <div className="relative h-14 w-14 flex items-center justify-center mb-3">
+                                        <div className="absolute inset-0 rounded-full border-2 border-[#f97316]/20 animate-ping" />
+                                        <Wand2 className="h-6 w-6 text-[#f97316] animate-pulse" />
+                                    </div>
+                                    <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-slate-800">
+                                        {mode === 'describe' ? 'Constructing Building' : 'Analyzing Blueprint'}
+                                    </h4>
+                                    <p className="text-[10px] text-slate-500 mb-3 text-center max-w-[250px] truncate">
+                                        {file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
+                                    </p>
+                                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                        <motion.div className="h-full bg-[#f97316] rounded-full" initial={{ width: 0 }} animate={{ width: `${progress * 100}%` }} transition={{ ease: 'easeOut' }} />
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-2 font-black">{Math.round(progress * 100)}%</p>
+                                </motion.div>
+                            )}
+
+                            {/* Complete */}
+                            {status === 'complete' && (
+                                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+                                    className="bg-white/95 backdrop-blur-xl p-5 rounded-2xl border border-slate-200 shadow-2xl space-y-3">
+                                    <div className="flex items-center gap-3">
+                                        <div className="h-10 w-10 rounded-lg bg-emerald-50 flex items-center justify-center border border-emerald-100">
+                                            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Built Successfully</p>
+                                            <p className="text-[13px] font-bold truncate max-w-[200px] text-slate-800">{elements?.building_name || file?.name || 'Custom Building'}</p>
+                                        </div>
+                                    </div>
+
+                                    {elements?.rooms && elements.rooms.length > 0 && (
+                                        <div className="space-y-1.5 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
+                                            {elements.rooms.map((r, i) => (
+                                                <div key={i} className="flex items-center gap-2 text-[11px] bg-slate-50 border border-slate-100 p-2 rounded-lg">
+                                                    <div className="h-3 w-3 rounded-full border border-slate-200" style={{ backgroundColor: r.floor_color || '#e8d5b7' }} />
+                                                    <span className="font-bold text-slate-600 flex-1 truncate">{r.name}</span>
+                                                    <span className="text-slate-400 font-mono text-[10px]">{r.area?.toFixed(0)} sqm</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {elements?.conflicts && elements.conflicts.length > 0 && (
+                                        <div className="space-y-1 pt-3 border-t border-slate-200">
+                                            <p className="text-[9px] font-black uppercase text-red-500 tracking-widest mb-2">Architectural Issues ({elements.conflicts.length})</p>
+                                            {elements.conflicts.slice(0, 3).map((c, i) => (
+                                                <div key={i} className="p-2 bg-red-50 rounded-lg border border-red-100 flex flex-col gap-0.5">
+                                                    <span className="font-bold text-red-600 text-[10px] uppercase">{c.type}</span>
+                                                    <span className="text-slate-600 text-[11px] leading-tight">{c.description}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-200 mt-2">
+                                        <Button variant="outline" size="sm" className="bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 text-[11px] font-bold h-9" onClick={() => {
+                                            if (!elements) return;
+                                            setElements({ ...elements, walls: [...elements.walls, { id: Date.now(), start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7, color: '#f5e6d3', is_exterior: true }] })
+                                        }}>+ Add Wall</Button>
+                                        <Button variant="outline" size="sm" className="bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 text-[11px] font-bold h-9" onClick={() => {
+                                            if (!elements) return;
+                                            setElements({ ...elements, doors: [...elements.doors, { id: Date.now(), host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1, color: '#8B4513' }] })
+                                        }}>+ Add Door</Button>
+                                    </div>
+                                </motion.div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
