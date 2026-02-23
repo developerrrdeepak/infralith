@@ -12,6 +12,7 @@ import {
     Edges
 } from '@react-three/drei';
 import * as THREE from 'three';
+import { AlertTriangle, ShieldAlert, Cpu } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Upload,
@@ -29,19 +30,57 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-import { processBlueprintTo3D, GeometricReconstruction, WallGeometry, DoorGeometry, WindowGeometry, RoomGeometry } from '@/ai/flows/infralith/blueprint-to-3d-agent';
+import { processBlueprintTo3D, GeometricReconstruction, WallGeometry, DoorGeometry, WindowGeometry, RoomGeometry, ConstructionConflict } from '@/ai/flows/infralith/blueprint-to-3d-agent';
 
 // -- 3D Models and Animations --
+
+function ConflictMarker({ conflict }: { conflict: ConstructionConflict }) {
+    const meshRef = useRef<THREE.Mesh>(null);
+
+    useFrame((state) => {
+        if (meshRef.current) {
+            meshRef.current.position.y = 2 + Math.sin(state.clock.getElapsedTime() * 3) * 0.2;
+        }
+    });
+
+    const color = conflict.severity === 'high' ? '#ef4444' : conflict.severity === 'medium' ? '#f59e0b' : '#3b82f6';
+
+    return (
+        <group position={[conflict.location[0], 0, conflict.location[1]]}>
+            <mesh ref={meshRef}>
+                <octahedronGeometry args={[0.3, 0]} />
+                <meshStandardMaterial
+                    color={color}
+                    emissive={color}
+                    emissiveIntensity={2}
+                    transparent
+                    opacity={0.8}
+                />
+            </mesh>
+            <Html distanceFactor={10} position={[0, 2.8, 0]} center>
+                <div className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur-xl shadow-2xl transition-all",
+                    conflict.severity === 'high' ? "bg-red-500/20 border-red-500/50 text-red-500" :
+                        conflict.severity === 'medium' ? "bg-amber-500/20 border-amber-500/50 text-amber-500" :
+                            "bg-blue-500/20 border-blue-500/50 text-blue-500"
+                )}>
+                    {conflict.severity === 'high' ? <ShieldAlert className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                    <span className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap">
+                        {conflict.type}: {conflict.description}
+                    </span>
+                </div>
+            </Html>
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
+                <ringGeometry args={[0.4, 0.5, 32]} />
+                <meshStandardMaterial color={color} transparent opacity={0.5} />
+            </mesh>
+        </group>
+    );
+}
 
 function GeneratedStructure({ progress, data }: { progress: number, data: GeometricReconstruction | null }) {
     if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
-
-    useFrame((state, delta) => {
-        if (groupRef.current) {
-            groupRef.current.rotation.y += delta * 0.05;
-        }
-    });
 
     const currentScaleY = progress;
 
@@ -49,7 +88,7 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
         <group ref={groupRef} position={[0, 0, 0]}>
             <mesh position={[0, -0.05, 0]} receiveShadow>
                 <boxGeometry args={[14, 0.1, 14]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.8} />
+                <meshStandardMaterial color="#0f172a" roughness={0.9} />
                 <gridHelper args={[14, 28, "#1e293b", "#334155"]} rotation={[0, 0, 0]} position={[0, 0.06, 0]} />
             </mesh>
 
@@ -65,10 +104,20 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                         shape.closePath();
 
                         return (
-                            <mesh key={`room-${i}`} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]} receiveShadow>
-                                <shapeGeometry args={[shape]} />
-                                <meshStandardMaterial color="#1e293b" roughness={0.5} metalness={0.2} />
-                            </mesh>
+                            <group key={`room-group-${i}`}>
+                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]} receiveShadow>
+                                    <shapeGeometry args={[shape]} />
+                                    <meshStandardMaterial color="#1e293b" roughness={0.7} metalness={0.1} />
+                                </mesh>
+                                <Html
+                                    position={[room.polygon[0][0], 0.1, room.polygon[0][1]]}
+                                    distanceFactor={12}
+                                >
+                                    <div className="text-[8px] font-black uppercase text-white/20 select-none whitespace-nowrap">
+                                        {room.name} {room.area > 0 ? `(${room.area.toFixed(1)} sqm)` : ''}
+                                    </div>
+                                </Html>
+                            </group>
                         );
                     })}
 
@@ -90,7 +139,11 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                                 receiveShadow
                             >
                                 <boxGeometry args={[length, wall.height, wall.thickness]} />
-                                <meshStandardMaterial color="#475569" roughness={0.6} metalness={0.1} />
+                                <meshStandardMaterial
+                                    color={wall.thickness > 0.2 ? "#334155" : "#475569"}
+                                    roughness={0.8}
+                                    metalness={0.05}
+                                />
                                 <Edges color="#1e293b" threshold={15} />
                             </mesh>
                         );
@@ -100,9 +153,9 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                     {data.doors.map((door, i) => (
                         <group key={`door-${i}`} position={[door.position[0], door.height / 2, door.position[1]]}>
                             <mesh castShadow>
-                                <boxGeometry args={[door.width, door.height, 0.2]} />
-                                <meshStandardMaterial color="#fbbf24" roughness={0.3} metalness={0.2} />
-                                <Edges color="#78350f" threshold={15} />
+                                <boxGeometry args={[door.width, door.height, 0.1]} />
+                                <meshStandardMaterial color="#92400e" roughness={0.5} />
+                                <Edges color="#451a03" threshold={15} />
                             </mesh>
                         </group>
                     ))}
@@ -116,13 +169,18 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                                 position={[window.position[0], window.sill_height + windowHeight / 2, window.position[1]]}
                                 castShadow
                             >
-                                <boxGeometry args={[window.width, windowHeight, 0.15]} />
-                                <meshStandardMaterial color="#60a5fa" transparent opacity={0.4} metalness={1} roughness={0} />
+                                <boxGeometry args={[window.width, windowHeight, 0.05]} />
+                                <meshStandardMaterial color="#60a5fa" transparent opacity={0.6} metalness={0.9} roughness={0} />
+                                <Edges color="#1e3a8a" threshold={15} />
                             </mesh>
                         );
                     })}
                 </group>
             )}
+
+            {progress >= 1 && data.conflicts?.map((conflict, i) => (
+                <ConflictMarker key={`conflict-${i}`} conflict={conflict} />
+            ))}
         </group>
     );
 }
@@ -231,11 +289,17 @@ export default function BlueprintTo3D() {
                 {/* 3D Viewport - Absolute Fill */}
                 <div className="absolute inset-0 z-0">
                     <div className="w-full h-full relative group">
-                        <Canvas shadows dpr={[1, 2]} camera={{ position: [10, 10, 10], fov: 35 }}>
-                            <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete'} autoRotateSpeed={0.5} />
-                            <ambientLight intensity={0.5} />
-                            <spotLight position={[15, 20, 15]} angle={0.25} penumbra={1} intensity={2} castShadow />
-                            <directionalLight position={[-10, 10, 5]} intensity={1} color="#3b82f6" />
+                        <Canvas
+                            shadows="percentage"
+                            dpr={[1, 2]}
+                            camera={{ position: [10, 10, 10], fov: 35 }}
+                            gl={{ antialias: true }}
+                        >
+                            <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete'} autoRotateSpeed={0.2} />
+                            <ambientLight intensity={0.6} />
+                            <pointLight position={[10, 10, 10]} intensity={1.5} castShadow />
+                            <directionalLight position={[-10, 20, 10]} intensity={1.2} color="#ffffff" castShadow />
+                            <directionalLight position={[0, -10, 0]} intensity={0.3} color="#ffffff" />
 
                             <Suspense fallback={null}>
                                 <GeneratedStructure progress={progress} data={elements} />
@@ -317,17 +381,39 @@ export default function BlueprintTo3D() {
                                 className="premium-glass p-5 rounded-2xl border-white/5 shadow-2xl space-y-4"
                             >
                                 <div className="flex items-center gap-3">
-                                    <div className="h-10 w-10 rounded-lg bg-green-500/20 flex items-center justify-center">
-                                        <CheckCircle2 className="h-6 w-6 text-green-500" />
+                                    <div className="h-10 w-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                                        <Cpu className="h-6 w-6 text-blue-500" />
                                     </div>
                                     <div>
-                                        <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Reconstruction</p>
-                                        <p className="text-sm font-bold truncate max-w-[180px]">{file?.name || 'Building Alpha'}</p>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Engineering Audit</p>
+                                        <p className="text-sm font-bold truncate max-w-[180px]">{file?.name || 'Blueprint Analysis'}</p>
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <Button variant="outline" size="sm" className="bg-white/5 border-white/5 text-[10px] font-black h-8" onClick={() => setElements({ ...elements!, walls: [...elements!.walls, { start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7 }] })}>+ Wall</Button>
-                                    <Button variant="outline" size="sm" className="bg-white/5 border-white/5 text-[10px] font-black h-8" onClick={() => setElements({ ...elements!, doors: [...elements!.doors, { host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1 }] })}>+ Door</Button>
+
+                                {elements?.conflicts && elements.conflicts.length > 0 && (
+                                    <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                                        <p className="text-[9px] font-black uppercase text-red-500/80">Structural Conflicts Detected</p>
+                                        {elements.conflicts.map((c, i) => (
+                                            <div key={i} className="p-2 rounded bg-red-500/10 border border-red-500/20 text-[10px] space-y-1">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="font-bold uppercase tracking-tighter text-red-400">{c.type}</span>
+                                                    <Badge variant="outline" className="text-[8px] h-3 px-1 border-red-500/50 text-red-500">{c.severity}</Badge>
+                                                </div>
+                                                <p className="text-white/70 leading-tight">{c.description}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                                    <Button variant="outline" size="sm" className="bg-white/5 border-white/5 text-[10px] font-black h-8" onClick={() => {
+                                        if (!elements) return;
+                                        setElements({ ...elements, walls: [...elements.walls, { id: Date.now(), start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7 }] })
+                                    }}>+ Structural</Button>
+                                    <Button variant="outline" size="sm" className="bg-white/5 border-white/5 text-[10px] font-black h-8" onClick={() => {
+                                        if (!elements) return;
+                                        setElements({ ...elements, doors: [...elements.doors, { id: Date.now(), host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1 }] })
+                                    }}>+ Egress</Button>
                                 </div>
                             </motion.div>
                         )}
