@@ -149,17 +149,37 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
 }
 
 function simulateVisionResponse<T>(prompt: string): T {
-    // Return a default set of BIM elements for 2D to 3D pipeline
+    // Return a realistic construction-grade geometric reconstruction for demo/fallback
     return {
-        elements: [
-            { type: "wall", x: -2, z: 0, width: 0.2, length: 4 },
-            { type: "wall", x: 2, z: 0, width: 0.2, length: 4 },
-            { type: "wall", x: 0, z: -2, width: 4, length: 0.2 },
-            { type: "wall", x: 0, z: 2, width: 4, length: 0.2 },
-            { type: "door", x: 0, z: -1.9, width: 0.8, length: 0.3 }
+        walls: [
+            { id: "w1", start: [-5, -4], end: [5, -4], thickness: 0.23, height: 2.7 },
+            { id: "w2", start: [5, -4], end: [5, 4], thickness: 0.23, height: 2.7 },
+            { id: "w3", start: [5, 4], end: [-5, 4], thickness: 0.23, height: 2.7 },
+            { id: "w4", start: [-5, 4], end: [-5, -4], thickness: 0.23, height: 2.7 },
+            { id: "w5", start: [0, -4], end: [0, 4], thickness: 0.115, height: 2.7 },
+            { id: "w6", start: [-5, 0], end: [0, 0], thickness: 0.115, height: 2.7 },
+        ],
+        doors: [
+            { id: "d1", host_wall_id: "w5", position: [0, 1.5], width: 0.9, height: 2.1 },
+            { id: "d2", host_wall_id: "w4", position: [-5, -2], width: 1.0, height: 2.1 },
+        ],
+        windows: [
+            { id: "win1", host_wall_id: "w1", position: [2.5, -4], width: 1.5, sill_height: 0.9 },
+            { id: "win2", host_wall_id: "w3", position: [-2.5, 4], width: 1.2, sill_height: 0.9 },
+            { id: "win3", host_wall_id: "w2", position: [5, 2], width: 1.5, sill_height: 0.9 },
+        ],
+        rooms: [
+            { id: "r1", name: "Living Room", polygon: [[0, -4], [5, -4], [5, 4], [0, 4]], area: 40 },
+            { id: "r2", name: "Bedroom", polygon: [[-5, 0], [0, 0], [0, 4], [-5, 4]], area: 20 },
+            { id: "r3", name: "Kitchen", polygon: [[-5, -4], [0, -4], [0, 0], [-5, 0]], area: 20 },
+        ],
+        conflicts: [
+            { type: "structural", severity: "medium", description: "Interior wall w5 spans 8m without column support", location: [0, 0] },
+            { type: "code", severity: "low", description: "Kitchen area (20 sqm) exceeds minimum but lacks cross-ventilation", location: [-2.5, -2] },
         ]
     } as unknown as T;
 }
+
 
 /**
  * Azure Document Intelligence Bridge for Blueprint OCR — Production Integration
