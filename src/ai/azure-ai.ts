@@ -27,7 +27,7 @@ export async function generateAzureObject<T>(prompt: string, schema?: any): Prom
         const client = new AzureOpenAI({
             endpoint: azureEndpoint,
             apiKey: azureKey,
-            apiVersion: "2025-01-01-preview",
+            apiVersion: "2024-12-01-preview",
             deployment: deploymentName,
         });
 
@@ -118,7 +118,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         const client = new AzureOpenAI({
             endpoint: azureEndpoint,
             apiKey: azureKey,
-            apiVersion: "2025-01-01-preview",
+            apiVersion: "2024-12-01-preview",
             deployment: deploymentName,
         });
 
