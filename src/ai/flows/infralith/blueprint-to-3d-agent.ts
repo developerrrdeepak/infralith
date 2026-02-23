@@ -2,90 +2,142 @@
 
 import { generateAzureVisionObject } from '@/ai/azure-ai';
 
-export interface BIMElement {
-    type: 'wall' | 'door' | 'window' | 'furniture' | 'plant';
-    x: number;
-    z: number;
+export interface WallGeometry {
+    start: [number, number];
+    end: [number, number];
+    thickness: number;
+    height: number;
+}
+
+export interface DoorGeometry {
+    host_wall_id: string | number;
+    position: [number, number];
     width: number;
-    length: number;
-    height?: number; // Added for furniture
-    color?: string; // Added for customized styles
-    rotation?: number;
-    metadata?: Record<string, any>;
+    height: number;
+}
+
+export interface WindowGeometry {
+    host_wall_id: string | number;
+    position: [number, number];
+    width: number;
+    sill_height: number;
+}
+
+export interface RoomGeometry {
+    polygon: [number, number][];
+}
+
+export interface GeometricReconstruction {
+    walls: WallGeometry[];
+    doors: DoorGeometry[];
+    windows: WindowGeometry[];
+    rooms: RoomGeometry[];
 }
 
 /**
- * Advanced AI 2D to 3D Conversion Agent.
- * Leveraging the logic of Azure Maps Creator and Digital Twins 3D Scenes.
+ * Construction-grade geometric reconstruction engine.
+ * Converts 2D architectural floor plans into metrically consistent parametric 3D models.
  */
-export async function processBlueprintTo3D(base64Image: string): Promise<BIMElement[]> {
-    console.log("Infralith Digital Twins: Initiating spatial conversion via Azure Vision...");
+export async function processBlueprintTo3D(base64Image: string): Promise<GeometricReconstruction> {
+    console.log("Infralith Geometric Reconstruction: Initiating spatial synthesis via Azure Vision...");
 
     const prompt = `
-        Act as an Advanced AI Spatial Designer engine (similar to Planner 5D). 
-        Analyze the provided 2D blueprint, floor plan, or sketch image and convert it into a structured 3D BIM data array.
-        
-        TASKS:
-        1. Identify primary exterior boundaries and interior load-bearing walls.
-        2. Detect key egress points (doors) and openings (windows).
-        3. Extract recognized furniture (desks, sofas, beds, tables) and indoor plants to furnish the space.
-        4. Normalize all coordinates onto a central grid from X: -5 to +5 and Z: -5 to +5.
-        
-        OUTPUT FORMAT:
-        Return a JSON object with an "elements" array.
-        Each element: { "type": "wall"|"door"|"window"|"furniture"|"plant", "x": number, "z": number, "width": number, "length": number, "height": number, "color": string }
-        
-        Design Rules:
-        - Walls use thickness 0.2 to 0.4.
-        - Doors typically have a length of 0.8 to 1.0.
-        - Furniture should have realistic proportional width, length, and height.
-        - Assign logical, aesthetic hex colors (e.g. #fb923c for sofas) to the "color" property.
-        - Normalize the layout centrally around [0,0].
+        You are a construction-grade geometric reconstruction engine.
+
+        Input: A 2D architectural floor plan containing walls, doors, windows, and enclosed room spaces.
+
+        Your task is NOT to visually approximate the structure, but to generate a metrically consistent parametric 3D model using architectural constraints.
+
+        Follow these rules strictly:
+
+        1. Treat all detected wall boundaries as structural wall centerlines.
+        2. Infer wall thickness using parallel line spacing where available. If unavailable, assign 0.23m for exterior walls and 0.115m for interior walls.
+        3. Enforce topological closure on all room polygons. Reject open loops.
+        4. Snap all wall intersections to eliminate gaps or overlaps.
+        5. Align doors and windows only along valid host walls.
+        6. Subtract door and window openings from parent wall volumes using boolean operations.
+        7. Assume default vertical parameters unless explicitly labeled:
+           - Wall height: 2.7m
+           - Door height: 2.1m
+           - Window sill: 0.9m
+           - Slab thickness: 0.15m
+        8. Extrude all validated 2D wall polygons along the Z-axis.
+        9. Generate floor slabs for all enclosed room polygons.
+        10. Preserve spatial hierarchy between rooms using adjacency mapping.
+
+        Output structured JSON in this format:
+
+        {
+          "walls": [
+            {
+              "start": [x,y],
+              "end": [x,y],
+              "thickness": value,
+              "height": value
+            }
+          ],
+          "doors": [
+            {
+              "host_wall_id": id,
+              "position": [x,y],
+              "width": value,
+              "height": value
+            }
+          ],
+          "windows": [
+            {
+              "host_wall_id": id,
+              "position": [x,y],
+              "width": value,
+              "sill_height": value
+            }
+          ],
+          "rooms": [
+            {
+              "polygon": [[x,y],[x,y]...]
+            }
+          ]
+        }
+
+        Do not generate meshes or visuals.
+        Only return validated geometric construction parameters suitable for downstream 3D extrusion.
+        Reject inconsistent geometry.
     `;
 
     try {
-        const result = await generateAzureVisionObject<{ elements: BIMElement[] }>(prompt, base64Image);
+        const result = await generateAzureVisionObject<GeometricReconstruction>(prompt, base64Image);
 
-        if (!result || !result.elements || !Array.isArray(result.elements)) {
-            console.warn("Maps Creator simulation: No structured elements found. Generating default shell.");
+        if (!result || !result.walls) {
+            console.warn("Geometric reconstruction: No valid walls found. Generating default shell.");
             return generateSafeShell();
         }
 
-        return result.elements;
+        return result;
     } catch (e) {
-        console.error("Spatial Conversion Pipeline Error:", e);
+        console.error("Geometric Reconstruction Pipeline Error:", e);
         throw e;
     }
 }
 
-function generateSafeShell(): BIMElement[] {
-    return [
-        // Outer Shell
-        { type: 'wall', x: 0, z: -4, width: 8.5, length: 0.3, color: '#475569' },
-        { type: 'wall', x: 0, z: 4, width: 8.5, length: 0.3, color: '#475569' },
-        { type: 'wall', x: -4, z: 0, width: 0.3, length: 8.5, color: '#475569' },
-        { type: 'wall', x: 4, z: 0, width: 0.3, length: 8.5, color: '#475569' },
-        // Interior Walls separating living room and office
-        { type: 'wall', x: 0, z: -1, width: 0.3, length: 6, color: '#64748b' },
-        // Doors
-        { type: 'door', x: 0, z: 1.5, width: 0.3, length: 1.2, color: '#3b82f6' },
-        { type: 'door', x: 4, z: 0, width: 0.3, length: 1.2, color: '#3b82f6' },
-        // Windows
-        { type: 'window', x: -4, z: -2, width: 0.4, length: 2, color: '#93c5fd' },
-        { type: 'window', x: -4, z: 2, width: 0.4, length: 2, color: '#93c5fd' },
-
-        // --- 🛋️ AI Planner 5D Furniture Generation Mock ---
-        // Living Room Setup
-        { type: 'furniture', x: -2, z: 1, width: 2.5, length: 1, height: 0.5, color: '#fb923c', rotation: 0 }, // Sofa
-        { type: 'furniture', x: -2, z: -0.5, width: 1.5, length: 0.8, height: 0.3, color: '#e2e8f0', rotation: 0 }, // Coffee Table
-        { type: 'furniture', x: -3.5, z: -2, width: 0.6, length: 2, height: 0.8, color: '#1e293b', rotation: 0 }, // TV Unit
-
-        // Office Setup
-        { type: 'furniture', x: 2, z: -2, width: 1.8, length: 0.8, height: 0.75, color: '#cbd5e1', rotation: 0 }, // Desk
-        { type: 'furniture', x: 2, z: -1, width: 0.6, length: 0.6, height: 0.5, color: '#0f172a', rotation: 0 }, // Chair
-
-        // Decor
-        { type: 'plant', x: -3.5, z: 3.5, width: 0.5, length: 0.5, height: 1.2, color: '#22c55e', rotation: 0 }, // Potted Plant
-        { type: 'plant', x: 3.5, z: -3.5, width: 0.4, length: 0.4, height: 0.8, color: '#22c55e', rotation: 0 }
-    ];
+function generateSafeShell(): GeometricReconstruction {
+    return {
+        walls: [
+            { start: [-5, -5], end: [5, -5], thickness: 0.23, height: 2.7 },
+            { start: [5, -5], end: [5, 5], thickness: 0.23, height: 2.7 },
+            { start: [5, 5], end: [-5, 5], thickness: 0.23, height: 2.7 },
+            { start: [-5, 5], end: [-5, -5], thickness: 0.23, height: 2.7 },
+            { start: [0, -5], end: [0, 5], thickness: 0.115, height: 2.7 },
+        ],
+        doors: [
+            { host_wall_id: 4, position: [0, 1], width: 0.9, height: 2.1 }
+        ],
+        windows: [
+            { host_wall_id: 0, position: [0, -5], width: 1.5, sill_height: 0.9 }
+        ],
+        rooms: [
+            { polygon: [[-5, -5], [0, -5], [0, 5], [-5, 5]] },
+            { polygon: [[0, -5], [5, -5], [5, 5], [0, 5]] }
+        ]
+    };
 }
+

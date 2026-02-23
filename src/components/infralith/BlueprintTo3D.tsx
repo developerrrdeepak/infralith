@@ -29,12 +29,12 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-import { processBlueprintTo3D, BIMElement } from '@/ai/flows/infralith/blueprint-to-3d-agent';
+import { processBlueprintTo3D, GeometricReconstruction, WallGeometry, DoorGeometry, WindowGeometry, RoomGeometry } from '@/ai/flows/infralith/blueprint-to-3d-agent';
 
 // -- 3D Models and Animations --
 
-function GeneratedStructure({ progress, elements }: { progress: number, elements: BIMElement[] }) {
-    // Renders the list of real structural elements given by the remote AI
+function GeneratedStructure({ progress, data }: { progress: number, data: GeometricReconstruction | null }) {
+    if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
 
     useFrame((state, delta) => {
@@ -47,93 +47,80 @@ function GeneratedStructure({ progress, elements }: { progress: number, elements
 
     return (
         <group ref={groupRef} position={[0, 0, 0]}>
-            {/* Ground Plane */}
             <mesh position={[0, -0.05, 0]} receiveShadow>
-                <boxGeometry args={[12, 0.1, 12]} />
+                <boxGeometry args={[14, 0.1, 14]} />
                 <meshStandardMaterial color="#0f172a" roughness={0.8} />
-                <gridHelper args={[12, 24, "#1e293b", "#334155"]} rotation={[0, 0, 0]} position={[0, 0.06, 0]} />
+                <gridHelper args={[14, 28, "#1e293b", "#334155"]} rotation={[0, 0, 0]} position={[0, 0.06, 0]} />
             </mesh>
 
             {currentScaleY > 0 && (
-                <group scale={[1, currentScaleY, 1]} position={[0, (currentScaleY * 1.5) / 2, 0]}>
-                    {/* Floor Slab */}
-                    <mesh position={[0, -0.01, 0]} receiveShadow>
-                        <boxGeometry args={[10.5, 0.05, 10.5]} />
-                        <meshStandardMaterial color="#334155" roughness={0.1} metalness={0.2} />
-                    </mesh>
-
-                    {elements.map((el, i) => {
-                        const isWall = el.type === 'wall';
-                        const isDoor = el.type === 'door';
-                        const isWindow = el.type === 'window';
-                        const isFurniture = el.type === 'furniture';
-                        const isPlant = el.type === 'plant';
-
-                        const elHeight = el.height || (isWall ? 1.5 : isWindow ? 0.8 : 1.2);
-                        const yPos = isWindow ? 0.8 : (elHeight / 2); // Windows float, others sit on floor
-
-                        if (isPlant) {
-                            return (
-                                <group key={i} position={[el.x, 0, el.z]}>
-                                    <mesh position={[0, 0.2, 0]} castShadow>
-                                        <cylinderGeometry args={[0.2, 0.15, 0.4]} />
-                                        <meshStandardMaterial color="#334155" roughness={0.9} />
-                                    </mesh>
-                                    <mesh position={[0, 0.6 + (elHeight * 0.4), 0]} castShadow>
-                                        <sphereGeometry args={[0.3, 8, 8]} />
-                                        <meshStandardMaterial color={el.color || "#22c55e"} roughness={0.6} />
-                                    </mesh>
-                                </group>
-                            )
-                        }
-
-                        if (isDoor) {
-                            return (
-                                <group key={i} position={[el.x, yPos, el.z]} rotation={[0, el.rotation || 0, 0]}>
-                                    {/* Door Frame */}
-                                    <mesh castShadow>
-                                        <boxGeometry args={[el.width + 0.1, elHeight + 0.1, el.length + 0.1]} />
-                                        <meshStandardMaterial color="#1e293b" />
-                                    </mesh>
-                                    {/* Main Door Panel */}
-                                    <mesh position={[0, 0, 0]} castShadow>
-                                        <boxGeometry args={[el.width, elHeight, el.length]} />
-                                        <meshStandardMaterial color={el.color || "#fbbf24"} roughness={0.3} metalness={0.2} />
-                                        <Edges color="#78350f" threshold={15} />
-                                    </mesh>
-                                </group>
-                            )
-                        }
+                <group scale={[1, currentScaleY, 1]} position={[0, 0, 0]}>
+                    {/* Room Slabs */}
+                    {data.rooms.map((room, i) => {
+                        const shape = new THREE.Shape();
+                        room.polygon.forEach((p, idx) => {
+                            if (idx === 0) shape.moveTo(p[0], p[1]);
+                            else shape.lineTo(p[0], p[1]);
+                        });
+                        shape.closePath();
 
                         return (
-                            <mesh key={i} position={[el.x, yPos, el.z]} rotation={[0, el.rotation || 0, 0]} castShadow receiveShadow>
-                                <boxGeometry args={[el.width, elHeight, el.length]} />
-                                <meshStandardMaterial
-                                    color={el.color || (isWall ? "#475569" : isDoor ? "#3b82f6" : "#60a5fa")}
-                                    transparent={isWindow}
-                                    opacity={isWall ? 0.95 : isWindow ? 0.4 : isFurniture ? 1 : 0.6}
-                                    metalness={isWindow ? 1 : 0.1}
-                                    roughness={isWindow ? 0 : 0.5}
-                                    envMapIntensity={isWindow ? 2 : 1}
-                                />
-                                {(isWall || isFurniture) && <Edges color={isWall ? "#1e293b" : "#475569"} threshold={15} />}
+                            <mesh key={`room-${i}`} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]} receiveShadow>
+                                <shapeGeometry args={[shape]} />
+                                <meshStandardMaterial color="#1e293b" roughness={0.5} metalness={0.2} />
                             </mesh>
                         );
                     })}
-                </group>
-            )}
 
-            {progress > 0.9 && elements.length > 0 && (
-                <group position={[elements[0].x, 2, elements[0].z]}>
-                    <mesh>
-                        <sphereGeometry args={[0.2, 16, 16]} />
-                        <meshStandardMaterial color="#3b82f6" emissive="#3b82f6" emissiveIntensity={5} />
-                    </mesh>
-                    <Html distanceFactor={10} position={[0, 0.5, 0]} center>
-                        <div className="bg-primary/20 backdrop-blur-xl border border-primary/50 px-3 py-1.5 rounded-lg text-[10px] font-black text-primary whitespace-nowrap shadow-[0_0_20px_rgba(59,130,246,0.4)] uppercase tracking-widest">
-                            3D Reference Point
-                        </div>
-                    </Html>
+                    {/* Walls Rendering */}
+                    {data.walls.map((wall, i) => {
+                        const dx = wall.end[0] - wall.start[0];
+                        const dz = wall.end[1] - wall.start[1];
+                        const length = Math.sqrt(dx * dx + dz * dz);
+                        const angle = Math.atan2(dz, dx);
+                        const centerX = (wall.start[0] + wall.end[0]) / 2;
+                        const centerZ = (wall.start[1] + wall.end[1]) / 2;
+
+                        return (
+                            <mesh
+                                key={`wall-${i}`}
+                                position={[centerX, wall.height / 2, centerZ]}
+                                rotation={[0, -angle, 0]}
+                                castShadow
+                                receiveShadow
+                            >
+                                <boxGeometry args={[length, wall.height, wall.thickness]} />
+                                <meshStandardMaterial color="#475569" roughness={0.6} metalness={0.1} />
+                                <Edges color="#1e293b" threshold={15} />
+                            </mesh>
+                        );
+                    })}
+
+                    {/* Doors Rendering */}
+                    {data.doors.map((door, i) => (
+                        <group key={`door-${i}`} position={[door.position[0], door.height / 2, door.position[1]]}>
+                            <mesh castShadow>
+                                <boxGeometry args={[door.width, door.height, 0.2]} />
+                                <meshStandardMaterial color="#fbbf24" roughness={0.3} metalness={0.2} />
+                                <Edges color="#78350f" threshold={15} />
+                            </mesh>
+                        </group>
+                    ))}
+
+                    {/* Windows Rendering */}
+                    {data.windows.map((window, i) => {
+                        const windowHeight = 1.2;
+                        return (
+                            <mesh
+                                key={`window-${i}`}
+                                position={[window.position[0], window.sill_height + windowHeight / 2, window.position[1]]}
+                                castShadow
+                            >
+                                <boxGeometry args={[window.width, windowHeight, 0.15]} />
+                                <meshStandardMaterial color="#60a5fa" transparent opacity={0.4} metalness={1} roughness={0} />
+                            </mesh>
+                        );
+                    })}
                 </group>
             )}
         </group>
@@ -147,7 +134,8 @@ export default function BlueprintTo3D() {
     const [file, setFile] = useState<File | null>(null);
     const [status, setStatus] = useState<'idle' | 'analyzing' | 'generating' | 'complete'>('idle');
     const [progress, setProgress] = useState(0);
-    const [elements, setElements] = useState<BIMElement[]>([]);
+    const [elements, setElements] = useState<GeometricReconstruction | null>(null);
+
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -202,8 +190,9 @@ export default function BlueprintTo3D() {
                         setStatus('complete');
                         toast({
                             title: "3D Model Generated",
-                            description: `Successfully identified ${spatialElements.length} elements and generated a 3D building.`,
+                            description: `Successfully identified ${spatialElements.walls.length} walls and generated a 3D model.`,
                         });
+
                         return 1.0;
                     }
                     return next;
@@ -319,10 +308,11 @@ export default function BlueprintTo3D() {
                                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground text-center mb-4">Or Start Fresh</p>
                                 <Button
                                     onClick={() => {
-                                        setElements([]);
+                                        setElements(null);
                                         setStatus('complete');
                                         setProgress(1.0);
                                     }}
+
                                     className="w-full bg-white dark:bg-white/5 hover:bg-primary/10 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white font-bold h-12 rounded-xl transition-all"
                                 >
                                     <Plus className="h-4 w-4 mr-2 text-primary" /> Create from Scratch
@@ -335,11 +325,16 @@ export default function BlueprintTo3D() {
                             <div className="space-y-4">
                                 <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-primary/80 dark:text-primary/60">Manual Blueprint Additions</h4>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <Button size="sm" variant="outline" className="text-[10px] font-bold" onClick={() => setElements([...elements, { type: 'wall', x: Math.random() * 2 - 1, z: Math.random() * 2 - 1, width: 2, length: 0.2, height: 1.5 }])}>+ Wall</Button>
-                                    <Button size="sm" variant="outline" className="text-[10px] font-bold" onClick={() => setElements([...elements, { type: 'door', x: Math.random() * 2 - 1, z: Math.random() * 2 - 1, width: 0.8, length: 0.1, height: 1.2, color: '#fbbf24' }])}>+ Door</Button>
-                                    <Button size="sm" variant="outline" className="text-[10px] font-bold" onClick={() => setElements([...elements, { type: 'window', x: Math.random() * 2 - 1, z: Math.random() * 2 - 1, width: 1, length: 0.1, height: 0.8, color: '#60a5fa' }])}>+ Window</Button>
-                                    <Button size="sm" variant="outline" className="text-[10px] font-bold" onClick={() => setElements([...elements, { type: 'furniture', x: Math.random() * 2 - 1, z: Math.random() * 2 - 1, width: 0.5, length: 0.5, height: 0.4, color: '#475569' }])}>+ Prop</Button>
+                                    <Button size="sm" variant="outline" className="text-[10px] font-bold" onClick={() => {
+                                        if (!elements) return;
+                                        setElements({ ...elements, walls: [...elements.walls, { start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7 }] })
+                                    }}>+ Wall</Button>
+                                    <Button size="sm" variant="outline" className="text-[10px] font-bold" onClick={() => {
+                                        if (!elements) return;
+                                        setElements({ ...elements, doors: [...elements.doors, { host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1 }] })
+                                    }}>+ Door</Button>
                                 </div>
+
                             </div>
                             <div className="flex items-center gap-5 p-5 rounded-2xl bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 shadow-xl">
                                 <div className="h-14 w-14 rounded-xl bg-primary/10 flex items-center justify-center border border-primary/20">
@@ -411,7 +406,8 @@ export default function BlueprintTo3D() {
                                 <pointLight position={[-10, 10, -10]} intensity={0.5} />
 
                                 <Suspense fallback={null}>
-                                    <GeneratedStructure progress={progress} elements={elements} />
+                                    <GeneratedStructure progress={progress} data={elements} />
+
 
                                     <Environment preset="night" />
                                     <ContactShadows position={[0, -0.1, 0]} opacity={0.8} scale={20} blur={3} far={10} />
@@ -425,8 +421,9 @@ export default function BlueprintTo3D() {
                                             3D PREVIEW: ACTIVE
                                         </Badge>
                                         <Badge className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-3xl border-slate-300 dark:border-white/10 text-slate-600 dark:text-white/50 font-black uppercase text-[10px] py-1.5 px-4 tracking-widest shadow-2xl">
-                                            SCENE NODES: {elements.length}
+                                            SCENE NODES: {elements?.walls.length}
                                         </Badge>
+
                                     </motion.div>
                                 )}
                             </AnimatePresence>
