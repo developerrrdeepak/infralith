@@ -18,18 +18,18 @@ const stages = [
 ];
 
 export default function PipelineStatus() {
-    const { handleNavigate, infralithResult } = useAppContext();
+    const { handleNavigate, pipelineStage } = useAppContext();
     const [completed, setCompleted] = useState<number[]>([]);
-    const [current, setCurrent] = useState(0);
+    const current = pipelineStage < 0 ? 0 : pipelineStage;
 
     useEffect(() => {
-        if (current >= stages.length) return;
-        const timeout = setTimeout(() => {
-            setCompleted((prev) => [...prev, current]);
-            setCurrent((prev) => prev + 1);
-        }, stages[current].duration);
-        return () => clearTimeout(timeout);
+        const completedArr = [];
+        for (let i = 0; i < current; i++) {
+            completedArr.push(i);
+        }
+        setCompleted(completedArr);
     }, [current]);
+
 
     return (
         <div className="max-w-4xl mx-auto space-y-8 pb-12">

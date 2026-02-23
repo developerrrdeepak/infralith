@@ -37,24 +37,7 @@ export default function BlueprintUpload() {
         setUploaded(false);
         setProgress(0);
 
-        // Simulate progress UI for the upload part
-        let p = 0;
-        const interval = setInterval(() => {
-            p += 5;
-            if (p <= 95) setProgress(p);
-        }, 100);
-
         try {
-            // Document uploaded via frontend.
-            console.log("Starting secure document upload...");
-            console.log("Uploading file to Azure Blob Storage (Document Landing Zone)...");
-            await new Promise(r => setTimeout(r, 750));
-            console.log("File stored. Triggering API Gateway for Orchestrator...");
-            await new Promise(r => setTimeout(r, 750));
-
-            clearInterval(interval);
-            setProgress(100);
-
             // Trigger the actual AI Workflow via Server Action (Acts as Orchestrator Layer)
             await runInfralithEvaluation(file);
 
@@ -65,10 +48,8 @@ export default function BlueprintUpload() {
                 description: `AI Pipeline finished. Intelligence report is ready for ${user?.name}.`,
             });
 
-            // Navigate directly to the final report, bypassing the backend pipeline visualization
-            setTimeout(() => handleNavigate('report'), 1000);
+            // Note: Navigation to 'pipeline' now happens inside runInfralithEvaluation
         } catch (error) {
-            clearInterval(interval);
             setIsUploading(false);
             setProgress(0);
             console.error("Upload/Processing error:", error);
@@ -79,6 +60,7 @@ export default function BlueprintUpload() {
             });
         }
     };
+
 
     const triggerFileSelect = () => {
         if (!isEngineer) {

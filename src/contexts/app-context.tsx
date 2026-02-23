@@ -120,6 +120,7 @@ interface AppContextType {
   refreshEvaluations: () => Promise<void>;
   generateUserProfileJsonForChat: () => string | null;
   infralithResult: any | null;
+  pipelineStage: number;
   runInfralithEvaluation: (input: string | File) => Promise<void>;
 }
 
@@ -198,6 +199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [resumeRankerState, setResumeRankerStateInternal] = useState<ResumeRankerState>(initialResumeRankerState);
   const [mockInterviewState, setMockInterviewStateInternal] = useState<MockInterviewState>(initialMockInterviewState);
   const [infralithResult, setInfralithResult] = useState<any | null>(null);
+  const [pipelineStage, setPipelineStage] = useState(0);
 
   const [skillAssessmentState, setSkillAssessmentStateInternal] = useState<SkillAssessmentState>(() => {
     if (typeof window === 'undefined') {
@@ -482,12 +484,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const runInfralithEvaluation = async (input: string | File) => {
     setIsAuthLoading(true);
+    setPipelineStage(0);
+    handleNavigate('pipeline');
+
+    // Simulate agent progression while server action runs
+    const progInterval = setInterval(() => {
+      setPipelineStage(prev => (prev < 5 ? prev + 1 : prev));
+    }, 2000);
+
     try {
       const formData = new FormData();
       formData.append('file', input);
 
       const result = await runInfralithWorkflow(formData);
       console.log("DEBUG: Infralith Workflow Result on Client:", result);
+
+      clearInterval(progInterval);
+      setPipelineStage(6);
       setInfralithResult(result);
 
       if (user?.uid) {
@@ -499,6 +512,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         description: "Specialized agents have successfully processed the blueprint.",
       });
     } catch (error) {
+      clearInterval(progInterval);
+      setPipelineStage(-1);
       console.error("Infralith workflow failed:", error);
       toast({
         variant: "destructive",
@@ -559,6 +574,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshEvaluations,
     generateUserProfileJsonForChat,
     infralithResult,
+    pipelineStage,
     runInfralithEvaluation,
   };
 
