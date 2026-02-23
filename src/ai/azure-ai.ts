@@ -18,16 +18,16 @@ const docIntelKey = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY || "";
  */
 export async function generateAzureObject<T>(prompt: string, schema?: any): Promise<T> {
     if (!azureEndpoint || !azureKey) {
-        console.warn("Azure OpenAI credentials missing. Returning simulated JSON structure.");
+        console.warn("Azure OpenAI credentials missing. Using simulation mode.");
         return simulateAzureResponse<T>(prompt);
     }
 
     try {
-        console.log("Routing Request through Azure OpenAI Pipeline...");
+        console.log(`[Azure OpenAI] Routing request to: ${azureEndpoint} | deployment: ${deploymentName}`);
         const client = new AzureOpenAI({
             endpoint: azureEndpoint,
             apiKey: azureKey,
-            apiVersion: "2024-12-01-preview",
+            apiVersion: "2025-01-01-preview",
             deployment: deploymentName,
         });
 
@@ -41,14 +41,15 @@ export async function generateAzureObject<T>(prompt: string, schema?: any): Prom
         });
 
         if ('error' in result && result.error !== undefined) {
-            console.warn("Azure OpenAI returned an error. Falling back to simulation.", result.error);
+            console.warn("[Azure OpenAI] API returned error object. Falling back to simulation:", JSON.stringify(result.error));
             return simulateAzureResponse<T>(prompt);
         }
 
         const content = result.choices[0].message?.content || "{}";
+        console.log(`[Azure OpenAI] Success — model: ${result.model}, tokens: ${result.usage?.total_tokens}`);
         return JSON.parse(content) as T;
-    } catch (e) {
-        console.warn("Azure OpenAI API call failed. Falling back to simulation.", e);
+    } catch (e: any) {
+        console.error(`[Azure OpenAI] Call failed: ${e?.message || e}. Status: ${e?.status}. Falling back to simulation.`);
         return simulateAzureResponse<T>(prompt);
     }
 }
@@ -113,11 +114,11 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
     }
 
     try {
-        console.log("Routing Vision Request through Azure OpenAI Pipeline...");
+        console.log(`[Azure Vision] Routing vision request to: ${azureEndpoint} | deployment: ${deploymentName}`);
         const client = new AzureOpenAI({
             endpoint: azureEndpoint,
             apiKey: azureKey,
-            apiVersion: "2024-12-01-preview",
+            apiVersion: "2025-01-01-preview",
             deployment: deploymentName,
         });
 
@@ -136,14 +137,15 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         });
 
         if ('error' in result && result.error !== undefined) {
-            console.warn("Azure OpenAI Vision returned an error. Falling back to simulation.", result.error);
+            console.warn("[Azure Vision] Returned error. Falling back to simulation:", JSON.stringify(result.error));
             return simulateVisionResponse<T>(prompt);
         }
 
         const content = result.choices[0].message?.content || "{}";
+        console.log(`[Azure Vision] Success — model: ${result.model}`);
         return JSON.parse(content) as T;
-    } catch (e) {
-        console.warn("Azure OpenAI Vision API call failed. Falling back to simulation.", e);
+    } catch (e: any) {
+        console.error(`[Azure Vision] Failed: ${e?.message || e}. Status: ${e?.status}. Falling back to simulation.`);
         return simulateVisionResponse<T>(prompt);
     }
 }

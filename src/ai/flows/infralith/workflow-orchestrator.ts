@@ -87,7 +87,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     const modelVersion: ModelVersion = {
         orchestratorVersion: ORCHESTRATOR_VERSION,
         blueprintParserModel: 'azure-doc-intelligence-v4',
-        llmModel: 'gpt-4o-2024-12-01',
+        llmModel: 'gpt-4.1-nano-2025-04-14',
         deploymentName,
         parameterHash: paramHash(),
         runId,
