@@ -1,11 +1,12 @@
 'use client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { LogIn, LogOut, Menu, PanelLeftClose, PanelLeftOpen, User, UserPlus } from 'lucide-react';
+import { Camera, LogIn, LogOut, Menu, PanelLeftClose, PanelLeftOpen, User, UserPlus } from 'lucide-react';
 import LoginStatus from './login-status';
 import { useAppContext } from '@/contexts/app-context';
 import ThemeToggle from './theme-toggle';
 import NotificationBell from '@/components/infralith/NotificationBell';
+import { useRef } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +22,8 @@ interface HeaderProps {
 }
 
 export default function Header({ onToggleDesktopSidebar, desktopSidebarCollapsed }: HeaderProps) {
-  const { authed, user, setShowLogin, setLoginView, handleLogout, setIsMobileMenuOpen, handleNavigate } = useAppContext();
+  const { authed, user, setShowLogin, setLoginView, handleLogout, setIsMobileMenuOpen, handleNavigate, handleProfileUpdate } = useAppContext();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const openLogin = () => {
     setLoginView('login');
@@ -32,6 +34,25 @@ export default function Header({ onToggleDesktopSidebar, desktopSidebarCollapsed
     setLoginView('signup');
     setShowLogin(true);
   }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && user) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("File too large. Max size is 2MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          await handleProfileUpdate({ uid: user.uid, avatar: reader.result as string });
+        } catch (error) {
+          console.error("Failed to upload avatar", error);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-40 flex items-center justify-between premium-glass border-x-0 border-t-0 rounded-none px-4 md:px-6 py-3 h-[72px] transition-all">
@@ -94,6 +115,17 @@ export default function Header({ onToggleDesktopSidebar, desktopSidebarCollapsed
                 <User className="mr-2 h-4 w-4" />
                 <span>My Profile</span>
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                <Camera className="mr-2 h-4 w-4" />
+                <span>Upload Photo</span>
+              </DropdownMenuItem>
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept="image/*"
+                onChange={handleFileChange}
+              />
               <DropdownMenuItem onClick={handleLogout}>
                 <LogOut className="mr-2 h-4 w-4" />
                 <span>Log out</span>

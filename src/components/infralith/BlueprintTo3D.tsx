@@ -697,21 +697,21 @@ export default function BlueprintTo3D() {
 
                 {/* Centered Idle Screen */}
                 {status === 'idle' && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center p-6 bg-[#f8f9fc]" style={{
-                        backgroundImage: `linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px)`,
+                    <div className="absolute inset-0 z-20 flex items-center justify-center p-6 bg-background/80 backdrop-blur-sm" style={{
+                        backgroundImage: `linear-gradient(rgba(128,128,128,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(128,128,128,0.1) 1px, transparent 1px)`,
                         backgroundSize: '20px 20px'
                     }}>
                         <motion.div
                             initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
-                            className="w-full max-w-[500px] bg-white rounded-[24px] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.08)] border border-slate-100 overflow-hidden"
+                            className="w-full max-w-[500px] bg-background rounded-[24px] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] border border-border overflow-hidden"
                         >
                             {/* Tabs */}
-                            <div className="flex border-b border-slate-100 px-2 relative">
+                            <div className="flex border-b border-border px-2 relative">
                                 <button
                                     onClick={() => setMode('upload')}
                                     className={cn(
                                         "flex-1 py-4 text-[13px] font-bold transition-colors relative z-10",
-                                        mode === 'upload' ? "text-[#f97316]" : "text-slate-500 hover:text-slate-800"
+                                        mode === 'upload' ? "text-[#f97316]" : "text-muted-foreground hover:text-foreground"
                                     )}
                                 >
                                     Upload
@@ -721,7 +721,7 @@ export default function BlueprintTo3D() {
                                     onClick={() => setMode('describe')}
                                     className={cn(
                                         "flex-1 py-4 text-[13px] font-bold transition-colors relative z-10",
-                                        mode === 'describe' ? "text-[#f97316]" : "text-slate-500 hover:text-slate-800"
+                                        mode === 'describe' ? "text-[#f97316]" : "text-muted-foreground hover:text-foreground"
                                     )}
                                 >
                                     Describe
@@ -734,17 +734,17 @@ export default function BlueprintTo3D() {
                                     <div className="space-y-5">
                                         {/* Dropzone */}
                                         <div
-                                            className="w-full bg-[#f8f9fa] border-2 border-dashed border-slate-200 rounded-[20px] flex flex-col items-center justify-center p-10 transition-colors hover:bg-slate-50 cursor-pointer"
+                                            className="w-full bg-secondary/30 border-2 border-dashed border-border rounded-[20px] flex flex-col items-center justify-center p-10 transition-colors hover:bg-secondary/50 cursor-pointer"
                                             onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
                                             onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
                                             onDrop={handleDrop}
                                         >
                                             <Upload className="h-10 w-10 text-[#f97316] mb-3" strokeWidth={2.5} />
-                                            <h3 className="text-lg font-black text-slate-800 tracking-tight mb-1">Upload Blueprint</h3>
-                                            <p className="text-[13px] text-slate-500 mb-5">Drop your floor plan image or PDF</p>
+                                            <h3 className="text-lg font-black text-foreground tracking-tight mb-1">Upload Blueprint</h3>
+                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image or PDF</p>
                                             <div className="flex items-center gap-2">
                                                 {["PNG", "JPG", "PDF"].map(ext => (
-                                                    <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-white">
+                                                    <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-background">
                                                         {ext}
                                                     </span>
                                                 ))}
@@ -762,16 +762,16 @@ export default function BlueprintTo3D() {
 
                                 {mode === 'describe' && (
                                     <div className="space-y-5">
-                                        <div className="w-full bg-[#f8f9fa] border-2 border-dashed border-slate-200 rounded-[20px] p-6 text-center">
+                                        <div className="w-full bg-secondary/30 border-2 border-dashed border-border rounded-[20px] p-6 text-center">
                                             <Sparkles className="h-8 w-8 text-[#f97316] mb-2 mx-auto" />
-                                            <h3 className="text-lg font-black text-slate-800 tracking-tight mb-1">Describe Blueprint</h3>
-                                            <p className="text-[12px] text-slate-500 max-w-[280px] mx-auto">AI generates a parametric 3D structure from your text description in seconds.</p>
+                                            <h3 className="text-lg font-black text-foreground tracking-tight mb-1">Describe Blueprint</h3>
+                                            <p className="text-[12px] text-muted-foreground max-w-[280px] mx-auto">AI generates a parametric 3D structure from your text description in seconds.</p>
                                         </div>
                                         <textarea
                                             value={description}
                                             onChange={e => setDescription(e.target.value)}
                                             placeholder="Example: A custom 3BHK bungalow with a large open living room, L-shaped kitchen, 2 bathrooms, covered parking, terracotta roof, cream walls..."
-                                            className="w-full h-24 px-4 py-3 bg-white border border-slate-200 rounded-[14px] text-[13px] resize-none focus:outline-none focus:ring-2 focus:ring-[#f97316]/50 placeholder:text-slate-400"
+                                            className="w-full h-24 px-4 py-3 bg-background border border-border rounded-[14px] text-[13px] text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-[#f97316]/50 placeholder:text-muted-foreground"
                                         />
                                         <Button
                                             onClick={startDescriptionGeneration}
@@ -786,7 +786,7 @@ export default function BlueprintTo3D() {
                                                 { label: "2BHK Flat", desc: "A compact 2-bedroom apartment with living/dining area, kitchen, balcony, 2 bathrooms, and utility area. Modern finish with beige walls." },
                                                 { label: "Luxury Villa", desc: "A luxury 4-bedroom villa with double-height living room, home office, family lounge, swimming pool area, landscaped garden, covered parking for 2 cars, terrace with pergola." }
                                             ].map((t, idx) => (
-                                                <button key={idx} onClick={() => setDescription(t.desc)} className="px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-slate-600 hover:bg-[#f97316]/10 hover:border-[#f97316]/30 hover:text-[#f97316] text-[10px] font-bold transition-all">
+                                                <button key={idx} onClick={() => setDescription(t.desc)} className="px-3 py-1.5 rounded-full bg-secondary/40 border border-border text-foreground hover:bg-[#f97316]/10 hover:border-[#f97316]/30 hover:text-[#f97316] text-[10px] font-bold transition-all">
                                                     {t.label}
                                                 </button>
                                             ))}
@@ -805,7 +805,7 @@ export default function BlueprintTo3D() {
                             {/* Analyzing */}
                             {(status === 'analyzing' || status === 'generating') && (
                                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-                                    className="bg-white/95 backdrop-blur-xl p-6 rounded-2xl border border-slate-200 shadow-2xl flex flex-col items-center">
+                                    className="bg-background/95 backdrop-blur-xl p-6 rounded-2xl border border-border shadow-2xl flex flex-col items-center">
                                     {preview && (
                                         <div className="w-full h-24 rounded-lg overflow-hidden mb-4 border border-slate-200">
                                             <img src={preview} alt="Analyzing" className="w-full h-full object-cover opacity-60" />
@@ -815,16 +815,16 @@ export default function BlueprintTo3D() {
                                         <div className="absolute inset-0 rounded-full border-2 border-[#f97316]/20 animate-ping" />
                                         <Wand2 className="h-6 w-6 text-[#f97316] animate-pulse" />
                                     </div>
-                                    <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-slate-800">
+                                    <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-foreground">
                                         {mode === 'describe' ? 'Constructing Building' : 'Analyzing Blueprint'}
                                     </h4>
-                                    <p className="text-[10px] text-slate-500 mb-3 text-center max-w-[250px] truncate">
+                                    <p className="text-[10px] text-muted-foreground mb-3 text-center max-w-[250px] truncate">
                                         {file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
                                     </p>
-                                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                    <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
                                         <motion.div className="h-full bg-[#f97316] rounded-full" initial={{ width: 0 }} animate={{ width: `${progress * 100}%` }} transition={{ ease: 'easeOut' }} />
                                     </div>
-                                    <p className="text-[10px] text-slate-500 mt-2 font-black">{Math.round(progress * 100)}%</p>
+                                    <p className="text-[10px] text-muted-foreground mt-2 font-black">{Math.round(progress * 100)}%</p>
                                 </motion.div>
                             )}
 
