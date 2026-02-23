@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -14,45 +14,44 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useAppContext } from "@/contexts/app-context";
 import { cn } from "@/lib/utils";
-import { Edit, X, Loader2, User as UserIcon, GraduationCap, Briefcase, Link as LinkIcon, BarChart2, FileText, Bot, Camera } from "lucide-react";
+import { Edit, X, Loader2, User as UserIcon, GraduationCap, Briefcase, Link as LinkIcon, Camera } from "lucide-react";
 import { Skeleton } from "../ui/skeleton";
-import CircularProgress from "./circular-progress";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion";
+
 import { useToast } from "@/hooks/use-toast";
 
 // Updated Zod schema: Most fields are now optional
 const profileFormSchema = z.object({
-  name: z.string().optional(),
-  email: z.string().email("Please enter a valid email address.").optional(),
-  mobile: z.string().optional(),
-  // Using string for date input (YYYY-MM-DD)
-  dob: z.string().optional(),
-  gender: z.string().optional(),
-  age: z.coerce.number().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  country: z.string().optional(),
-  postalCode: z.string().optional(),
-  skills: z.array(z.string()).optional(),
-  experience: z.string().optional(),
-  college: z.string().optional(),
-  degree: z.string().optional(),
-  gradYear: z.coerce.number().optional(),
-  linkedin: z.string().optional().or(z.literal('')),
-  github: z.string().optional().or(z.literal('')),
-  portfolio: z.string().optional().or(z.literal('')),
+    name: z.string().optional(),
+    email: z.string().email("Please enter a valid email address.").optional(),
+    mobile: z.string().optional(),
+    // Using string for date input (YYYY-MM-DD)
+    dob: z.string().optional(),
+    gender: z.string().optional(),
+    age: z.coerce.number().optional(),
+    city: z.string().optional(),
+    state: z.string().optional(),
+    country: z.string().optional(),
+    postalCode: z.string().optional(),
+    skills: z.array(z.string()).optional(),
+    experience: z.string().optional(),
+    college: z.string().optional(),
+    degree: z.string().optional(),
+    gradYear: z.coerce.number().optional(),
+    linkedin: z.string().optional().or(z.literal('')),
+    github: z.string().optional().or(z.literal('')),
+    portfolio: z.string().optional().or(z.literal('')),
 });
 
 type ProfileFormValues = z.infer<typeof profileFormSchema>;
@@ -89,7 +88,7 @@ const SkillsInput = ({ field }: { field: any }) => {
                     </div>
                 ))}
             </div>
-            <Input 
+            <Input
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -100,12 +99,12 @@ const SkillsInput = ({ field }: { field: any }) => {
 };
 
 export default function ProfilePage() {
-    const { user, handleProfileUpdate, isLoadingAuth, evaluations, handleNavigate, handleDeleteAccount } = useAppContext();
+    const { user, handleProfileUpdate, isLoadingAuth, handleNavigate, handleDeleteAccount } = useAppContext();
     const { toast } = useToast();
     const [isEditMode, setIsEditMode] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
-    
+
     // Avatar upload state
     const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -200,14 +199,6 @@ export default function ProfilePage() {
         }
     };
 
-    const NoDataPlaceholder = ({ message, buttonText, targetRoute }: { message: string, buttonText: string, targetRoute: string }) => (
-        <div className="text-center py-12">
-            <h3 className="font-semibold">{message}</h3>
-            <p className="text-sm text-muted-foreground mt-1">Complete an evaluation to see your insights here.</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={() => handleNavigate(targetRoute)}>{buttonText}</Button>
-        </div>
-    );
-
     if (isLoadingAuth || !user) {
         return <Skeleton className="h-[500px] w-full" />;
     }
@@ -223,23 +214,23 @@ export default function ProfilePage() {
                                 {/* Avatar Section with Edit Overlay */}
                                 <div className="relative group">
                                     <Avatar className={cn("h-28 w-28 border-4 border-background", isEditMode && "cursor-pointer hover:opacity-90")} onClick={handleAvatarClick}>
-                                        <AvatarImage src={avatarPreview || undefined} className="object-cover"/>
+                                        <AvatarImage src={avatarPreview || undefined} className="object-cover" />
                                         <AvatarFallback className="text-4xl">{user?.name?.[0]}</AvatarFallback>
                                     </Avatar>
                                     {isEditMode && (
-                                        <div 
+                                        <div
                                             className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-full cursor-pointer transition-opacity opacity-0 group-hover:opacity-100 m-1"
                                             onClick={handleAvatarClick}
                                         >
                                             <Camera className="h-8 w-8 text-white" />
                                         </div>
                                     )}
-                                    <input 
-                                        type="file" 
-                                        ref={fileInputRef} 
-                                        className="hidden" 
-                                        accept="image/*" 
-                                        onChange={handleFileChange} 
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        className="hidden"
+                                        accept="image/*"
+                                        onChange={handleFileChange}
                                     />
                                 </div>
 
@@ -260,22 +251,22 @@ export default function ProfilePage() {
                                     </div>
                                 )}
                             </div>
-                            
+
                             <div className="mt-6 space-y-6">
-                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><UserIcon className="text-primary"/>Basic & Address Details</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><UserIcon className="text-primary" />Basic & Address Details</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     <FormField control={form.control} name="name" render={({ field }) => (<FormItem><FormLabel>Full Name</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="email" render={({ field }) => (<FormItem><FormLabel>Email</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} type="email" disabled /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="mobile" render={({ field }) => (<FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} type="tel" /></FormControl><FormMessage /></FormItem>)} />
-                                    
+
                                     {/* ENABLED TYPING FOR DATE OF BIRTH */}
                                     <FormField control={form.control} name="dob" render={({ field }) => (
                                         <FormItem>
                                             <FormLabel>Date of Birth</FormLabel>
                                             <FormControl>
-                                                <Input 
-                                                    type="date" 
-                                                    {...field} 
-                                                    readOnly={!isEditMode} 
+                                                <Input
+                                                    type="date"
+                                                    {...field}
+                                                    readOnly={!isEditMode}
                                                     // Ensure value is never null to avoid uncontrolled input warnings
                                                     value={field.value || ''}
                                                 />
@@ -291,19 +282,19 @@ export default function ProfilePage() {
                                     <FormField control={form.control} name="country" render={({ field }) => (<FormItem><FormLabel>Country</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="postalCode" render={({ field }) => (<FormItem><FormLabel>Postal Code</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} type="text" /></FormControl><FormMessage /></FormItem>)} />
                                 </CardContent></Card>
-                                
-                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><GraduationCap className="text-primary"/>Education</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><GraduationCap className="text-primary" />Education</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <FormField control={form.control} name="college" render={({ field }) => (<FormItem><FormLabel>College/University</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="degree" render={({ field }) => (<FormItem><FormLabel>Degree</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="gradYear" render={({ field }) => (<FormItem><FormLabel>Year of Graduation</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} type="number" /></FormControl><FormMessage /></FormItem>)} />
                                 </CardContent></Card>
-                                
-                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><Briefcase className="text-primary"/>Professional Info</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><Briefcase className="text-primary" />Professional Info</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <FormField control={form.control} name="skills" render={({ field }) => (<FormItem><FormLabel>Skills</FormLabel><FormControl>{isEditMode ? <SkillsInput field={field} /> : <div className="flex flex-wrap gap-2">{(field.value || []).map((skill: string) => <div key={skill} className="bg-muted text-sm px-3 py-1 rounded">{skill}</div>)}</div>}</FormControl><FormMessage /></FormItem>)} />
-                                    <FormField control={form.control} name="experience" render={({ field }) => (<FormItem><FormLabel>Work Experience / Internships</FormLabel><FormControl><Textarea {...field} readOnly={!isEditMode} placeholder="Describe your roles and responsibilities..."/></FormControl><FormMessage /></FormItem>)} />
+                                    <FormField control={form.control} name="experience" render={({ field }) => (<FormItem><FormLabel>Work Experience / Internships</FormLabel><FormControl><Textarea {...field} readOnly={!isEditMode} placeholder="Describe your roles and responsibilities..." /></FormControl><FormMessage /></FormItem>)} />
                                 </CardContent></Card>
-                                
-                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><LinkIcon className="text-primary"/>Social & Professional Links</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+                                <Card><CardHeader><CardTitle className="flex items-center gap-2"><LinkIcon className="text-primary" />Social & Professional Links</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <FormField control={form.control} name="linkedin" render={({ field }) => (<FormItem><FormLabel>LinkedIn</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} placeholder="https://linkedin.com/in/..." /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="github" render={({ field }) => (<FormItem><FormLabel>GitHub</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} placeholder="https://github.com/..." /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={form.control} name="portfolio" render={({ field }) => (<FormItem><FormLabel>Portfolio</FormLabel><FormControl><Input {...field} readOnly={!isEditMode} placeholder="https://..." /></FormControl><FormMessage /></FormItem>)} />
@@ -314,67 +305,7 @@ export default function ProfilePage() {
                 </form>
             </Form>
 
-            {/* --- CAREER INSIGHTS SECTION (UNCHANGED) --- */}
-            <Card>
-                <CardHeader>
-                    <CardTitle className="font-headline">Career & Skill Insights</CardTitle>
-                    <CardDescription>A summary of your completed assessments and interviews.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <Tabs defaultValue="skills">
-                        <TabsList className="grid w-full grid-cols-3">
-                            <TabsTrigger value="skills"><BarChart2 className="h-4 w-4 mr-2" />Skill Assessments</TabsTrigger>
-                            <TabsTrigger value="resume"><FileText className="h-4 w-4 mr-2" />Resume Reviews</TabsTrigger>
-                            <TabsTrigger value="interviews"><Bot className="h-4 w-4 mr-2" />Mock Interviews</TabsTrigger>
-                        </TabsList>
-                        <TabsContent value="skills">
-                            {evaluations?.skillAssessments?.length > 0 ? (
-                                <div className="mt-4 space-y-4">
-                                    {evaluations.skillAssessments.slice(0, 1).map((assessment: any, index: number) => (
-                                        <Card key={index} className="bg-muted/50">
-                                            <CardHeader>
-                                                <CardTitle className="text-lg">Latest Career Roadmap: <span className="text-primary">{assessment.chosenRole}</span></CardTitle>
-                                                <CardDescription>Generated on {assessment.createdAt ? new Date(assessment.createdAt).toLocaleDateString() : 'N/A'}</CardDescription>
-                                            </CardHeader>
-                                            <CardContent>
-                                                <p className="text-sm italic mb-4">"{assessment.roadmap?.introduction}"</p>
-                                                <Accordion type="single" collapsible className="w-full">
-                                                    {assessment.roadmap?.timeline_steps?.map((step: any, stepIndex: number) => (
-                                                        <AccordionItem value={`step-${stepIndex}`} key={stepIndex}>
-                                                            <AccordionTrigger>{step.duration}: {step.title}</AccordionTrigger>
-                                                            <AccordionContent>
-                                                                <p className="text-sm text-muted-foreground mb-4">{step.description}</p>
-                                                                {step.details?.map((detail: any, detailIndex: number) => (
-                                                                    <div key={detailIndex} className="mb-3">
-                                                                        <h4 className="font-semibold text-sm">{detail.category}</h4>
-                                                                        <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground pl-4 mt-1">
-                                                                            {detail.items?.map((item: string, itemIndex: number) => <li key={itemIndex}>{item}</li>)}
-                                                                        </ul>
-                                                                    </div>
-                                                                ))}
-                                                            </AccordionContent>
-                                                        </AccordionItem>
-                                                    ))}
-                                                </Accordion>
-                                            </CardContent>
-                                        </Card>
-                                    ))}
-                                </div>
-                            ) : <NoDataPlaceholder message="No Career Roadmaps Found" buttonText="Generate Your Roadmap" targetRoute="path" />}
-                        </TabsContent>
-                        <TabsContent value="resume">
-                             {evaluations?.resumeReviews.length ? (
-                                <div className="mt-4 space-y-4">{evaluations.resumeReviews.slice(0, 1).map((review: any, index: number) => (<Card key={index} className="bg-muted/50"><CardHeader><CardTitle className="text-lg">Latest Resume Review for "{review.jobRole}"</CardTitle><CardDescription>Reviewed on {new Date(review.createdAt).toLocaleDateString()} &middot; Type: <span className="capitalize font-semibold">{review.type}</span></CardDescription></CardHeader><CardContent>{review.type === 'rank' ? (<div className="flex items-center gap-6"><CircularProgress progress={review.result.match_score} size={80} /><div><h4 className="font-semibold">Match Score: {review.result.match_score}%</h4><p className="text-sm text-muted-foreground">{review.result.final_recommendation}</p></div></div>) : (<blockquote className="border-l-2 pl-4 italic">"{review.result.roast_comments[0]}"</blockquote>)}</CardContent></Card>))}</div>
-                            ) : <NoDataPlaceholder message="No Resume Reviews Found" buttonText="Go to TorchMyResume" targetRoute="ranker" />}
-                        </TabsContent>
-                        <TabsContent value="interviews">
-                             {evaluations?.mockInterviews.length ? (
-                                <div className="mt-4 space-y-4">{evaluations.mockInterviews.slice(0, 1).map((interview: any, index: number) => (<Card key={index} className="bg-muted/50"><CardHeader><CardTitle className="text-lg">Latest Mock Interview: "{interview.jobRole}"</CardTitle><CardDescription>Completed on {new Date(interview.createdAt).toLocaleDateString()} &middot; Difficulty: <span className="capitalize font-semibold">{interview.difficulty}</span></CardDescription></CardHeader><CardContent><Accordion type="single" collapsible><AccordionItem value="item-1"><AccordionTrigger>Show Final Evaluation</AccordionTrigger><AccordionContent><p className="font-semibold">Soft Skill Score: {interview.evaluation.FinalEvaluation.SoftSkillScore}</p><p className="text-sm mt-2">{interview.evaluation.FinalEvaluation.OverallFeedback}</p></AccordionContent></AccordionItem></Accordion></CardContent></Card>))}</div>
-                            ) : <NoDataPlaceholder message="No Mock Interviews Found" buttonText="Start an Interview" targetRoute="mock" />}
-                        </TabsContent>
-                    </Tabs>
-                </CardContent>
-            </Card>
+
             <Card className="border-destructive/50">
                 <CardHeader>
                     <CardTitle className="font-headline text-destructive">Danger Zone</CardTitle>
@@ -394,7 +325,7 @@ export default function ProfilePage() {
                                     <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
                                     <AlertDialogDescription>This action cannot be undone. This will permanently delete your account and remove your data from our servers.</AlertDialogDescription>
                                 </AlertDialogHeader>
-                                <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={onDeleteConfirm} disabled={isDeleting}>{isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}Yes, delete my account</AlertDialogAction></AlertDialogFooter>
+                                <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={onDeleteConfirm} disabled={isDeleting}>{isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Yes, delete my account</AlertDialogAction></AlertDialogFooter>
                             </AlertDialogContent>
                         </AlertDialog>
                     </div>
