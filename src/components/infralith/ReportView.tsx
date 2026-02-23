@@ -199,110 +199,110 @@ Infralith AI Assistant (on behalf of Lead Engineer)`);
                                     <CardContent className="p-5 flex flex-col justify-center h-full">
                                         <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Readiness Score</span>
                                         <div className="flex items-baseline gap-2">
-                                            <span className={\`text-3xl font-black ${(infralithResult as any).approvalReadinessScore > 80 ? 'text-emerald-500' : 'text-orange-500'}\`}>{(infralithResult as any).approvalReadinessScore}</span>
-                                        <span className="text-sm text-muted-foreground font-medium">/ 100</span>
+                                            <span className={`text-3xl font-black ${(infralithResult as any).approvalReadinessScore > 80 ? 'text-emerald-500' : 'text-orange-500'}`}>{(infralithResult as any).approvalReadinessScore}</span>
+                                            <span className="text-sm text-muted-foreground font-medium">/ 100</span>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="border-border shadow-sm rounded-2xl bg-card">
+                                    <CardContent className="p-5 flex flex-col justify-center h-full">
+                                        <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Cost Impact</span>
+                                        <span className="text-2xl font-black text-foreground">{(infralithResult as any).costImpactEstimate.toLocaleString()} <span className="text-sm text-muted-foreground">{(infralithResult as any).currency}</span></span>
+                                    </CardContent>
+                                </Card>
+                                <Card className="border-border shadow-sm rounded-2xl bg-card">
+                                    <CardContent className="p-5 flex flex-col justify-center h-full">
+                                        <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Delay Risk</span>
+                                        <span className={`text-2xl font-black ${(infralithResult as any).delayImpactDays > 0 ? 'text-destructive' : 'text-emerald-500'}`}>+{(infralithResult as any).delayImpactDays} Days</span>
+                                    </CardContent>
+                                </Card>
+                                <Card className="border-border shadow-sm rounded-2xl bg-card">
+                                    <CardContent className="p-5 flex flex-col justify-center h-full">
+                                        <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Blockers</span>
+                                        <span className={`text-2xl font-black ${(infralithResult as any).approvalBlockerCount > 0 ? 'text-destructive' : 'text-emerald-500'}`}>{(infralithResult as any).approvalBlockerCount}</span>
+                                    </CardContent>
+                                </Card>
+                            </div>
+
+                            {(infralithResult as any).delayImpactDays > 0 && (
+                                <Card className="border-orange-500/30 bg-orange-500/5 shadow-sm rounded-2xl overflow-hidden">
+                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-orange-500" />
+                                    <CardContent className="p-5 flex items-start sm:items-center gap-4 relative">
+                                        <div className="h-10 w-10 rounded-full bg-orange-500/20 flex items-center justify-center shrink-0">
+                                            <Clock className="h-5 w-5 text-orange-600 dark:text-orange-500" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-orange-700 dark:text-orange-400 text-sm mb-1">Predictive Schedule Delay Detected</h4>
+                                            <p className="text-sm text-orange-600/80 dark:text-orange-500/80">AI models correlate foundational conflicts causing a projected {(infralithResult as any).delayImpactDays} day timeline expansion.</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
+
+                            {(infralithResult as any).redesignRequired && (
+                                <Card className="border-destructive/30 bg-destructive/5 shadow-sm rounded-2xl overflow-hidden">
+                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-destructive" />
+                                    <CardContent className="p-5 flex items-start sm:items-center gap-4 relative">
+                                        <div className="h-10 w-10 rounded-full bg-destructive/20 flex items-center justify-center shrink-0">
+                                            <AlertTriangle className="h-5 w-5 text-destructive" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-destructive text-sm mb-1">Redesign Action Required</h4>
+                                            <p className="text-sm text-destructive-foreground/80 dark:text-destructive/80">Core structural zones exceed safe compliance thresholds. Route back to engineering for revision.</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
+                        </>
+                    )
+                    }
+
+                    {
+                        role === 'Admin' && (
+                            <Card className="border-border shadow-sm rounded-2xl overflow-hidden">
+                                <CardHeader className="bg-muted/30 border-b border-border pb-4">
+                                    <CardTitle className="text-lg flex items-center gap-2"><Activity className="h-5 w-5 text-primary" /> Audit & Integrity Log</CardTitle>
+                                    <CardDescription>Immutable record of critical pipeline events.</CardDescription>
+                                </CardHeader>
+                                <CardContent className="p-0">
+                                    <div className="divide-y divide-border">
+                                        <div className="grid grid-cols-4 gap-4 p-4 items-center text-sm hover:bg-muted/20 transition-colors">
+                                            <div className="font-mono text-xs text-muted-foreground">Just now</div>
+                                            <div className="font-medium text-foreground">Report Accessed</div>
+                                            <div className="flex items-center gap-2 text-muted-foreground">
+                                                <div className="h-6 w-6 rounded-md bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold">A</div>
+                                                You (Admin)
+                                            </div>
+                                            <div className="font-mono text-[11px] text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded w-max flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Validated</div>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4 p-4 items-center text-sm hover:bg-muted/20 transition-colors">
+                                            <div className="font-mono text-xs text-muted-foreground">2 mins ago</div>
+                                            <div className="font-medium text-foreground">Analysis Completed</div>
+                                            <div className="flex items-center gap-2 text-muted-foreground">
+                                                <div className="h-6 w-6 rounded-md bg-purple-500/10 text-purple-600 flex items-center justify-center text-[10px] font-bold">AI</div>
+                                                Orchestrator Node
+                                            </div>
+                                            <div className="font-mono text-[11px] text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded w-max flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Validated</div>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4 p-4 items-center text-sm hover:bg-muted/20 transition-colors">
+                                            <div className="font-mono text-xs text-muted-foreground">5 mins ago</div>
+                                            <div className="font-medium text-foreground">Blueprint Uploaded</div>
+                                            <div className="flex items-center gap-2 text-muted-foreground">
+                                                <div className="h-6 w-6 rounded-md bg-blue-500/10 text-blue-600 flex items-center justify-center text-[10px] font-bold">E</div>
+                                                Lead Engineer
+                                            </div>
+                                            <div className="font-mono text-[11px] text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded w-max flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Validated</div>
+                                        </div>
                                     </div>
                                 </CardContent>
                             </Card>
-                            <Card className="border-border shadow-sm rounded-2xl bg-card">
-                                <CardContent className="p-5 flex flex-col justify-center h-full">
-                                    <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Cost Impact</span>
-                                    <span className="text-2xl font-black text-foreground">{(infralithResult as any).costImpactEstimate.toLocaleString()} <span className="text-sm text-muted-foreground">{(infralithResult as any).currency}</span></span>
-                                </CardContent>
-                            </Card>
-                            <Card className="border-border shadow-sm rounded-2xl bg-card">
-                                <CardContent className="p-5 flex flex-col justify-center h-full">
-                                    <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Delay Risk</span>
-                                    <span className={\`text-2xl font-black ${(infralithResult as any).delayImpactDays > 0 ? 'text-destructive' : 'text-emerald-500'}\`}>+{(infralithResult as any).delayImpactDays} Days</span>
-                            </CardContent>
-                        </Card>
-                    <Card className="border-border shadow-sm rounded-2xl bg-card">
-                        <CardContent className="p-5 flex flex-col justify-center h-full">
-                            <span className="text-[11px] font-bold uppercase text-muted-foreground tracking-wider mb-2">Blockers</span>
-                            <span className={\`text-2xl font-black ${(infralithResult as any).approvalBlockerCount > 0 ? 'text-destructive' : 'text-emerald-500'}\`}>{(infralithResult as any).approvalBlockerCount}</span>
-                    </CardContent>
-                </Card>
-            </div>
-
-            {(infralithResult as any).delayImpactDays > 0 && (
-                <Card className="border-orange-500/30 bg-orange-500/5 shadow-sm rounded-2xl overflow-hidden">
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-orange-500" />
-                    <CardContent className="p-5 flex items-start sm:items-center gap-4 relative">
-                        <div className="h-10 w-10 rounded-full bg-orange-500/20 flex items-center justify-center shrink-0">
-                            <Clock className="h-5 w-5 text-orange-600 dark:text-orange-500" />
-                        </div>
-                        <div>
-                            <h4 className="font-bold text-orange-700 dark:text-orange-400 text-sm mb-1">Predictive Schedule Delay Detected</h4>
-                            <p className="text-sm text-orange-600/80 dark:text-orange-500/80">AI models correlate foundational conflicts causing a projected {(infralithResult as any).delayImpactDays} day timeline expansion.</p>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
-
-            {(infralithResult as any).redesignRequired && (
-                <Card className="border-destructive/30 bg-destructive/5 shadow-sm rounded-2xl overflow-hidden">
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-destructive" />
-                    <CardContent className="p-5 flex items-start sm:items-center gap-4 relative">
-                        <div className="h-10 w-10 rounded-full bg-destructive/20 flex items-center justify-center shrink-0">
-                            <AlertTriangle className="h-5 w-5 text-destructive" />
-                        </div>
-                        <div>
-                            <h4 className="font-bold text-destructive text-sm mb-1">Redesign Action Required</h4>
-                            <p className="text-sm text-destructive-foreground/80 dark:text-destructive/80">Core structural zones exceed safe compliance thresholds. Route back to engineering for revision.</p>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
-        </>
-    )
-}
-
-{
-    role === 'Admin' && (
-        <Card className="border-border shadow-sm rounded-2xl overflow-hidden">
-            <CardHeader className="bg-muted/30 border-b border-border pb-4">
-                <CardTitle className="text-lg flex items-center gap-2"><Activity className="h-5 w-5 text-primary" /> Audit & Integrity Log</CardTitle>
-                <CardDescription>Immutable record of critical pipeline events.</CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-                <div className="divide-y divide-border">
-                    <div className="grid grid-cols-4 gap-4 p-4 items-center text-sm hover:bg-muted/20 transition-colors">
-                        <div className="font-mono text-xs text-muted-foreground">Just now</div>
-                        <div className="font-medium text-foreground">Report Accessed</div>
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                            <div className="h-6 w-6 rounded-md bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold">A</div>
-                            You (Admin)
-                        </div>
-                        <div className="font-mono text-[11px] text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded w-max flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Validated</div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-4 p-4 items-center text-sm hover:bg-muted/20 transition-colors">
-                        <div className="font-mono text-xs text-muted-foreground">2 mins ago</div>
-                        <div className="font-medium text-foreground">Analysis Completed</div>
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                            <div className="h-6 w-6 rounded-md bg-purple-500/10 text-purple-600 flex items-center justify-center text-[10px] font-bold">AI</div>
-                            Orchestrator Node
-                        </div>
-                        <div className="font-mono text-[11px] text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded w-max flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Validated</div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-4 p-4 items-center text-sm hover:bg-muted/20 transition-colors">
-                        <div className="font-mono text-xs text-muted-foreground">5 mins ago</div>
-                        <div className="font-medium text-foreground">Blueprint Uploaded</div>
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                            <div className="h-6 w-6 rounded-md bg-blue-500/10 text-blue-600 flex items-center justify-center text-[10px] font-bold">E</div>
-                            Lead Engineer
-                        </div>
-                        <div className="font-mono text-[11px] text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded w-max flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Validated</div>
-                    </div>
-                </div>
-            </CardContent>
-        </Card>
-    )
-}
+                        )
+                    }
 
                 </div >
 
-    {/* Right Column (Actions / Meta) */ }
-    < div className = "col-span-1 space-y-6" >
+                {/* Right Column (Actions / Meta) */}
+                < div className="col-span-1 space-y-6" >
                     <Card className="border-border shadow-sm rounded-2xl bg-card">
                         <CardHeader className="pb-4">
                             <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Quick Actions</CardTitle>
@@ -317,7 +317,7 @@ Infralith AI Assistant (on behalf of Lead Engineer)`);
                                     )}
                                 </Button>
                             )}
-                            
+
                             <Separator className="my-2" />
 
                             {role === 'Engineer' && (
@@ -365,26 +365,26 @@ Infralith AI Assistant (on behalf of Lead Engineer)`);
                 </div >
             </div >
 
-    {/* Voice-to-RFI Modal */ }
-    < Dialog open = { isRfiOpen } onOpenChange = { setIsRfiOpen } >
-        <DialogContent className="sm:max-w-lg p-0 overflow-hidden rounded-2xl border-border shadow-2xl">
-            <div className="p-6 bg-muted/30 border-b border-border">
-                <DialogTitle className="flex items-center gap-2 text-xl font-bold">
-                    <Zap className="h-5 w-5 text-primary" /> AI Draft Assistant
-                </DialogTitle>
-                <DialogDescription className="mt-2 text-sm">
-                    Speak or type your field observation regarding the <span className="font-bold text-foreground">"{selectedConflict?.regulationRef}"</span> conflict.
-                </DialogDescription>
-            </div>
+            {/* Voice-to-RFI Modal */}
+            < Dialog open={isRfiOpen} onOpenChange={setIsRfiOpen} >
+                <DialogContent className="sm:max-w-lg p-0 overflow-hidden rounded-2xl border-border shadow-2xl">
+                    <div className="p-6 bg-muted/30 border-b border-border">
+                        <DialogTitle className="flex items-center gap-2 text-xl font-bold">
+                            <Zap className="h-5 w-5 text-primary" /> AI Draft Assistant
+                        </DialogTitle>
+                        <DialogDescription className="mt-2 text-sm">
+                            Speak or type your field observation regarding the <span className="font-bold text-foreground">"{selectedConflict?.regulationRef}"</span> conflict.
+                        </DialogDescription>
+                    </div>
 
-            <div className="p-6 bg-card">
-                {!draftedRfi ? (
+                    <div className="p-6 bg-card">
+                        {!draftedRfi ? (
                             <div className="space-y-5">
                                 <div className="flex gap-3">
                                     <Button
                                         size="icon"
                                         onClick={simulateVoiceRecording}
-                                        className={\`h-14 w-14 shrink-0 rounded-xl transition-all shadow-sm ${isRecording ? 'bg-destructive animate-pulse hover:bg-destructive' : 'bg-primary hover:bg-primary/90'}\`}
+                                        className={`h-14 w-14 shrink-0 rounded-xl transition-all shadow-sm ${isRecording ? 'bg-destructive animate-pulse hover:bg-destructive' : 'bg-primary hover:bg-primary/90'}`}
                                     >
                                         <Mic className="h-6 w-6 text-white" />
                                     </Button>
@@ -404,23 +404,23 @@ Infralith AI Assistant (on behalf of Lead Engineer)`);
                                     {isGenerating ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Structuring Formal Request...</> : 'Generate Formal RFI'}
                                 </Button>
                             </div>
-            ) : (
-            <div className="space-y-5">
-                <div className="bg-muted/40 border border-border rounded-xl p-5 font-mono text-xs text-foreground whitespace-pre-wrap h-[240px] overflow-y-auto leading-relaxed">
-                    {draftedRfi}
-                </div>
-                <div className="flex justify-end gap-3 w-full pt-2">
-                    <Button variant="outline" onClick={() => setDraftedRfi('')} className="font-semibold border-border">Discard</Button>
-                    <Button className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md transition-transform hover:-translate-y-0.5" onClick={() => {
-                        handleAction("RFI Dispatched", "Secure RFI successfully sent to the architectural review board.");
-                        setIsRfiOpen(false);
-                    }}>
-                        <Send className="mr-2 h-4 w-4" /> Send to Architect
-                    </Button>
-                </div>
-            </div>
+                        ) : (
+                            <div className="space-y-5">
+                                <div className="bg-muted/40 border border-border rounded-xl p-5 font-mono text-xs text-foreground whitespace-pre-wrap h-[240px] overflow-y-auto leading-relaxed">
+                                    {draftedRfi}
+                                </div>
+                                <div className="flex justify-end gap-3 w-full pt-2">
+                                    <Button variant="outline" onClick={() => setDraftedRfi('')} className="font-semibold border-border">Discard</Button>
+                                    <Button className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md transition-transform hover:-translate-y-0.5" onClick={() => {
+                                        handleAction("RFI Dispatched", "Secure RFI successfully sent to the architectural review board.");
+                                        setIsRfiOpen(false);
+                                    }}>
+                                        <Send className="mr-2 h-4 w-4" /> Send to Architect
+                                    </Button>
+                                </div>
+                            </div>
                         )}
-        </div>
+                    </div>
                 </DialogContent >
             </Dialog >
         </div >
