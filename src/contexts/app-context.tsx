@@ -485,7 +485,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const runInfralithEvaluation = async (input: string | File) => {
     setIsAuthLoading(true);
     setPipelineStage(0);
-    handleNavigate('pipeline');
+    // Pipeline runs silently in background — user stays on upload page
 
     // Simulate agent progression while server action runs
     const progInterval = setInterval(() => {
@@ -511,6 +511,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         title: "AI Analysis Complete",
         description: "Specialized agents have successfully processed the blueprint.",
       });
+      handleNavigate('report');
     } catch (error) {
       clearInterval(progInterval);
       setPipelineStage(-1);
