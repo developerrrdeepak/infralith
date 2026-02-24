@@ -37,14 +37,19 @@ export const authOptions: NextAuthOptions = {
                 const roles = profile.roles || [];
                 let role = "Guest";
 
-                // Map Azure AD roles to application roles using env variables if available, otherwise fallback to defaults
+                // Map Azure AD roles to application roles using env variables or direct matches
                 const adminRole = process.env.AZURE_AD_APP_ROLE_ADMIN || "Admin";
                 const supervisorRole = process.env.AZURE_AD_APP_ROLE_SUPERVISOR || "Supervisor";
                 const engineerRole = process.env.AZURE_AD_APP_ROLE_ENGINEER || "Engineer";
 
-                if (roles.includes(adminRole)) role = "Admin";
-                else if (roles.includes(supervisorRole)) role = "Supervisor";
-                else if (roles.includes(engineerRole)) role = "Engineer";
+                // Azure Role IDs from portal screenshot for extra safety
+                const adminId = "0fbd3a6b-4e6d-456c-829b-734796328639";
+                const supervisorId = "1df35c95-09d9-4806-95b7-7ead4a233519";
+                const engineerId = "5b348725-935a-4e7b-8919-48f06910609b";
+
+                if (roles.includes(adminRole) || roles.includes(adminId)) role = "Admin";
+                else if (roles.includes(supervisorRole) || roles.includes(supervisorId)) role = "Supervisor";
+                else if (roles.includes(engineerRole) || roles.includes(engineerId)) role = "Engineer";
 
                 return {
                     id: profile.sub,
