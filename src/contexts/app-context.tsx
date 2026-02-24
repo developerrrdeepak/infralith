@@ -288,25 +288,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (status === 'authenticated' && session?.user) {
       setShowLogin(false);
-      const userRole = (session.user as any).role || 'Guest';
 
-      setUser({
-        uid: session.user.id || '',
-        name: session.user.name || '',
-        email: session.user.email || '',
-        role: userRole,
-        profileCompleted: true
-      } as any);
+      const sessionUser = session.user as any;
+      const sessionRole = sessionUser.role || 'Guest';
 
-      // Role handling
-      if (userRole === 'Guest') {
-        setShowRoleSelection(true);
-      } else {
-        setShowRoleSelection(false);
-        // Ensure we are on home route when role is confirmed
-        setActiveRoute('home');
+      // Only update if user is not set OR if user ID has changed OR if it's a first-time guest role sync
+      if (!user || user.uid !== sessionUser.id || (user.role === 'Guest' && sessionRole !== 'Guest')) {
+        setUser({
+          uid: sessionUser.id || '',
+          name: sessionUser.name || '',
+          email: sessionUser.email || '',
+          role: sessionRole,
+          profileCompleted: true
+        } as any);
+
+        if (sessionRole === 'Guest') {
+          setShowRoleSelection(true);
+        } else {
+          setShowRoleSelection(false);
+          setActiveRoute('home');
+        }
       }
-    } else if (status === 'unauthenticated') {
+    } else if (status === 'unauthenticated' && user !== null) {
       setUser(null);
       setChatHistory([]);
       setEvaluations({ skillAssessments: [], resumeReviews: [], mockInterviews: [] });
@@ -315,10 +318,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setShowRoleSelection(false);
     }
 
-    // Always clear loading state when status is resolved
     setIsLoadingAuth(false);
     setIsProfileChecked(true);
-  }, [session, status]);
+  }, [session, status]); // REMOVED user from dependencies to prevent infinite loop, as we use it inside. Using status and session is enough.
 
   useEffect(() => {
     if (user?.uid) {
