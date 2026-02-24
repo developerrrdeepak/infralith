@@ -279,19 +279,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.uid]);
 
-  // NextAuth Session Sync
+  // Sync NextAuth Session and User State
   useEffect(() => {
     if (status === 'loading') {
       setIsLoadingAuth(true);
-    } else {
-      setIsLoadingAuth(false);
-      setIsProfileChecked(true);
+      return;
     }
-  }, [status]);
 
-  useEffect(() => {
-    if (session?.user) {
+    if (status === 'authenticated' && session?.user) {
+      setShowLogin(false);
       const userRole = (session.user as any).role || 'Guest';
+
       setUser({
         uid: session.user.id || '',
         name: session.user.name || '',
@@ -300,15 +298,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         profileCompleted: true
       } as any);
 
-      // If no definitive role is assigned yet, show selection dialog
+      // Role handling
       if (userRole === 'Guest') {
         setShowRoleSelection(true);
       } else {
         setShowRoleSelection(false);
-        // Direct to home (DashboardHome) on login if role exists
-        handleNavigate('home');
+        // Ensure we are on home route when role is confirmed
+        setActiveRoute('home');
       }
-    } else {
+    } else if (status === 'unauthenticated') {
       setUser(null);
       setChatHistory([]);
       setEvaluations({ skillAssessments: [], resumeReviews: [], mockInterviews: [] });
@@ -316,7 +314,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setShowProfileCompletion(false);
       setShowRoleSelection(false);
     }
-  }, [session]);
+
+    // Always clear loading state when status is resolved
+    setIsLoadingAuth(false);
+    setIsProfileChecked(true);
+  }, [session, status]);
 
   useEffect(() => {
     if (user?.uid) {
