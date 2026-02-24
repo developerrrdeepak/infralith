@@ -116,6 +116,9 @@ interface AppContextType {
   toggleTheme: () => void;
   handleDeleteAccount: () => Promise<void>;
   handleProfileUpdate: (data: Partial<User>) => Promise<void>;
+  handleSelectRole: (role: string) => void;
+  showRoleSelection: boolean;
+  setShowRoleSelection: Dispatch<SetStateAction<boolean>>;
   saveCurrentChat: (messages: Message[], currentSessionId: string | null) => Promise<string | null>;
   startChatWithEvaluationContext: (ctx: EvaluationContext) => void;
   refreshEvaluations: () => Promise<void>;
@@ -184,6 +187,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isProfileChecked, setIsProfileChecked] = useState(false);
   const [resumeTextState, setResumeTextState] = useState('');
   const [showLogin, setShowLogin] = useState(false);
+  const [showRoleSelection, setShowRoleSelection] = useState(false);
   const [showProfileCompletion, setShowProfileCompletion] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isInterviewActive, setIsInterviewActive] = useState(false);
@@ -287,19 +291,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (session?.user) {
+      const userRole = (session.user as any).role || 'Guest';
       setUser({
         uid: session.user.id || '',
         name: session.user.name || '',
         email: session.user.email || '',
-        role: session.user.role || 'Guest',
+        role: userRole,
         profileCompleted: true
       } as any);
+
+      // If no definitive role is assigned yet, show selection dialog
+      if (userRole === 'Guest') {
+        setShowRoleSelection(true);
+      } else {
+        setShowRoleSelection(false);
+        // Direct to home (DashboardHome) on login if role exists
+        handleNavigate('home');
+      }
     } else {
       setUser(null);
       setChatHistory([]);
       setEvaluations({ skillAssessments: [], resumeReviews: [], mockInterviews: [] });
       setInfralithResult(null);
       setShowProfileCompletion(false);
+      setShowRoleSelection(false);
     }
   }, [session]);
 
@@ -351,6 +366,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveRoute(key);
     window.location.hash = key;
     setIsMobileMenuOpen(false);
+  };
+  const handleSelectRole = (role: string) => {
+    if (user) {
+      setUser({ ...user, role });
+      setShowRoleSelection(false);
+      handleNavigate('home');
+      toast({ title: `Role Set to ${role}`, description: "You now have access to your dashboard." });
+    }
   };
   const handleLogin = async (email: string, pass: string) => {
     setIsAuthLoading(true);
@@ -592,6 +615,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveRoute,
     setResumeText,
     setShowLogin,
+    showRoleSelection,
+    setShowRoleSelection,
     setIsMobileMenuOpen,
     setIsInterviewActive,
     setLoginView,
@@ -600,6 +625,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     handleNavigate,
     handleLogin,
     handleSignUp,
+    handleSelectRole,
     handleSignInOrSignUpWithGoogle,
     handleLoginWithGoogle,
     handleLogout,

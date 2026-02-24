@@ -14,6 +14,7 @@ import SettingsPage from './settings-page';
 import ChatPage from './chat-page';
 import DMPage from './dm-page';
 import { cn } from '@/lib/utils';
+import RoleSelectionDialog from './role-selection-dialog';
 
 // Infralith Construction Intelligence Modules
 import DashboardHome from '@/components/infralith/DashboardHome';
@@ -68,8 +69,8 @@ export default function CareerCompassLayout() {
 
   const pageVariants = {
     initial: { opacity: 0, y: 15 },
-    animate: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
-    exit: { opacity: 0, y: -15, transition: { duration: 0.2, ease: 'easeIn' } },
+    animate: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } },
+    exit: { opacity: 0, y: -15, transition: { duration: 0.2, ease: [0.32, 0, 0.67, 0] } },
   };
 
   return (
@@ -94,7 +95,7 @@ export default function CareerCompassLayout() {
               <AnimatePresence mode="wait">
                 <motion.div
                   key={activeRoute}
-                  variants={pageVariants}
+                  variants={pageVariants as any}
                   initial="initial"
                   animate="animate"
                   exit="exit"
@@ -110,6 +111,8 @@ export default function CareerCompassLayout() {
         <AnimatePresence>
           {showLogin && <LoginDialog />}
         </AnimatePresence>
+
+        <RoleSelectionDialog />
       </>
     </NotificationProvider>
   );

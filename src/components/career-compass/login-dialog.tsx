@@ -8,11 +8,11 @@ import { useAppContext, SignupFormState } from '@/contexts/app-context';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-// Removed SkillAssessmentForm import
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '../ui/form';
+import { signIn } from "next-auth/react";
 
 type SignUpView = 'choice' | 'form' | 'quiz' | 'quiz_results';
 
@@ -74,7 +74,6 @@ const GoogleIcon = () => (
 export default function LoginDialog() {
   // --- CORRECTION 1: Destructure `handleClearAssessmentState` from the context ---
   const { showLogin, setShowLogin, handleLogin, handleSignUp, loginView, setLoginView, signupFormState, setSignupFormState, clearSignupForm, handleClearAssessmentState } = useAppContext();
-  const { signIn } = require("next-auth/react");
   const [loadingMethod, setLoadingMethod] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
