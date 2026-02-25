@@ -1,21 +1,19 @@
 import { generateObject } from 'ai';
-import { createAzure } from '@ai-sdk/openai';
+import { createAzure } from '@ai-sdk/azure';
 import { z } from 'zod';
 import { DocumentAnalysisClient, AzureKeyCredential } from "@azure/ai-form-recognizer";
 
-dotenv.config();
-
 // Azure OpenAI Configuration
-const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT || "";
 const azureKey = process.env.AZURE_OPENAI_KEY || "";
 const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || "model-router";
+const azureResourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwuryls-eastus2";
 
 // Azure Document Intelligence Configuration
 const docIntelEndpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || "";
 const docIntelKey = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY || "";
 
 const azure = createAzure({
-    resourceName: process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwuryls-eastus2",
+    resourceName: azureResourceName,
     apiKey: azureKey,
 });
 
