@@ -15,6 +15,7 @@ import ChatPage from './chat-page';
 import DMPage from './dm-page';
 import { cn } from '@/lib/utils';
 import RoleSelectionDialog from './role-selection-dialog';
+import GuestDashboard from '@/components/infralith/GuestDashboard';
 
 // Infralith Construction Intelligence Modules
 import DashboardHome from '@/components/infralith/DashboardHome';
@@ -37,14 +38,15 @@ import AuditLogPanel from '@/components/infralith/AuditLogPanel';
 import { NotificationProvider } from '@/components/infralith/NotificationBell';
 
 export default function CareerCompassLayout() {
-  const { activeRoute, authed, showLogin } = useAppContext();
+  const { activeRoute, authed, showLogin, user } = useAppContext();
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(true);
+  const isGuest = authed && user?.role === 'Guest';
 
   const gated = (component: React.ReactNode) =>
     authed ? component : <GatePlaceholder />;
 
   const componentMap: { [key: string]: React.ReactNode } = {
-    home: <DashboardHome />,
+    home: isGuest ? <GuestDashboard /> : <DashboardHome />,
     upload: gated(<BlueprintUpload />),
     pipeline: gated(<PipelineStatus />),
     compliance: gated(<ComplianceView />),
@@ -84,7 +86,7 @@ export default function CareerCompassLayout() {
           />
 
           <div className="flex h-[calc(100vh-69px)]">
-            {authed && (
+            {authed && !isGuest && (
               <>
                 <Sidebar collapsed={desktopSidebarCollapsed} />
                 <MobileSidebar />
@@ -112,7 +114,8 @@ export default function CareerCompassLayout() {
           {showLogin && <LoginDialog />}
         </AnimatePresence>
 
-        <RoleSelectionDialog />
+        {/* Keep RoleSelectionDialog as fallback for edge cases */}
+        {!isGuest && <RoleSelectionDialog />}
       </>
     </NotificationProvider>
   );

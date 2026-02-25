@@ -303,7 +303,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } as any);
 
         if (sessionRole === 'Guest') {
-          setShowRoleSelection(true);
+          setShowRoleSelection(false); // No popup — GuestDashboard handles role selection inline
+          setActiveRoute('home');      // Navigate to home which renders GuestDashboard
         } else {
           setShowRoleSelection(false);
           setActiveRoute('home');
