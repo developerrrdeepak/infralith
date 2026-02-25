@@ -382,7 +382,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const handleLogin = async (email: string, pass: string) => {
     setIsAuthLoading(true);
     try {
-      await authService.login(email, pass);
+      const result = await signIn('credentials', {
+        redirect: false,
+        email,
+        role: "Engineer"
+      });
+      if (result?.error) throw new Error(result.error);
+      setShowLogin(false);
+      toast({ title: 'Welcome to Infralith' });
     } catch (error: any) {
       setIsAuthLoading(false);
       toast({ variant: 'destructive', title: 'Login Failed', description: 'Please check your email and password.' });
@@ -412,7 +419,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(true);
     try {
       await authService.signUp(data);
+      const result = await signIn('credentials', {
+        redirect: false,
+        email: data.email,
+        role: "Engineer"
+      });
+      if (result?.error) throw new Error(result.error);
+
       clearSignupForm();
+      setShowLogin(false);
       toast({ title: 'Signup Successful!', description: 'Welcome aboard.' });
     } catch (error: any) {
       setIsAuthLoading(false);
