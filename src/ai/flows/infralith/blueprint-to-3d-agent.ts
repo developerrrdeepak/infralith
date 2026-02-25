@@ -1,72 +1,21 @@
+'use server';
+
 import { generateAzureVisionObject, generateAzureObject } from '@/ai/azure-ai';
 import { exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
+import {
+  GeometricReconstruction,
+  WallGeometry,
+  DoorGeometry,
+  WindowGeometry,
+  RoomGeometry,
+  RoofGeometry,
+  ConstructionConflict
+} from './reconstruction-types';
 
 const execPromise = promisify(exec);
-
-export interface WallGeometry {
-  id: string | number;
-  start: [number, number];
-  end: [number, number];
-  thickness: number;
-  height: number;
-  color?: string; // hex color for the wall
-  is_exterior?: boolean;
-}
-
-export interface DoorGeometry {
-  id: string | number;
-  host_wall_id: string | number;
-  position: [number, number];
-  width: number;
-  height: number;
-  color?: string;
-}
-
-export interface WindowGeometry {
-  id: string | number;
-  host_wall_id: string | number;
-  position: [number, number];
-  width: number;
-  sill_height: number;
-  color?: string;
-}
-
-export interface RoomGeometry {
-  id: string | number;
-  name: string;
-  polygon: [number, number][];
-  area: number;
-  floor_color?: string; // hex color for the floor tile
-}
-
-export interface RoofGeometry {
-  type: 'flat' | 'gable' | 'hip';
-  polygon: [number, number][];
-  height: number;      // peak height above wall top
-  base_height: number; // wall top height (2.7 usually)
-  color?: string;
-}
-
-export interface ConstructionConflict {
-  type: 'structural' | 'safety' | 'code';
-  severity: 'low' | 'medium' | 'high';
-  description: string;
-  location: [number, number];
-}
-
-export interface GeometricReconstruction {
-  walls: WallGeometry[];
-  doors: DoorGeometry[];
-  windows: WindowGeometry[];
-  rooms: RoomGeometry[];
-  roof?: RoofGeometry;
-  conflicts: ConstructionConflict[];
-  building_name?: string;
-  exterior_color?: string;
-}
 
 /**
  * Construction-grade geometric reconstruction engine.
@@ -102,11 +51,13 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
 
     Task:
     1. Parse the blueprint and combine it with the OpenCV lines provided above.
-    2. Respond with a metrically consistent 3D model.
-    3. Use OCR to detect room names and text-based dimensions (e.g. "Bedroom 10x12") to fix specific room scales.
+    2. Determine Scales: Search for dimension text (e.g., "12'0\" x 10'0\"", "3.5m"). Compare the pixel length of the OpenCV line to the text dimension to find the Scale Factor (px per meter).
+    3. Metrics: If no text is found, assume 50px = 1 meter.
+    4. Respond with a metrically consistent 3D model in METERS.
     
     Rules for Reconstruction:
-    - MAP the OpenCV lines to walls. If a line matches a wall in the image, use its coordinates as the "ground truth".
+    - MAP OpenCV lines to walls. Pixel [x,y] coordinates from OpenCV must be converted to meters [x', y'] using your scale factor.
+    - All dimensions in output MUST be in meters.
     - Exterior walls: 0.23m thick. Interior: 0.115m.
     - Wall height: 2.7m.
     - Ensure topological closure. All wall endpoints MUST snap together if they are within 0.1m.
@@ -140,6 +91,12 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
     if (!result || !result.walls) {
       return generateDemoBungalow();
     }
+
+    // Attach debug image from OpenCV if available
+    if (opencvData?.debug_image) {
+      result.debug_image = opencvData.debug_image;
+    }
+
     return result;
   } catch (e) {
     console.error("Engineering Pipeline Error:", e);

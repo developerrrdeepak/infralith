@@ -7,8 +7,10 @@ import {
     Environment,
     ContactShadows,
     Html,
-    Edges
+    Edges,
+    MeshDistortMaterial
 } from '@react-three/drei';
+import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { AlertTriangle, ShieldAlert, PenLine, Image as ImageIcon, Sparkles } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -27,10 +29,12 @@ import { useToast } from '@/hooks/use-toast';
 import {
     processBlueprintTo3D,
     generateBuildingFromDescription,
+} from '@/ai/flows/infralith/blueprint-to-3d-agent';
+import {
     GeometricReconstruction,
     RoofGeometry,
     ConstructionConflict
-} from '@/ai/flows/infralith/blueprint-to-3d-agent';
+} from '@/ai/flows/infralith/reconstruction-types';
 
 // -- Conflict Markers --
 
@@ -399,7 +403,11 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                             <group key={`room-${i}`}>
                                 <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]} receiveShadow>
                                     <shapeGeometry args={[shape]} />
-                                    <meshStandardMaterial color={room.floor_color || defaultFloor} roughness={0.55} />
+                                    <meshStandardMaterial
+                                        color={room.floor_color || defaultFloor}
+                                        roughness={0.7}
+                                        metalness={0.05}
+                                    />
                                 </mesh>
                                 <Html position={[cx, 0.15, cz]} distanceFactor={14} center>
                                     <div className="px-2 py-0.5 bg-black/70 backdrop-blur-sm rounded-md shadow-lg">
@@ -430,12 +438,11 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                                 <boxGeometry args={[len, wall.height, wall.thickness]} />
                                 <meshStandardMaterial
                                     color={col}
-                                    roughness={0.7}
+                                    roughness={0.8}
                                     metalness={0.05}
-                                    emissive={col}
-                                    emissiveIntensity={0.01}
+                                    bumpScale={0.02}
                                 />
-                                <Edges color="#00000020" threshold={15} />
+                                <Edges color="#00000030" threshold={15} />
                             </mesh>
                         );
                     })}
@@ -674,7 +681,24 @@ export default function BlueprintTo3D() {
                             <Suspense fallback={null}>
                                 <GeneratedStructure progress={progress} data={elements} />
                                 <Environment preset="apartment" />
-                                <ContactShadows position={[0, -0.01, 0]} opacity={0.2} scale={30} blur={3} far={15} />
+                                <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
+
+                                <EffectComposer>
+                                    <SSAO
+                                        intensity={20}
+                                        radius={0.4}
+                                        luminanceInfluence={0.5}
+                                        color="black"
+                                    />
+                                    <Bloom
+                                        luminanceThreshold={1.2}
+                                        mipmapBlur
+                                        intensity={0.4}
+                                        radius={0.4}
+                                    />
+                                    <Noise opacity={0.03} />
+                                    <Vignette eskil={false} offset={0.1} darkness={1.1} />
+                                </EffectComposer>
                             </Suspense>
                         </Canvas>
 
@@ -816,9 +840,21 @@ export default function BlueprintTo3D() {
                             {(status === 'preprocessing' || status === 'analyzing' || status === 'generating') && (
                                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
                                     className="bg-background/95 backdrop-blur-xl p-6 rounded-2xl border border-border shadow-2xl flex flex-col items-center">
-                                    {preview && (
-                                        <div className="w-full h-24 rounded-lg overflow-hidden mb-4 border border-slate-200">
-                                            <img src={preview} alt="Analyzing" className="w-full h-full object-cover opacity-60" />
+                                    {(preview || elements?.debug_image) && (
+                                        <div className="w-full h-24 rounded-lg overflow-hidden mb-4 border border-slate-200 bg-white relative">
+                                            <img
+                                                src={elements?.debug_image || preview || undefined}
+                                                alt="Analyzing"
+                                                className={cn(
+                                                    "w-full h-full object-cover transition-opacity duration-1000",
+                                                    status === 'preprocessing' ? "opacity-60" : "opacity-100"
+                                                )}
+                                            />
+                                            {elements?.debug_image && status === 'analyzing' && (
+                                                <div className="absolute inset-0 flex items-center justify-center bg-primary/5">
+                                                    <span className="text-[8px] font-black uppercase text-primary/60 bg-white/80 px-2 py-0.5 rounded shadow-sm">CV Line Map</span>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                     <div className="relative h-14 w-14 flex items-center justify-center mb-3">
