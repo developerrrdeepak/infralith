@@ -33,6 +33,7 @@ export const authOptions: NextAuthOptions = {
                     scope: "openid profile email User.Read",
                 },
             },
+            issuer: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID}/v2.0`,
             profile(profile) {
                 const roles = profile.roles || [];
                 let role = "Guest";
