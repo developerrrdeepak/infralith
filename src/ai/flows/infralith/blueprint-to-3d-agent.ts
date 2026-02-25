@@ -1,6 +1,10 @@
-'use server';
-
 import { generateAzureVisionObject, generateAzureObject } from '@/ai/azure-ai';
+import { exec } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
 
 export interface WallGeometry {
   id: string | number;
@@ -69,24 +73,46 @@ export interface GeometricReconstruction {
  * Converts 2D architectural floor plans into metrically consistent parametric 3D models.
  */
 export async function processBlueprintTo3D(base64Image: string): Promise<GeometricReconstruction> {
-  console.log("Infralith Engineering Engine: Initiating spatial synthesis...");
+  console.log("Infralith Engineering Engine: Initiating spatial synthesis with OpenCV...");
+
+  let opencvData = null;
+  try {
+    // 1. Run OpenCV Pre-processing via Python
+    const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
+
+    // We use a temporary file or stdin to pass the base64 string
+    const { stdout } = await execPromise(`python "${scriptPath}"`, {
+      input: base64Image,
+      maxBuffer: 10 * 1024 * 1024 // 10MB
+    } as any);
+
+    opencvData = JSON.parse(stdout.toString());
+    console.log(`OpenCV: Detected ${opencvData.lines?.length || 0} physical lines.`);
+  } catch (err) {
+    console.warn("OpenCV Pre-processing failed. Falling back to direct vision analysis.", err);
+  }
 
   const prompt = `
-    You are a construction-grade geometric reconstruction and structural auditing engine.
-    Input: A 2D architectural floor plan.
+    You are a construction-grade structural auditing engine.
+    Input: A 2D architectural floor plan + Physical Metadata (OpenCV Line Analysis).
+
+    Physical Metadata:
+    - Image Dimensions: ${opencvData?.width}x${opencvData?.height}
+    - Found Lines: ${JSON.stringify(opencvData?.lines?.slice(0, 150)) /* Sending top 150 lines to stay within prompt limits */}
 
     Task:
-    1. Generate a metrically consistent parametric 3D model with COLORS.
-    2. Identify construction issues, structural risks, or code violations.
-
-    Rules:
-    - All wall boundaries are structural centerlines.
+    1. Parse the blueprint and combine it with the OpenCV lines provided above.
+    2. Respond with a metrically consistent 3D model.
+    3. Use OCR to detect room names and text-based dimensions (e.g. "Bedroom 10x12") to fix specific room scales.
+    
+    Rules for Reconstruction:
+    - MAP the OpenCV lines to walls. If a line matches a wall in the image, use its coordinates as the "ground truth".
     - Exterior walls: 0.23m thick. Interior: 0.115m.
     - Wall height: 2.7m.
-    - Ensure topological closure. Snap all intersections.
-    - Assign realistic colors: exterior walls in cream/beige, interior in lighter tones, floors by room type.
+    - Ensure topological closure. All wall endpoints MUST snap together if they are within 0.1m.
+    - Assign realistic colors.
 
-    Color guidelines:
+    Color Guidelines:
     - Living Room floor: "#e8d5b7" (warm beige)
     - Bedroom floor: "#d4c4a8" (light wood)
     - Kitchen floor: "#c9c9c9" (grey tile)

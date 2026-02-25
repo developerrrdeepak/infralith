@@ -428,8 +428,14 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                         return (
                             <mesh key={`wall-${i}`} position={[cx, wall.height / 2, cz]} rotation={[0, -ang, 0]} castShadow receiveShadow>
                                 <boxGeometry args={[len, wall.height, wall.thickness]} />
-                                <meshStandardMaterial color={col} roughness={0.55} metalness={0.02} />
-                                <Edges color="#00000015" threshold={15} />
+                                <meshStandardMaterial
+                                    color={col}
+                                    roughness={0.7}
+                                    metalness={0.05}
+                                    emissive={col}
+                                    emissiveIntensity={0.01}
+                                />
+                                <Edges color="#00000020" threshold={15} />
                             </mesh>
                         );
                     })}
@@ -528,7 +534,7 @@ export default function BlueprintTo3D() {
     const [file, setFile] = useState<File | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     const [description, setDescription] = useState('');
-    const [status, setStatus] = useState<'idle' | 'analyzing' | 'generating' | 'complete'>('idle');
+    const [status, setStatus] = useState<'idle' | 'preprocessing' | 'analyzing' | 'generating' | 'complete'>('idle');
     const [progress, setProgress] = useState(0);
     const [elements, setElements] = useState<GeometricReconstruction | null>(null);
 
@@ -590,12 +596,16 @@ export default function BlueprintTo3D() {
     };
 
     const startFileGeneration = async (f: File) => {
-        setFile(f); setStatus('analyzing'); setProgress(0);
+        setFile(f); setStatus('preprocessing'); setProgress(0);
         if (f.type.startsWith('image/')) setPreview(URL.createObjectURL(f));
         let cur = 0;
-        const iv = setInterval(() => { cur += 0.02; if (cur <= 0.45) setProgress(cur); }, 80);
+        const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
             const b64 = await fileToBase64(f);
+
+            // Phase change to Analyzing after CV is likely done
+            setTimeout(() => setStatus('analyzing'), 1500);
+
             const result = await processBlueprintTo3D(b64);
             clearInterval(iv);
             animateProgress(result);
@@ -656,10 +666,10 @@ export default function BlueprintTo3D() {
                             style={{ background: 'transparent' }}
                         >
                             <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete'} autoRotateSpeed={0.35} maxPolarAngle={Math.PI / 2.1} />
-                            <ambientLight intensity={1.5} />
-                            <pointLight position={[15, 25, 15]} intensity={1.0} castShadow />
-                            <directionalLight position={[-12, 30, 12]} intensity={2.0} color="#fff8e7" castShadow />
-                            <directionalLight position={[8, -5, 8]} intensity={0.2} />
+                            <ambientLight intensity={0.7} />
+                            <pointLight position={[15, 25, 15]} intensity={1.5} castShadow shadow-mapSize={[2048, 2048]} />
+                            <directionalLight position={[-12, 30, 12]} intensity={2.5} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]} />
+                            <directionalLight position={[8, -5, 8]} intensity={0.4} />
 
                             <Suspense fallback={null}>
                                 <GeneratedStructure progress={progress} data={elements} />
@@ -803,7 +813,7 @@ export default function BlueprintTo3D() {
                     <div className="relative z-10 w-full md:w-[380px] p-6 h-full pointer-events-none flex flex-col ml-auto">
                         <div className="mt-auto pointer-events-auto">
                             {/* Analyzing */}
-                            {(status === 'analyzing' || status === 'generating') && (
+                            {(status === 'preprocessing' || status === 'analyzing' || status === 'generating') && (
                                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
                                     className="bg-background/95 backdrop-blur-xl p-6 rounded-2xl border border-border shadow-2xl flex flex-col items-center">
                                     {preview && (
@@ -816,10 +826,13 @@ export default function BlueprintTo3D() {
                                         <Wand2 className="h-6 w-6 text-[#f97316] animate-pulse" />
                                     </div>
                                     <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-foreground">
-                                        {mode === 'describe' ? 'Constructing Building' : 'Analyzing Blueprint'}
+                                        {status === 'preprocessing' ? 'CV Pre-processing' :
+                                            status === 'analyzing' ? (mode === 'describe' ? 'Generating Pattern' : 'AI Analysis') :
+                                                'Constructing 3D'}
                                     </h4>
                                     <p className="text-[10px] text-muted-foreground mb-3 text-center max-w-[250px] truncate">
-                                        {file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
+                                        {status === 'preprocessing' ? 'Running OpenCV Line Detection...' :
+                                            file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
                                     </p>
                                     <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
                                         <motion.div className="h-full bg-[#f97316] rounded-full" initial={{ width: 0 }} animate={{ width: `${progress * 100}%` }} transition={{ ease: 'easeOut' }} />
