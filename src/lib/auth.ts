@@ -33,7 +33,6 @@ export const authOptions: NextAuthOptions = {
                     scope: "openid profile email User.Read",
                 },
             },
-            issuer: `https://login.microsoftonline.com/${(process.env.AZURE_AD_TENANT_ID || "").trim()}/v2.0`,
             profile(profile) {
                 // Debug log to confirm identity is reaching this point (visible in Log Stream)
                 console.log("[Auth] Profile mapping for:", profile.email || profile.preferred_username);
@@ -104,4 +103,25 @@ export const authOptions: NextAuthOptions = {
         signIn: "/", // Redirect to home where the login modal will appear
     },
     secret: process.env.NEXTAUTH_SECRET,
+    cookies: {
+        sessionToken: {
+            name: `__Secure-next-auth.session-token`,
+            options: {
+                httpOnly: true,
+                sameSite: "lax",
+                path: "/",
+                secure: true,
+            },
+        },
+        state: {
+            name: `__Secure-next-auth.state`,
+            options: {
+                httpOnly: true,
+                sameSite: "lax",
+                path: "/",
+                secure: true,
+                maxAge: 900,
+            },
+        }
+    }
 };
