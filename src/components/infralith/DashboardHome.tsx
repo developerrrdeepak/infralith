@@ -177,9 +177,9 @@ export default function DashboardHome() {
             {/* Top Dashboard Row - Profile & Quick Actions */}
             <motion.div variants={item} className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 {/* User Profile Card */}
-                <Card className="xl:col-span-2 premium-glass relative overflow-hidden group border-none shadow-2xl bg-slate-50 dark:bg-slate-950/80">
-                    <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/5 opacity-50 pointer-events-none" />
-                    <CardContent className="flex flex-col md:flex-row items-center justify-between gap-10 p-8 lg:p-12 relative z-10 h-full">
+                <Card className="xl:col-span-2 relative overflow-hidden group border border-slate-200 dark:border-white/10 shadow-sm rounded-2xl bg-white dark:bg-slate-900">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-[80px] pointer-events-none" />
+                    <CardContent className="flex flex-col md:flex-row items-center md:items-start justify-between gap-10 p-8 lg:p-10 relative z-10 h-full">
                         {/* Avatar & Info */}
                         <div className="flex flex-col md:flex-row items-center md:items-start gap-8 flex-1 min-w-0">
                             <div className="relative shrink-0">
@@ -187,29 +187,29 @@ export default function DashboardHome() {
                                 <div className="absolute -inset-4 bg-gradient-to-br from-orange-200 to-amber-100 dark:from-primary/20 dark:to-accent/20 rounded-full opacity-50 blur-xl pointer-events-none" />
                                 <button
                                     onClick={() => handleNavigate('profile')}
-                                    className="h-32 w-32 md:h-40 md:w-40 rounded-full bg-slate-50 dark:bg-slate-900 flex items-center justify-center text-6xl font-black text-orange-500 dark:text-primary border-[12px] border-white dark:border-slate-800 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] hover:scale-105 transition-all duration-500 cursor-pointer overflow-hidden z-20 relative outline-none"
+                                    className="h-24 w-24 md:h-28 md:w-28 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-4xl font-bold text-orange-500 dark:text-primary border-4 border-white dark:border-slate-900 shadow-sm hover:scale-105 transition-transform duration-300 cursor-pointer overflow-hidden z-20 relative outline-none"
                                     title="View Profile"
                                 >
                                     {user?.avatar
                                         ? <img src={user.avatar} alt={user.name} className="h-full w-full object-cover" />
-                                        : (user?.name?.[0].toLowerCase() || 'e')
+                                        : (user?.name?.[0].toUpperCase() || 'E')
                                     }
                                 </button>
                                 {/* Status dot */}
-                                <div className="absolute bottom-4 right-4 h-5 w-5 rounded-full bg-emerald-500 border-4 border-white dark:border-slate-900 z-30 shadow-sm" />
+                                <div className="absolute -bottom-2 -right-2 h-6 w-6 rounded-full bg-emerald-500 border-4 border-white dark:border-slate-900 z-30 shadow-sm" />
                             </div>
 
-                            <div className="space-y-4 text-center md:text-left pt-2 flex-1 min-w-0 w-full">
-                                <h2 className="text-5xl md:text-[56px] lg:text-[64px] font-black tracking-tighter text-slate-900 dark:text-white leading-[1.1] lowercase break-words">
-                                    {user?.name || 'engineer'}
+                            <div className="space-y-3 text-center md:text-left pt-2 flex-1 min-w-0 w-full">
+                                <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight text-slate-900 dark:text-white truncate">
+                                    {user?.name || 'Engineer'}
                                 </h2>
-                                <div className="pt-1">
-                                    <Badge variant="secondary" className="px-5 py-2 bg-[#141b2d] dark:bg-primary/20 hover:bg-black border-none text-[12px] font-black tracking-widest uppercase text-white transition-all shadow-md rounded-full">
+                                <div className="pt-2">
+                                    <Badge variant="secondary" className="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 border-none text-[11px] font-semibold tracking-wider uppercase transition-colors rounded-lg">
                                         {config.title === 'Sr. Structural Engineer' ? 'Lead Structural Engineer' : config.title}
                                     </Badge>
                                 </div>
-                                <p className="text-sm md:text-[15px] text-slate-500 dark:text-slate-400 max-w-sm font-medium leading-relaxed pt-2">
-                                    Welcome back to Infralith. Your compliance and risk analysis engines are online.
+                                <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm font-medium leading-relaxed">
+                                    Welcome back. Your compliance and risk analysis engines are online.
                                 </p>
                             </div>
                         </div>
@@ -228,20 +228,23 @@ export default function DashboardHome() {
                 </Card>
 
                 {/* Quick Actions Card */}
-                <Card className="xl:col-span-1 premium-glass relative overflow-hidden group border-none shadow-xl bg-slate-50/50 dark:bg-slate-950/50">
+                <Card className="xl:col-span-1 relative overflow-hidden group border border-slate-200 dark:border-white/10 shadow-sm rounded-2xl bg-white dark:bg-slate-900">
                     <CardContent className="p-8 h-full flex flex-col">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-6">Quick Actions</h3>
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-6 flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-sm bg-primary" />
+                            Quick Actions
+                        </h3>
                         <div className="grid grid-cols-2 gap-4 flex-1">
                             {config.actions.map((action: any, idx: number) => (
                                 <button
                                     key={idx}
                                     onClick={() => handleNavigate(action.route)}
-                                    className="flex flex-col items-center justify-center gap-3 p-4 rounded-[2rem] bg-white dark:bg-slate-900 border border-slate-100 dark:border-white/5 hover:border-primary/30 hover:shadow-lg transition-all group outline-none"
+                                    className="flex flex-col items-center justify-center gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-white/5 hover:border-slate-300 dark:hover:border-white/20 hover:bg-white dark:hover:bg-slate-800 transition-all group outline-none"
                                 >
-                                    <div className="h-12 w-12 rounded-full bg-slate-50 dark:bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-primary group-hover:bg-primary/10 transition-colors">
-                                        <action.icon className="h-5 w-5" />
+                                    <div className="h-10 w-10 rounded-lg bg-white dark:bg-slate-900 border border-slate-100 dark:border-white/5 flex items-center justify-center text-slate-400 group-hover:text-primary transition-all shadow-sm">
+                                        <action.icon className="h-4 w-4" />
                                     </div>
-                                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                                    <span className="text-[12px] font-semibold text-slate-600 dark:text-slate-300">
                                         {action.label}
                                     </span>
                                 </button>
