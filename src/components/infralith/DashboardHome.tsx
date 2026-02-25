@@ -181,7 +181,7 @@ export default function DashboardHome() {
                     <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/5 opacity-50 pointer-events-none" />
                     <CardContent className="flex flex-col md:flex-row items-center justify-between gap-10 p-8 lg:p-12 relative z-10 h-full">
                         {/* Avatar & Info */}
-                        <div className="flex flex-col md:flex-row items-center md:items-start gap-8 flex-1">
+                        <div className="flex flex-col md:flex-row items-center md:items-start gap-8 flex-1 min-w-0">
                             <div className="relative shrink-0">
                                 {/* Glow ring */}
                                 <div className="absolute -inset-4 bg-gradient-to-br from-orange-200 to-amber-100 dark:from-primary/20 dark:to-accent/20 rounded-full opacity-50 blur-xl pointer-events-none" />
@@ -199,8 +199,8 @@ export default function DashboardHome() {
                                 <div className="absolute bottom-4 right-4 h-5 w-5 rounded-full bg-emerald-500 border-4 border-white dark:border-slate-900 z-30 shadow-sm" />
                             </div>
 
-                            <div className="space-y-4 text-center md:text-left pt-2 flex-1">
-                                <h2 className="text-5xl md:text-[64px] font-black tracking-tighter text-slate-900 dark:text-white leading-none lowercase">
+                            <div className="space-y-4 text-center md:text-left pt-2 flex-1 min-w-0 w-full">
+                                <h2 className="text-5xl md:text-[56px] lg:text-[64px] font-black tracking-tighter text-slate-900 dark:text-white leading-[1.1] lowercase break-words">
                                     {user?.name || 'engineer'}
                                 </h2>
                                 <div className="pt-1">
