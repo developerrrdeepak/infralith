@@ -29,8 +29,15 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
     // 1. Run OpenCV Pre-processing via Python
     const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
 
-    // We use a temporary file or stdin to pass the base64 string
-    const { stdout } = await execPromise(`python "${scriptPath}"`, {
+    // Auto-detect python command (Azure Linux usually has python3)
+    let pythonCmd = 'python';
+    try {
+      await execPromise('python --version');
+    } catch {
+      pythonCmd = 'python3';
+    }
+
+    const { stdout } = await execPromise(`${pythonCmd} "${scriptPath}"`, {
       input: base64Image,
       maxBuffer: 10 * 1024 * 1024 // 10MB
     } as any);

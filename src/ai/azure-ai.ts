@@ -23,8 +23,8 @@ const azure = createAzure({
 const GeometricReconstructionSchema = z.object({
     walls: z.array(z.object({
         id: z.union([z.string(), z.number()]),
-        start: z.tuple([z.number(), z.number()]),
-        end: z.tuple([z.number(), z.number()]),
+        start: z.array(z.number()),
+        end: z.array(z.number()),
         thickness: z.number(),
         height: z.number(),
         color: z.string().optional(),
@@ -33,7 +33,7 @@ const GeometricReconstructionSchema = z.object({
     doors: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         host_wall_id: z.union([z.string(), z.number()]),
-        position: z.tuple([z.number(), z.number()]),
+        position: z.array(z.number()),
         width: z.number(),
         height: z.number(),
         color: z.string().optional(),
@@ -41,7 +41,7 @@ const GeometricReconstructionSchema = z.object({
     windows: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         host_wall_id: z.union([z.string(), z.number()]),
-        position: z.tuple([z.number(), z.number()]),
+        position: z.array(z.number()),
         width: z.number(),
         sill_height: z.number(),
         color: z.string().optional(),
@@ -49,13 +49,13 @@ const GeometricReconstructionSchema = z.object({
     rooms: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         name: z.string(),
-        polygon: z.array(z.tuple([z.number(), z.number()])),
+        polygon: z.array(z.array(z.number())),
         area: z.number(),
         floor_color: z.string().optional(),
     })),
     roof: z.object({
         type: z.enum(['flat', 'gable', 'hip']),
-        polygon: z.array(z.tuple([z.number(), z.number()])),
+        polygon: z.array(z.array(z.number())),
         height: z.number(),
         base_height: z.number(),
         color: z.string().optional(),
@@ -64,7 +64,7 @@ const GeometricReconstructionSchema = z.object({
         type: z.enum(['structural', 'safety', 'code']),
         severity: z.enum(['low', 'medium', 'high']),
         description: z.string(),
-        location: z.tuple([z.number(), z.number()]),
+        location: z.array(z.number()),
     })),
     building_name: z.string().optional(),
     exterior_color: z.string().optional(),
