@@ -100,4 +100,5 @@ export const authOptions: NextAuthOptions = {
         signIn: "/", // Redirect to home where the login modal will appear
     },
     secret: process.env.NEXTAUTH_SECRET,
+    trustHost: true,
 };
