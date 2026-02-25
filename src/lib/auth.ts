@@ -25,16 +25,19 @@ declare module "next-auth/jwt" {
 export const authOptions: NextAuthOptions = {
     providers: [
         AzureADProvider({
-            clientId: process.env.AZURE_AD_CLIENT_ID || "dummy",
-            clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "dummy",
-            tenantId: process.env.AZURE_AD_TENANT_ID || "dummy",
+            clientId: (process.env.AZURE_AD_CLIENT_ID || "").trim(),
+            clientSecret: (process.env.AZURE_AD_CLIENT_SECRET || "").trim(),
+            tenantId: (process.env.AZURE_AD_TENANT_ID || "").trim(),
             authorization: {
                 params: {
                     scope: "openid profile email User.Read",
                 },
             },
-            issuer: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID}/v2.0`,
+            issuer: `https://login.microsoftonline.com/${(process.env.AZURE_AD_TENANT_ID || "").trim()}/v2.0`,
             profile(profile) {
+                // Debug log to confirm identity is reaching this point (visible in Log Stream)
+                console.log("[Auth] Profile mapping for:", profile.email || profile.preferred_username);
+
                 const roles = profile.roles || [];
                 let role = "Guest";
 
@@ -101,5 +104,4 @@ export const authOptions: NextAuthOptions = {
         signIn: "/", // Redirect to home where the login modal will appear
     },
     secret: process.env.NEXTAUTH_SECRET,
-    trustHost: true,
 };
