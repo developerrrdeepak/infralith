@@ -27,8 +27,8 @@ const GeometricReconstructionSchema = z.object({
         end: z.array(z.number()),
         thickness: z.number(),
         height: z.number(),
-        color: z.string().optional(),
-        is_exterior: z.boolean().optional(),
+        color: z.string(),
+        is_exterior: z.boolean(),
     })),
     doors: z.array(z.object({
         id: z.union([z.string(), z.number()]),
@@ -36,7 +36,7 @@ const GeometricReconstructionSchema = z.object({
         position: z.array(z.number()),
         width: z.number(),
         height: z.number(),
-        color: z.string().optional(),
+        color: z.string(),
     })),
     windows: z.array(z.object({
         id: z.union([z.string(), z.number()]),
@@ -44,30 +44,30 @@ const GeometricReconstructionSchema = z.object({
         position: z.array(z.number()),
         width: z.number(),
         sill_height: z.number(),
-        color: z.string().optional(),
+        color: z.string(),
     })),
     rooms: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         name: z.string(),
         polygon: z.array(z.array(z.number())),
         area: z.number(),
-        floor_color: z.string().optional(),
+        floor_color: z.string(),
     })),
     roof: z.object({
         type: z.enum(['flat', 'gable', 'hip']),
         polygon: z.array(z.array(z.number())),
         height: z.number(),
         base_height: z.number(),
-        color: z.string().optional(),
-    }).optional(),
+        color: z.string(),
+    }),
     conflicts: z.array(z.object({
         type: z.enum(['structural', 'safety', 'code']),
         severity: z.enum(['low', 'medium', 'high']),
         description: z.string(),
         location: z.array(z.number()),
     })),
-    building_name: z.string().optional(),
-    exterior_color: z.string().optional(),
+    building_name: z.string(),
+    exterior_color: z.string(),
 });
 
 
