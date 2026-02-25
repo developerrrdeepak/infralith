@@ -17,6 +17,9 @@ const azure = createAzure({
     apiKey: azureKey,
 });
 
+/** Helper to get the model with correct deployment name */
+export const getAzureModel = () => azure(deploymentName);
+
 /**
  * Zod Schema for GeometricReconstruction to enforce rigorous JSON parsing via AI SDK
  */
@@ -29,7 +32,7 @@ const GeometricReconstructionSchema = z.object({
         height: z.number(),
         color: z.string(),
         is_exterior: z.boolean(),
-    })),
+    })).describe("List of walls"),
     doors: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         host_wall_id: z.union([z.string(), z.number()]),
@@ -37,7 +40,7 @@ const GeometricReconstructionSchema = z.object({
         width: z.number(),
         height: z.number(),
         color: z.string(),
-    })),
+    })).describe("List of doors"),
     windows: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         host_wall_id: z.union([z.string(), z.number()]),
@@ -45,14 +48,14 @@ const GeometricReconstructionSchema = z.object({
         width: z.number(),
         sill_height: z.number(),
         color: z.string(),
-    })),
+    })).describe("List of windows"),
     rooms: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         name: z.string(),
         polygon: z.array(z.array(z.number())),
         area: z.number(),
         floor_color: z.string(),
-    })),
+    })).describe("List of rooms"),
     roof: z.object({
         type: z.enum(['flat', 'gable', 'hip']),
         polygon: z.array(z.array(z.number())),
