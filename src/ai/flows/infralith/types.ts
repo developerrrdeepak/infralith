@@ -5,6 +5,7 @@ export interface DevOpsInsight {
     status: 'Optimized' | 'Warning' | 'Issue';
     message: string;
     actionRequired: boolean;
+    ticketUrl?: string;
 }
 
 /** Version metadata attached to every analysis run for reproducibility */

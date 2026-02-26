@@ -3,6 +3,7 @@
 import { generateAzureObject } from '@/ai/azure-ai';
 import { WorkflowResult, DevOpsInsight } from './types';
 import { Octokit } from "octokit";
+import { z } from 'zod';
 
 // Initialize the modern GitHub Client. If the token is missing, it stays null.
 const github = process.env.GITHUB_TOKEN
@@ -21,7 +22,6 @@ const REPO_NAME = process.env.GITHUB_REPO || "simulation-repo";
 export async function runDevOpsAgent(data: WorkflowResult): Promise<DevOpsInsight> {
 
     // --- Step 1: REASONING ---
-    // The AI acts as a Site Reliability Engineer to analyze the data and decide if action is needed.
     const prompt = `
         As an expert AI Site Reliability Engineer (SRE), review the following structural analysis telemetry:
         
@@ -34,32 +34,24 @@ export async function runDevOpsAgent(data: WorkflowResult): Promise<DevOpsInsigh
         - A GitHub issue is MANDATORY if the Risk Index is > 70 OR the Compliance Status is "Fail".
         - This is a P0 (highest priority) blocker.
 
-        Based on this matrix, generate a JSON object with your decision.
-        
-        SCHEMA:
-        {
-          "ticketRequired": boolean,
-          "ticketTitle": "A short, descriptive title for the GitHub issue.",
-          "ticketBody": "A detailed markdown-formatted summary explaining the failure. Reference the specific risk index and compliance violations."
-        }
+        Based on this matrix, generate your decision.
     `;
 
-    const analysis = await generateAzureObject<{
-        ticketRequired: boolean;
-        ticketTitle: string;
-        ticketBody: string;
-    }>(prompt);
+    const schema = z.object({
+        ticketRequired: z.boolean(),
+        ticketTitle: z.string().describe("A short, descriptive title for the GitHub issue."),
+        ticketBody: z.string().describe("A detailed markdown-formatted summary explaining the failure. Reference the specific risk index and compliance violations.")
+    });
+
+    const analysis = await generateAzureObject<any>(prompt, schema);
 
     // --- Step 2: SAFETY GATE & ACTION ---
-    // This is a hard-coded check. Even if the AI makes a mistake, this code ensures
-    // a ticket is ONLY created for genuinely high-risk situations.
     const isActionRequired = (data.riskReport?.riskIndex || 0) > 70 || data.complianceReport?.overallStatus === 'Fail';
     let ticketUrl = "";
 
     if (analysis.ticketRequired && isActionRequired) {
         if (github) {
             try {
-                // The AI uses its "Tool" to make a real-world change.
                 const response = await github.request("POST /repos/{owner}/{repo}/issues", {
                     owner: REPO_OWNER,
                     repo: REPO_NAME,
@@ -75,14 +67,12 @@ export async function runDevOpsAgent(data: WorkflowResult): Promise<DevOpsInsigh
                 ticketUrl = "ERROR_CREATING_TICKET";
             }
         } else {
-            // Fallback Simulation Mode
             console.warn("[DevOps Agent] GITHUB_TOKEN not found. Running in Simulation Mode.");
             ticketUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/issues/simulated-${Math.floor(Math.random() * 100)}`;
         }
     }
 
     // --- Step 3: RETURN INSIGHT ---
-    // Send the results back to the main workflow.
     return {
         agentId: 'DevOps-Automator-v5',
         status: isActionRequired ? 'Issue' : 'Optimized',

@@ -4,7 +4,7 @@ import { AzureOpenAI } from "openai";
 
 const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT || "";
 const azureKey = process.env.AZURE_OPENAI_KEY || "";
-const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || "gpt-4o";
+const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || "gpt-4o";
 
 export async function chatWithInfralith(messages: { role: string, content: string }[], newPrompt: string, documentName?: string, documentContent?: string) {
     if (!azureEndpoint || !azureKey) {

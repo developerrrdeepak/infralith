@@ -1,6 +1,7 @@
 'use server';
 
 import { generateAzureObject } from '@/ai/azure-ai';
+import { z } from 'zod';
 
 /**
  * Cost Prediction Agent — estimates budget based on material quantities and market rates
@@ -30,10 +31,22 @@ export async function predictCost(inputData: string) {
         }
     `;
 
+    const schema = z.object({
+        total: z.number(),
+        currency: z.string().default('INR'),
+        breakdown: z.array(z.object({
+            category: z.string(),
+            amount: z.number(),
+            percentage: z.number()
+        })),
+        duration: z.string(),
+        confidenceScore: z.number().min(0).max(1)
+    });
+
     try {
-        const result = await generateAzureObject<any>(prompt);
+        const result = await generateAzureObject<any>(prompt, schema);
         return {
-            total: result?.total || result?.totalEstimatedCost || 0,
+            total: result?.total || 0,
             currency: result?.currency || 'INR',
             breakdown: (result?.breakdown || []).map((b: any) => ({
                 category: b?.category || 'General Works',

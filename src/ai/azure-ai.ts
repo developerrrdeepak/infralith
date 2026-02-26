@@ -5,7 +5,7 @@ import { DocumentAnalysisClient, AzureKeyCredential } from "@azure/ai-form-recog
 
 // Azure OpenAI Configuration
 const azureKey = process.env.AZURE_OPENAI_KEY || "";
-const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || "model-router";
+const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || "model-router";
 const azureResourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwuryls-eastus2";
 
 // Azure Document Intelligence Configuration
@@ -138,7 +138,7 @@ async function simulateVisionResponse<T>(prompt: string): Promise<T> {
     return {} as T;
 }
 
-export async function generateAzureVisionObject<T>(prompt: string, base64Image: string): Promise<T> {
+export async function generateAzureVisionObject<T>(prompt: string, base64Image: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
     if (!azureKey) {
         console.warn("Azure OpenAI credentials missing. Returning simulated JSON structure for vision.");
         return simulateVisionResponse<T>(prompt);
@@ -154,8 +154,8 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
 
         const result = await generateObject({
             model: getAzureModel(true),
-            schema: GeometricReconstructionSchema,
-            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the floorplan. All coordinates are in pixels unless specified.",
+            schema: dynamicSchema || GeometricReconstructionSchema,
+            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project. All coordinates are in pixels unless specified.",
             messages: [
                 {
                     role: "user",
@@ -178,7 +178,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
 /**
  * Text-only Generation for 3D buildings from description
  */
-export async function generateAzureObject<T>(prompt: string): Promise<T> {
+export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
     if (!azureKey) {
         console.warn("Azure OpenAI credentials missing. Returning simulated JSON structure.");
         return simulateVisionResponse<T>(prompt);
@@ -189,8 +189,8 @@ export async function generateAzureObject<T>(prompt: string): Promise<T> {
 
         const result = await generateObject({
             model: getAzureModel(false),
-            schema: GeometricReconstructionSchema,
-            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of a building based on the text description.",
+            schema: dynamicSchema || GeometricReconstructionSchema,
+            system: "You are an expert Engineering Intelligence Agent. Generate a precise JSON analysis or reconstruction based on the input context.",
             prompt: prompt
         });
 

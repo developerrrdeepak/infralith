@@ -1,6 +1,7 @@
 'use server';
 
 import { generateAzureObject } from '@/ai/azure-ai';
+import { z } from 'zod';
 
 /**
  * Risk Analysis Agent — identifies hazards and calculates Risk Index
@@ -28,8 +29,19 @@ export async function analyzeRisk(inputData: string) {
         }
     `;
 
+    const schema = z.object({
+        riskIndex: z.number().min(0).max(100),
+        level: z.enum(['Low', 'Medium', 'High', 'Critical']),
+        hazards: z.array(z.object({
+            type: z.string(),
+            severity: z.string(),
+            description: z.string(),
+            mitigation: z.string()
+        }))
+    });
+
     try {
-        const result = await generateAzureObject<any>(prompt);
+        const result = await generateAzureObject<any>(prompt, schema);
         return {
             riskIndex: result?.riskIndex || 50,
             level: result?.level || 'Medium',

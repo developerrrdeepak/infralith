@@ -66,34 +66,29 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
     - Found Lines: ${JSON.stringify(opencvData?.lines?.slice(0, 150))}
 
     STRATEGIC TASK:
-    1. SPATIAL SYNTHESIS: Fuse the visual blueprint with OpenCV vector lines. MAP the lines to a 3D parametric coordinate system.
-    2. MULTI-FLOOR RECONSTRUCTION:
-       - Detect separate floor plan blocks (Ground, Level 1, etc.) often shown side-by-side.
-       - IMPORTANT: Calculate a 'Building Core Origin' - i.e., find common vertical elements (stairwells, lift shafts, or external corners) and align every floor's (0,0) to that shared core.
-       - Walls on Floor 1 must structurally sit above Walls on Floor 0.
-    3. METRIC CLARIFICATION: Search for dimension text (e.g., "12'0\"", "3500mm"). Use these to calculate the exact Scale Factor (Pixels to Meters). If no text is found, default to 50px = 1.0m.
-    4. STRUCTURAL AUDIT: Proactively identify 3-5 "Conflicts". Look for:
-       - Load-bearing walls with no support on the floor below.
-       - Door swings that overlap or hit other objects.
-       - Inadequate window-to-floor area ratios in habitable rooms.
+    1. SPATIAL SYNTHESIS: Fuse the visual blueprint with Structural Polygons (OpenCV). MAP these vectors to a parametric coordinate system.
+    2. STRATEGIC EXTRACTION RULES:
+       - ANCHOR SEARCH: Prioritize high-contrast numeric text (e.g., 4.5m, 12'0") to establish the global Scale Factor.
+       - CONTEXTUAL VALIDATION: If a room label says "Master Bed (4.5m x 3.8m)", enforce THOSE values over raw pixel measurements to maintain precision.
+       - BLUR MITIGATION: If text is unreadable, reverse-engineer the scale using "Standard Architectural Ratios" (e.g., standard internal door = 0.9m, kitchen counter index = 0.6m).
+    3. MULTI-FLOOR RECONSTRUCTION:
+       - BUILDING CORE ORIGIN: Identify shared vertical shafts (stairs, lift cores, or key structural corners) across all floor blocks.
+       - ALIGNMENT: Set a unified (0,0) coordinate for these anchors across ALL levels (floor_level: 0, 1, 2...).
+       - STRUCTURAL AUDIT: Flag "Load-bearing Conflicts" where upper walls lack vertical support from the footprint below.
+    4. LUXURY AESTHETIC PALETTE:
+       - Exterior: "#f8f1e7" (Pearl) | Living: "#fdfaf6" (Silk) | Floors: "#e2d1c3" (Oak) or "#efeeed" (Marble).
+       - Hardware: "#8b4513" (Walnut) for Doors, "#2c3e50" (Midnight) for Windows.
 
     GEOMETRIC CONSTRAINTS:
-    - Units: Meters (m).
     - Exterior Walls: 0.23m thick, 2.8m height. Interior: 0.115m thick.
     - Topology: SNAP all adjacent wall endpoints (within 0.15m) to ensure a sealed thermal envelope.
     - Floor Slabs: Every room MUST have a closed polygon forming the floor slab.
 
-    LUXURY AESTHETIC PALETTE:
-    - Exterior: "#f8f1e7" (Pearl) or "#dcd7cf" (Warm Stone)
-    - Living: "#fdfaf6" (Silk), Master Bed: "#e2d1c3" (Oak)
-    - Kitchen: "#efeeed" (Marble), Bath: "#d4e2e2" (Slate)
-    - Hardware: "#8b4513" (Walnut) for Doors, "#2c3e50" (Midnight) for Windows.
-
     THINKING PROCESS:
-    - Step 1: Mentally 'trace' the connectivity of all walls in the image.
+    - Step 1: Mentally 'trace' the connectivity of all structural polygons.
     - Step 2: Validate that room polygons exactly fill the enclosed spaces.
-    - Step 3: If Floor 1 exists, verify it doesn't float; it must have a slab and support.
-    - Step 4: If the input is too noisy or contradictory to form a safe structure, return a structural conflict explaining why.
+    - Step 3: Align all floors vertically by identifying the 'Shared Building Core'.
+    - Step 4: Perform a final structural audit—return Conflicts if the building is unsafe.
 
     OUTPUT JSON:
     {

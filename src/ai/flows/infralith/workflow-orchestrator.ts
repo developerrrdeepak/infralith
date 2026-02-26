@@ -89,7 +89,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         }
     ];
 
-    const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || 'model-router';
+    const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || 'model-router';
 
     const modelVersion: ModelVersion = {
         orchestratorVersion: ORCHESTRATOR_VERSION,

@@ -110,7 +110,7 @@ export default function ProfilePage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const form = useForm<ProfileFormValues>({
-        resolver: zodResolver(profileFormSchema),
+        resolver: zodResolver(profileFormSchema) as any,
         defaultValues: {
             skills: [],
         },

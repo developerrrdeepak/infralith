@@ -1,6 +1,7 @@
 'use server';
 
 import { generateAzureObject } from '@/ai/azure-ai';
+import { z } from 'zod';
 
 /**
  * Compliance Agent — verifies blueprint against Indian building codes
@@ -29,8 +30,17 @@ export async function checkCompliance(inputData: string) {
         }
     `;
 
+    const schema = z.object({
+        overallStatus: z.enum(['Pass', 'Warning', 'Fail']),
+        violations: z.array(z.object({
+            ruleId: z.string(),
+            description: z.string(),
+            comment: z.string()
+        }))
+    });
+
     try {
-        const result = await generateAzureObject<any>(prompt);
+        const result = await generateAzureObject<any>(prompt, schema);
         return {
             overallStatus: result?.overallStatus || 'Warning',
             violations: (result?.violations || []).map((v: any) => ({

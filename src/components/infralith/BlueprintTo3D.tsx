@@ -11,6 +11,7 @@ import {
     MeshDistortMaterial
 } from '@react-three/drei';
 import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postprocessing';
+import { Geometry, Base, Subtraction } from '@react-three/csg';
 import * as THREE from 'three';
 import { AlertTriangle, ShieldAlert, PenLine, Image as ImageIcon, Sparkles } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -347,7 +348,97 @@ function RoofMesh({ roof }: { roof: RoofGeometry }) {
     );
 }
 
-// -- Generated Structure --
+// -- Wall with CSG Openings --
+
+const WallSegment = ({ wall, allWindows, allDoors, defaultColor }: any) => {
+    const dx = wall.end[0] - wall.start[0];
+    const dz = wall.end[1] - wall.start[1];
+    const len = Math.sqrt(dx * dx + dz * dz);
+    const ang = Math.atan2(dz, dx);
+    const cx = (wall.start[0] + wall.end[0]) / 2;
+    const cz = (wall.start[1] + wall.end[1]) / 2;
+    const baseY = (wall.floor_level || 0) * 2.8;
+
+    // Filter windows/doors belonging to this wall
+    const wallWindows = allWindows.filter((w: any) => w.host_wall_id === wall.id || w.host_wall_id?.toString() === wall.id?.toString());
+    const wallDoors = allDoors.filter((d: any) => d.host_wall_id === wall.id || d.host_wall_id?.toString() === wall.id?.toString());
+
+    return (
+        <group position={[cx, baseY + wall.height / 2, cz]} rotation={[0, -ang, 0]}>
+            <mesh castShadow receiveShadow>
+                <Geometry>
+                    <Base geometry={new THREE.BoxGeometry(len, wall.height, wall.thickness)} />
+
+                    {/* Subtract Windows */}
+                    {wallWindows.map((win: any) => {
+                        const winDx = win.position[0] - wall.start[0];
+                        const winDz = win.position[1] - wall.start[1];
+                        const dist = (winDx * dx + winDz * dz) / len;
+                        const localX = dist - len / 2;
+                        const wh = 1.2;
+                        return (
+                            <Subtraction key={win.id} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
+                                <boxGeometry args={[win.width, wh, wall.thickness + 0.1]} />
+                            </Subtraction>
+                        );
+                    })}
+
+                    {/* Subtract Doors */}
+                    {wallDoors.map((door: any) => {
+                        const doorDx = door.position[0] - wall.start[0];
+                        const doorDz = door.position[1] - wall.start[1];
+                        const dist = (doorDx * dx + doorDz * dz) / len;
+                        const localX = dist - len / 2;
+                        return (
+                            <Subtraction key={door.id} position={[localX, door.height / 2 - wall.height / 2, 0]}>
+                                <boxGeometry args={[door.width, door.height, wall.thickness + 0.1]} />
+                            </Subtraction>
+                        );
+                    })}
+                </Geometry>
+                <meshStandardMaterial color={wall.color || defaultColor} roughness={0.8} />
+                <Edges color="#00000030" threshold={15} />
+            </mesh>
+
+            {/* Visual Fillers for Glass and Frames */}
+            {wallWindows.map((win: any) => {
+                const winDx = win.position[0] - wall.start[0];
+                const winDz = win.position[1] - wall.start[1];
+                const dist = (winDx * dx + winDz * dz) / len;
+                const localX = dist - len / 2;
+                const wh = 1.2;
+                return (
+                    <group key={`win-glass-${win.id}`} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
+                        <mesh>
+                            <boxGeometry args={[win.width, wh, 0.04]} />
+                            <meshStandardMaterial color={win.color || "#87CEEB"} transparent opacity={0.4} metalness={0.7} roughness={0.1} />
+                        </mesh>
+                        <mesh>
+                            <boxGeometry args={[win.width + 0.05, wh + 0.05, 0.06]} />
+                            <meshStandardMaterial color="#f0ece4" />
+                        </mesh>
+                    </group>
+                );
+            })}
+
+            {/* Visual Fillers for Doors */}
+            {wallDoors.map((door: any) => {
+                const doorDx = door.position[0] - wall.start[0];
+                const doorDz = door.position[1] - wall.start[1];
+                const dist = (doorDx * dx + doorDz * dz) / len;
+                const localX = dist - len / 2;
+                return (
+                    <group key={`door-leaf-${door.id}`} position={[localX, door.height / 2 - wall.height / 2, 0]}>
+                        <mesh>
+                            <boxGeometry args={[door.width - 0.02, door.height - 0.02, 0.06]} />
+                            <meshStandardMaterial color={door.color || "#8b4513"} roughness={0.4} />
+                        </mesh>
+                    </group>
+                );
+            })}
+        </group>
+    );
+};
 
 function GeneratedStructure({ progress, data }: { progress: number, data: GeometricReconstruction | null }) {
     if (!data) return null;
@@ -441,74 +532,16 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                         );
                     })}
 
-                    {/* Walls */}
-                    {data.walls.map((wall, i) => {
-                        const dx = wall.end[0] - wall.start[0];
-                        const dz = wall.end[1] - wall.start[1];
-                        const len = Math.sqrt(dx * dx + dz * dz);
-                        const ang = Math.atan2(dz, dx);
-                        const cx = (wall.start[0] + wall.end[0]) / 2;
-                        const cz = (wall.start[1] + wall.end[1]) / 2;
-                        const col = wall.color || (wall.is_exterior ? defaultExterior : defaultInterior);
-                        const wallBaseY = (wall.floor_level || 0) * 2.8;
-
-                        return (
-                            <mesh key={`wall-${i}`} position={[cx, wallBaseY + wall.height / 2, cz]} rotation={[0, -ang, 0]} castShadow receiveShadow>
-                                <boxGeometry args={[len, wall.height, wall.thickness]} />
-                                <meshStandardMaterial
-                                    color={col}
-                                    roughness={0.8}
-                                    metalness={0.05}
-                                    bumpScale={0.02}
-                                />
-                                <Edges color="#00000030" threshold={15} />
-                            </mesh>
-                        );
-                    })}
-
-                    {/* Doors */}
-                    {data.doors.map((door, i) => {
-                        const doorY = (door.floor_level || 0) * 2.8;
-                        return (
-                            <group key={`door-${i}`} position={[door.position[0], doorY + door.height / 2, door.position[1]]}>
-                                <mesh castShadow>
-                                    <boxGeometry args={[door.width, door.height, 0.08]} />
-                                    <meshStandardMaterial color={door.color || defaultDoor} roughness={0.4} />
-                                    <Edges color="#3e2a12" threshold={15} />
-                                </mesh>
-                                <mesh position={[door.width * 0.35, -0.1, 0.05]}>
-                                    <sphereGeometry args={[0.04, 8, 8]} />
-                                    <meshStandardMaterial color="#c0a060" metalness={0.85} roughness={0.15} />
-                                </mesh>
-                            </group>
-                        );
-                    })}
-
-                    {/* Windows */}
-                    {data.windows.map((win, i) => {
-                        const wh = 1.2;
-                        const winY = (win.floor_level || 0) * 2.8;
-                        return (
-                            <group key={`win-${i}`}>
-                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
-                                    <boxGeometry args={[win.width + 0.1, wh + 0.1, 0.12]} />
-                                    <meshStandardMaterial color="#f0ece4" roughness={0.3} />
-                                </mesh>
-                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
-                                    <boxGeometry args={[win.width, wh, 0.04]} />
-                                    <meshStandardMaterial color={win.color || defaultWindow} transparent opacity={0.4} metalness={0.7} roughness={0.1} />
-                                </mesh>
-                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
-                                    <boxGeometry args={[0.025, wh, 0.06]} />
-                                    <meshStandardMaterial color="#f0ece4" />
-                                </mesh>
-                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
-                                    <boxGeometry args={[win.width, 0.025, 0.06]} />
-                                    <meshStandardMaterial color="#f0ece4" />
-                                </mesh>
-                            </group>
-                        );
-                    })}
+                    {/* Walls, Windows, and Doors (Integrated via CSG) */}
+                    {data.walls.map((wall, i) => (
+                        <WallSegment
+                            key={`wall-${i}`}
+                            wall={wall}
+                            allWindows={data.windows}
+                            allDoors={data.doors}
+                            defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
+                        />
+                    ))}
 
                     {/* Roof */}
                     {data.roof && <RoofMesh roof={data.roof} />}
@@ -713,7 +746,7 @@ export default function BlueprintTo3D() {
                                         intensity={20}
                                         radius={0.4}
                                         luminanceInfluence={0.5}
-                                        color="black"
+                                        color={new THREE.Color("black")}
                                     />
                                     <Bloom
                                         luminanceThreshold={1.2}

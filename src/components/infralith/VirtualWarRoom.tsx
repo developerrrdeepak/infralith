@@ -128,7 +128,7 @@ function BuildingStructure({ blueprint, risk }: { blueprint?: any, risk?: any })
                     <mesh position={[0, 0, 0]}>
                         <boxGeometry args={[footprintSide + 0.1, floorHeight - 0.1, footprintSide + 0.1]} />
                         <meshStandardMaterial color="#93c5fd" metalness={0.9} roughness={0.0} transparent opacity={0.15} />
-                        <Edges color="#3b82f6" threshold={15} color={"#ffffff"} />
+                        <Edges color="#ffffff" threshold={15} />
                     </mesh>
                 </group>
             ))}

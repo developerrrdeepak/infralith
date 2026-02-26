@@ -17,50 +17,48 @@ def process_blueprint(base64_string):
     if img is None:
         return {"error": "Could not decode image"}
 
-    # 1. Pre-processing
+    # 1. Pre-processing (High Precision Architectural Segmentation)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Adaptive Thresholding for uneven lighting scans
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    # Binarization: Invert so walls are white on black
+    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
     
-    # Morphological closing to join broken lines
-    kernel = np.ones((3,3), np.uint8)
-    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    # Morphology: Bridge small gaps and remove thin noise (text/furniture)
+    kernel = np.ones((5,5), np.uint8)
+    # Morphological closing to join broken wall segments
+    walls_isolated = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     
-    # Canny Edge Detection
-    edges = cv2.Canny(closing, 50, 150, apertureSize=3)
+    # 2. Vectorization: findContours & approxPolyDP
+    contours, _ = cv2.findContours(walls_isolated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # 2. Line Detection (Hough Line Transform)
-    # Increased sensitivity for thin lines
-    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=40, minLineLength=30, maxLineGap=15)
-    
+    vectors = []
     # Create a white canvas to draw detected lines for debugging
     debug_img = np.zeros_like(img) + 255
-    extracted_lines = []
-    if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            # Draw on debug image
-            cv2.line(debug_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+    
+    for cnt in contours:
+        # Douglas-Peucker algorithm for geometric simplification
+        epsilon = 0.01 * cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
+        
+        if len(approx) >= 2:
+            points = approx.reshape(-1, 2).tolist()
+            vectors.append(points)
             
-            extracted_lines.append({
-                "start": [int(x1), int(y1)],
-                "end": [int(x2), int(y2)],
-                "length": float(np.sqrt((x2-x1)**2 + (y2-y1)**2))
-            })
+            # Draw on debug image
+            pts = approx.reshape((-1, 1, 2))
+            cv2.polylines(debug_img, [pts], True, (0, 0, 255), 2)
 
     # Encode debug image to base64
     _, buffer = cv2.imencode('.png', debug_img)
     debug_base64 = base64.b64encode(buffer).decode('utf-8')
 
-    # 3. Simple scaling estimation (placeholder)
     h, w = img.shape[:2]
     
     return {
         "width": w,
         "height": h,
-        "lines": extracted_lines,
-        "line_count": len(extracted_lines),
+        "lines": vectors, # Now returns structural polygons
+        "line_count": len(vectors),
         "debug_image": f"data:image/png;base64,{debug_base64}"
     }
 
