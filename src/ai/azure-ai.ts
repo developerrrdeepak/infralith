@@ -22,6 +22,8 @@ const azure = createAzure({
 const azureFixed = createAzure({
     resourceName: azureResourceName,
     apiKey: azureKey,
+    useDeploymentBasedUrls: true,
+    apiVersion: '2024-08-01-preview',
 });
 
 /** Helper to get the model with correct deployment name and settings */
