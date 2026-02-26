@@ -23,7 +23,7 @@ const mockNews = [
         title: 'New Zoning Regulations for 2026',
         description: 'Updated structural requirements for seismic zones 2 and 3 have been finalized.',
         url: '#',
-        imageUrl: 'https://images.unsplash.com/photo-1541888941255-65801838b6bf?auto=format&fit=crop&q=80&w=300',
+        imageUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=300',
         'data-ai-hint': 'zoning news'
     },
     {
@@ -149,7 +149,7 @@ export default function LandingHero() {
                             title="Blueprint Extraction Agent"
                             description="OCR and spatial vision models extract accurate dimensions, materials, and architectural symbols from your PDF plans. Using cutting-edge document intelligence, we convert unstructured blueprints into searchable data."
                             icon={<FileText className="h-6 w-6" />}
-                            imageUrl="https://images.unsplash.com/photo-1541888941255-65801838b6bf?auto=format&fit=crop&q=80&w=1200"
+                            imageUrl="https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=1200"
                             data-ai-hint="blueprint extraction"
                             layout="image-right"
                             onClick={() => { setLoginView('signup'); setShowLogin(true); }}
