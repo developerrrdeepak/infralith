@@ -67,33 +67,33 @@ export class ReportResponseFactory {
         return {
             role: 'Engineer',
             timestamp: report.timestamp,
-            projectScope: report.blueprint?.projectScope || 'Unknown Project Overview',
+            projectScope: report.projectScope || 'Unknown Project Overview',
             // Example mapping internal AI analysis to purely technical engineering findings
-            conflicts: report.compliance.rules.filter(r => r.status !== 'pass').map(rule => ({
-                location: 'Internal Spec',
+            conflicts: report.complianceReport?.violations.map((rule, idx) => ({
+                location: 'Structural Layout',
                 measuredValue: 'Observed Metric',
                 requiredValue: rule.comment || 'Required Baseline',
-                riskCategory: rule.status === 'fail' ? 'Critical' : 'Warning',
+                riskCategory: report.complianceReport?.overallStatus === 'Fail' ? 'Critical' : 'Warning',
                 confidenceScore: 0.95,
                 regulationRef: rule.ruleId
-            })),
-            materials: report.blueprint?.materials || []
+            })) || [],
+            materials: report.parsedBlueprint?.materials || []
         };
     }
 
     private static mapToSupervisor(report: MasterAIReport): SupervisorDecisionDTO {
-        const failures = report.compliance.rules.filter(r => r.status !== 'pass').length;
-        const totalCost = report.cost?.totalEstimatedCost || 0;
+        const failures = report.complianceReport?.violations.length || 0;
+        const totalCost = report.costEstimate?.total || 0;
         return {
             role: 'Supervisor',
             timestamp: report.timestamp,
-            projectScope: report.blueprint?.projectScope || 'Unknown Project Overview',
-            approvalReadinessScore: Math.max(0, 100 - (failures * 15) - (report.risk.riskIndex / 2)),
+            projectScope: report.projectScope || 'Unknown Project Overview',
+            approvalReadinessScore: Math.max(0, 100 - (failures * 15) - ((report.riskReport?.riskIndex || 0) / 2)),
             costImpactEstimate: totalCost,
-            currency: report.cost?.currency || 'USD',
-            delayImpactDays: failures > 0 ? failures * 3 + report.risk.hazards.length * 2 : 0,
+            currency: report.costEstimate?.currency || 'USD',
+            delayImpactDays: failures > 0 ? failures * 3 + (report.riskReport?.hazards.length || 0) * 2 : 0,
             approvalBlockerCount: failures,
-            redesignRequired: failures > 2 || report.risk.riskIndex > 60
+            redesignRequired: failures > 2 || (report.riskReport?.riskIndex || 0) > 60
         };
     }
 
@@ -101,7 +101,7 @@ export class ReportResponseFactory {
         return {
             role: 'Admin',
             timestamp: report.timestamp,
-            projectScope: report.blueprint?.projectScope || 'Unknown Project Overview',
+            projectScope: report.projectScope || 'Unknown Project Overview',
             ocrAccuracy: report.ocrConfidence || 99.2,
             extractionFailureRate: report.extractionFailureRate || 0.003,
             jurisdiction: 'India (IS-456, NBC-4)',
