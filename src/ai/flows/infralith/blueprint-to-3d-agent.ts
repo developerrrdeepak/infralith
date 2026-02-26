@@ -58,48 +58,60 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
   }
 
   const prompt = `
-    You are a construction-grade structural auditing engine.
-    Input: A 2D architectural floor plan + Physical Metadata (OpenCV Line Analysis).
+    You are the Infralith Engineering Engine—a world-class architectural auditor and spatial synthesis AI.
+    Input: A 2D floor plan + Physical Metadata (OpenCV Line Analysis).
 
     Physical Metadata:
     - Image Dimensions: ${opencvData?.width}x${opencvData?.height}
-    - Found Lines: ${JSON.stringify(opencvData?.lines?.slice(0, 150)) /* Sending top 150 lines to stay within prompt limits */}
+    - Found Lines: ${JSON.stringify(opencvData?.lines?.slice(0, 150))}
 
-    Task:
-    1. Parse the blueprint and combine it with the OpenCV lines provided above.
-    2. MULTI-FLOOR ANALYSIS: Many blueprints show multiple floors side-by-side (e.g. "Ground Floor", "First Floor", "Roof Floor").
-       - Detect each floor plan section.
-       - Assign "floor_level": 0 for Ground, 1 for First Floor, etc.
-       - IMPORTANT: Align all floors to a shared [0,0] origin point (usually the bottom-left corner of the building core) so they stack correctly in 3D.
-    3. Determine Scales: Search for dimension text (e.g., "12'0\" x 10'0\"", "3.5m"). Compare the pixel length of the OpenCV line to the text dimension to find the Scale Factor (px per meter).
-    4. Metrics: If no text is found, assume 50px = 1 meter.
-    5. Respond with a metrically consistent 3D model in METERS.
-    
-    Rules for Reconstruction:
-    - MAP OpenCV lines to walls. Pixel [x,y] coordinates from OpenCV must be converted to meters [x', y'] relative to the floor's origin.
-    - All dimensions in output MUST be in meters.
-    - Exterior walls: 0.23m thick. Interior: 0.115m.
-    - Wall height: 2.7m per floor.
-    - Ensure topological closure. All wall endpoints MUST snap together if they are within 0.1m.
-    - Assign realistic colors.
+    STRATEGIC TASK:
+    1. SPATIAL SYNTHESIS: Fuse the visual blueprint with OpenCV vector lines. MAP the lines to a 3D parametric coordinate system.
+    2. MULTI-FLOOR RECONSTRUCTION:
+       - Detect separate floor plan blocks (Ground, Level 1, etc.) often shown side-by-side.
+       - IMPORTANT: Calculate a 'Building Core Origin' - i.e., find common vertical elements (stairwells, lift shafts, or external corners) and align every floor's (0,0) to that shared core.
+       - Walls on Floor 1 must structurally sit above Walls on Floor 0.
+    3. METRIC CLARIFICATION: Search for dimension text (e.g., "12'0\"", "3500mm"). Use these to calculate the exact Scale Factor (Pixels to Meters). If no text is found, default to 50px = 1.0m.
+    4. STRUCTURAL AUDIT: Proactively identify 3-5 "Conflicts". Look for:
+       - Load-bearing walls with no support on the floor below.
+       - Door swings that overlap or hit other objects.
+       - Inadequate window-to-floor area ratios in habitable rooms.
 
-    Output JSON Format:
+    GEOMETRIC CONSTRAINTS:
+    - Units: Meters (m).
+    - Exterior Walls: 0.23m thick, 2.8m height. Interior: 0.115m thick.
+    - Topology: SNAP all adjacent wall endpoints (within 0.15m) to ensure a sealed thermal envelope.
+    - Floor Slabs: Every room MUST have a closed polygon forming the floor slab.
+
+    LUXURY AESTHETIC PALETTE:
+    - Exterior: "#f8f1e7" (Pearl) or "#dcd7cf" (Warm Stone)
+    - Living: "#fdfaf6" (Silk), Master Bed: "#e2d1c3" (Oak)
+    - Kitchen: "#efeeed" (Marble), Bath: "#d4e2e2" (Slate)
+    - Hardware: "#8b4513" (Walnut) for Doors, "#2c3e50" (Midnight) for Windows.
+
+    THINKING PROCESS:
+    - Step 1: Mentally 'trace' the connectivity of all walls in the image.
+    - Step 2: Validate that room polygons exactly fill the enclosed spaces.
+    - Step 3: If Floor 1 exists, verify it doesn't float; it must have a slab and support.
+    - Step 4: If the input is too noisy or contradictory to form a safe structure, return a structural conflict explaining why.
+
+    OUTPUT JSON:
     {
-      "building_name": "Name",
-      "exterior_color": "#f5e6d3",
-      "walls": [{ "id": "w1", "start": [x,y], "end": [x,y], "thickness": v, "height": v, "color": "#hex", "is_exterior": bool, "floor_level": index }],
-      "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x,y], "width": v, "height": v, "color": "#hex", "floor_level": index }],
-      "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x,y], "width": v, "sill_height": v, "color": "#hex", "floor_level": index }],
-      "rooms": [{ "id": "r1", "name": "Living Room", "polygon": [[x,y],...], "area": v, "floor_color": "#hex", "floor_level": index }],
-      "roof": { "type": "gable"|"flat"|"hip", "polygon": [[x,y],...], "height": v, "base_height": v, "color": "#8B4513" },
-      "conflicts": [{ "type": "structural", "severity": "medium", "description": "text", "location": [x,y] }]
+      "building_name": "Project Name",
+      "exterior_color": "#hex",
+      "walls": [{ "id": "w1", "start": [x,y], "end": [x,y], "thickness": 0.23, "height": 2.8, "color": "#hex", "is_exterior": true, "floor_level": level_index }],
+      "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x,y], "width": 0.9, "height": 2.1, "color": "#hex", "floor_level": level_index }],
+      "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x,y], "width": 1.5, "sill_height": 0.9, "color": "#hex", "floor_level": level_index }],
+      "rooms": [{ "id": "r1", "name": "Room Name", "polygon": [[x,y],...], "area": num, "floor_color": "#hex", "floor_level": level_index }],
+      "roof": { "type": "flat"|"gable"|"hip", "polygon": [[x,y],...], "height": 1.5, "base_height": total_wall_height, "color": "#hex" },
+      "conflicts": [{ "type": "structural"|"safety", "severity": "low"|"medium"|"high", "description": "Audit finding", "location": [x,y] }]
     }
   `;
 
   try {
     const result = await generateAzureVisionObject<GeometricReconstruction>(prompt, base64Image);
-    if (!result || !result.walls) {
-      return generateDemoBungalow();
+    if (!result || !result.walls || result.walls.length === 0) {
+      throw new Error("Engineering Synthesis Failed: AI could not construct a valid geometric structure from the provided blueprint.");
     }
 
     return {
@@ -121,113 +133,61 @@ export async function generateBuildingFromDescription(description: string): Prom
   console.log("Infralith Architect Engine: Generating building from text description...");
 
   const prompt = `
-    You are an expert architectural modeling engine. A user will describe a building they want.
-    Generate a COMPLETE, REALISTIC parametric 3D floor plan for the described structure.
+    You are the Infralith Architect AI—the most advanced architectural modeling engine in existence.
+    Your task is to dream up a COMPLETE, REALISTIC, and STRUCTURALLY SOUND parametric 3D building based on the user's description.
 
-    User's description: "${description}"
+    User's Vision: "${description}"
 
-    Requirements:
-    1. Create ALL walls with precise start/end coordinates forming a closed, connected floor plan.
-    2. Place doors at logical entry/exit points between rooms.
-    3. Place windows on exterior walls.
-    4. Define room polygons matching the enclosed wall areas.
-    5. Add a roof structure.
-    6. Assign realistic, beautiful colors to everything.
-    7. All coordinates should be in meters, centered around origin (0,0).
-    8. Make the structure architecturally plausible and to realistic scale.
+    CORE PRINCIPLES:
+    1. METRIC PRECISION: Use real-world dimensions (meters). A standard bedroom is ~12-16 sqm, a foyer is ~4-6 sqm.
+    2. TOPOLOGICAL INTEGRITY: All walls must form a 100% closed perimeter. No gaps. 
+    3. MULTI-LEVEL LOGIC: If the user asks for multiple floors:
+       - Floor 1 walls must be logically placed relative to Floor 0 (e.g., above load-bearing walls).
+       - Ensure a consistent (0,0) origin across all levels.
+    4. LUXURY FINISHES: Use a premium material palette.
 
-    Color palette to use:
-    - Exterior walls: "#f5e6d3" (cream) or "#e8dcc8" (sand)
-    - Interior walls: "#faf7f2" (off-white)
-    - Living Room floor: "#e8d5b7" (warm beige)
-    - Bedroom floor: "#d4c4a8" (light wood)
-    - Kitchen floor: "#c9c9c9" (grey tile)
-    - Bathroom floor: "#a8d5e2" (light blue tile)
-    - Doors: "#8B4513" (wood brown)
-    - Windows: "#87CEEB" (sky blue)
-    - Roof: "#a0522d" (terracotta/brown)
+    THINKING PROCESS:
+    - Step 1: Conceptualize the floor plan as a living space. 
+    - Step 2: Validate that all rooms are accessible via doors.
+    - Step 3: Ensure windows are on exterior walls only.
+    - Step 4: Verify that Floor 1 overlaps Floor 0 correctly to allow for a staircase.
+    - Step 5: Final geometric audit—no intersecting walls or floating objects.
 
-    Output JSON:
+    MATERIAL PALETTE (Use these hex codes):
+    - Exterior Walls: "#f8f1e7" (Pearl White)
+    - Floors: Living="#fdfaf6", Bed="#e2d1c3", Kitchen="#efeeed", Bath="#d4e2e2"
+    - Accents: Doors="#8b4513" (Deep Walnut), Windows="#2c3e50" (Midnight Metal)
+
+    GEOMETRIC REQUIREMENTS:
+    - Walls: 0.23m (ext) or 0.115m (int) thick. Height: 2.8m per level.
+    - Levels: 0 for Ground, 1 for Upper, etc.
+    - Rooms: Every indoor space must be defined by a room polygon.
+
+    OUTPUT JSON:
     {
-      "building_name": "Name of the building",
-      "exterior_color": "#f5e6d3",
-      "walls": [{ "id": "w1", "start": [x,y], "end": [x,y], "thickness": 0.23, "height": 2.7, "color": "#hex", "is_exterior": true }],
-      "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x,y], "width": 0.9, "height": 2.1, "color": "#8B4513" }],
-      "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x,y], "width": 1.2, "sill_height": 0.9, "color": "#87CEEB" }],
-      "rooms": [{ "id": "r1", "name": "Living Room", "polygon": [[x,y],...], "area": 25, "floor_color": "#e8d5b7" }],
-      "roof": { "type": "gable", "polygon": [[x,y],...], "height": 1.5, "base_height": 2.7, "color": "#a0522d" },
+      "building_name": "Premium Project Name",
+      "exterior_color": "#f8f1e7",
+      "walls": [{ "id": "w1", "start": [x,y], "end": [x,y], "thickness": 0.23, "height": 2.8, "color": "#hex", "is_exterior": true, "floor_level": 0 }],
+      "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x,y], "width": 1.0, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
+      "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x,y], "width": 1.8, "sill_height": 0.6, "color": "#2c3e50", "floor_level": 0 }],
+      "rooms": [{ "id": "r1", "name": "Space Name", "polygon": [[x,y],...], "area": num, "floor_color": "#hex", "floor_level": 0 }],
+      "roof": { "type": "flat"|"gable", "polygon": [[x,y],...], "height": 1.5, "base_height": total_wall_height, "color": "#a0522d" },
       "conflicts": []
     }
 
-    Make sure to:
-    - Create a complete, realistic structure.
-    - All walls must connect properly (topological closure).
-    - Room polygons must match enclosed wall areas exactly.
-    - Scale should be realistic (bedrooms ~12-15 sqm, living rooms ~20-30 sqm, kitchens ~10-15 sqm).
-    - Include at least one main entrance door.
-    - Only output valid JSON, no explanation.
+    Strict Constraint: Only output the JSON object. No narrative text.
   `;
 
   try {
     const result = await generateAzureObject<GeometricReconstruction>(prompt);
     if (!result || !result.walls || result.walls.length === 0) {
-      return generateDemoBungalow(description);
+      throw new Error("Architectural Generation Failed: The AI was unable to dream up a valid structure.");
     }
     return result;
   } catch (e) {
     console.error("Text-to-3D Pipeline Error:", e);
-    return generateDemoBungalow(description);
+    throw e;
   }
 }
 
-/**
- * Generate a realistic demo bungalow with colors for fallback/demo.
- */
-function generateDemoBungalow(description?: string): GeometricReconstruction {
-  return {
-    building_name: description ? "Custom Bungalow" : "Demo Bungalow",
-    exterior_color: "#f5e6d3",
-    walls: [
-      // Exterior walls
-      { id: "w1", start: [-6, -5], end: [6, -5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
-      { id: "w2", start: [6, -5], end: [6, 5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
-      { id: "w3", start: [6, 5], end: [-6, 5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
-      { id: "w4", start: [-6, 5], end: [-6, -5], thickness: 0.23, height: 2.7, color: "#f5e6d3", is_exterior: true },
-      // Interior walls
-      { id: "w5", start: [0, -5], end: [0, 1], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
-      { id: "w6", start: [-6, 1], end: [0, 1], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
-      { id: "w7", start: [0, 1], end: [6, 1], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
-      { id: "w8", start: [-6, -1.5], end: [0, -1.5], thickness: 0.115, height: 2.7, color: "#faf7f2", is_exterior: false },
-    ],
-    doors: [
-      { id: "d1", host_wall_id: "w1", position: [-2, -5], width: 1.0, height: 2.1, color: "#8B4513" }, // Main entrance
-      { id: "d2", host_wall_id: "w5", position: [0, -0.5], width: 0.9, height: 2.1, color: "#a0522d" }, // Living to bedroom
-      { id: "d3", host_wall_id: "w6", position: [-3, 1], width: 0.9, height: 2.1, color: "#a0522d" }, // Kitchen door
-      { id: "d4", host_wall_id: "w7", position: [3, 1], width: 0.9, height: 2.1, color: "#a0522d" }, // Bedroom 2 door
-      { id: "d5", host_wall_id: "w8", position: [-3, -1.5], width: 0.8, height: 2.1, color: "#a0522d" }, // Bathroom door
-    ],
-    windows: [
-      { id: "win1", host_wall_id: "w1", position: [3, -5], width: 1.5, sill_height: 0.9, color: "#87CEEB" },
-      { id: "win2", host_wall_id: "w2", position: [6, -2], width: 1.5, sill_height: 0.9, color: "#87CEEB" },
-      { id: "win3", host_wall_id: "w2", position: [6, 3], width: 1.2, sill_height: 0.9, color: "#87CEEB" },
-      { id: "win4", host_wall_id: "w3", position: [-3, 5], width: 1.5, sill_height: 0.9, color: "#87CEEB" },
-      { id: "win5", host_wall_id: "w3", position: [3, 5], width: 1.2, sill_height: 0.9, color: "#87CEEB" },
-      { id: "win6", host_wall_id: "w4", position: [-6, 3], width: 1.2, sill_height: 0.9, color: "#87CEEB" },
-    ],
-    rooms: [
-      { id: "r1", name: "Living Room", polygon: [[0, -5], [6, -5], [6, 1], [0, 1]], area: 36, floor_color: "#e8d5b7" },
-      { id: "r2", name: "Kitchen", polygon: [[-6, -1.5], [0, -1.5], [0, 1], [-6, 1]], area: 15, floor_color: "#c9c9c9" },
-      { id: "r3", name: "Bathroom", polygon: [[-6, -5], [0, -5], [0, -1.5], [-6, -1.5]], area: 21, floor_color: "#a8d5e2" },
-      { id: "r4", name: "Master Bedroom", polygon: [[-6, 1], [0, 1], [0, 5], [-6, 5]], area: 24, floor_color: "#d4c4a8" },
-      { id: "r5", name: "Bedroom 2", polygon: [[0, 1], [6, 1], [6, 5], [0, 5]], area: 24, floor_color: "#dcc9a3" },
-    ],
-    roof: {
-      type: "gable",
-      polygon: [[-6.3, -5.3], [6.3, -5.3], [6.3, 5.3], [-6.3, 5.3]],
-      height: 1.8,
-      base_height: 2.7,
-      color: "#a0522d",
-    },
-    conflicts: [],
-  };
-}
+// Demo fallback removed for high-integrity production environment.

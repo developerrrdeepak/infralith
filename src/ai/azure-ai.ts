@@ -170,8 +170,8 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         console.log(`[Azure Vision via AI SDK] Success`);
         return result.object as unknown as T;
     } catch (e: any) {
-        console.error(`[Azure Vision via AI SDK] Failed: ${e?.message || e}. Falling back to simulation.`);
-        return simulateVisionResponse<T>(prompt);
+        console.error(`[Azure Vision via AI SDK] Failed: ${e?.message || e}`);
+        throw e;
     }
 }
 
@@ -197,8 +197,8 @@ export async function generateAzureObject<T>(prompt: string): Promise<T> {
         console.log(`[Azure AI SDK] Success`);
         return result.object as unknown as T;
     } catch (e: any) {
-        console.error(`[Azure AI SDK] Failed: ${e?.message || e}. Falling back to simulation.`);
-        return simulateVisionResponse<T>(prompt);
+        console.error(`[Azure AI SDK] Failed: ${e?.message || e}`);
+        throw e;
     }
 }
 
