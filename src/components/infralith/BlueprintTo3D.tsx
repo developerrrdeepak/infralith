@@ -373,21 +373,37 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
     return (
         <group ref={groupRef}>
             {/* Ground / Lawn */}
-            <mesh position={[0, -0.02, 0]} receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
-                <planeGeometry args={[40, 40]} />
-                <meshStandardMaterial color="#7cad6b" roughness={0.95} />
+            <mesh position={[0, -0.05, 0]} receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
+                <planeGeometry args={[100, 100]} />
+                <meshStandardMaterial color="#6b9e5b" roughness={0.9} />
             </mesh>
             {/* Subtle ground grid */}
-            <gridHelper args={[40, 80, "#6b9e5b", "#6b9e5b"]} position={[0, 0.005, 0]} />
+            <gridHelper args={[100, 100, "#5a8a4d", "#5a8a4d"]} position={[0, 0.005, 0]} />
 
             {/* Pathway from gate to entrance */}
             <mesh position={[(bounds.minX + bounds.maxX) / 2, 0.01, bounds.minZ - 1.5]} rotation={[-Math.PI / 2, 0, 0]}>
-                <planeGeometry args={[1.5, 3]} />
-                <meshStandardMaterial color="#c9b896" roughness={0.8} />
+                <planeGeometry args={[2, 4]} />
+                <meshStandardMaterial color="#b8a68a" roughness={0.8} />
             </mesh>
 
             {p > 0 && (
                 <group scale={[1, p, 1]}>
+                    {/* Floor Slabs for each level */}
+                    {Array.from(new Set(data.walls.map(w => w.floor_level || 0))).sort((a, b) => a - b).map(lvl => {
+                        const slabY = lvl * 2.8;
+                        const centerX = (bounds.minX + bounds.maxX) / 2;
+                        const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+                        const sizeX = (bounds.maxX - bounds.minX) + 40;
+                        const sizeZ = (bounds.maxZ - bounds.minZ) + 40;
+
+                        return (
+                            <mesh key={`slab-${lvl}`} position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+                                <planeGeometry args={[sizeX, sizeZ]} />
+                                <meshStandardMaterial color="#f0f0f0" roughness={0.9} transparent opacity={0.15} />
+                            </mesh>
+                        );
+                    })}
+
                     {/* Room Floors */}
                     {data.rooms.map((room, i) => {
                         const shape = new THREE.Shape();
@@ -398,10 +414,11 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                         shape.closePath();
                         const cx = room.polygon.reduce((s, p) => s + p[0], 0) / room.polygon.length;
                         const cz = room.polygon.reduce((s, p) => s + p[1], 0) / room.polygon.length;
+                        const zPos = (room.floor_level || 0) * 2.8;
 
                         return (
                             <group key={`room-${i}`}>
-                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]} receiveShadow>
+                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, zPos + 0.02, 0]} receiveShadow>
                                     <shapeGeometry args={[shape]} />
                                     <meshStandardMaterial
                                         color={room.floor_color || defaultFloor}
@@ -409,13 +426,14 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                                         metalness={0.05}
                                     />
                                 </mesh>
-                                <Html position={[cx, 0.15, cz]} distanceFactor={14} center>
-                                    <div className="px-2 py-0.5 bg-black/70 backdrop-blur-sm rounded-md shadow-lg">
-                                        <p className="text-[8px] font-black uppercase text-white select-none whitespace-nowrap tracking-wider">
-                                            {room.name}
+                                {/* Level label */}
+                                <Html position={[cx, zPos + 0.15, cz]} distanceFactor={14} center>
+                                    <div className="px-3 py-1 bg-black/80 backdrop-blur-md rounded-lg shadow-2xl border border-white/10 flex flex-col items-center">
+                                        <p className="text-[9px] font-black uppercase text-white select-none whitespace-nowrap tracking-widest mb-0.5">
+                                            {room.name} {room.floor_level !== undefined ? `• L${room.floor_level}` : ''}
                                         </p>
                                         {room.area > 0 && (
-                                            <p className="text-[7px] text-white/50 text-center">{room.area.toFixed(0)} sqm</p>
+                                            <p className="text-[7px] text-primary/80 font-bold">{room.area.toFixed(0)}m²</p>
                                         )}
                                     </div>
                                 </Html>
@@ -432,9 +450,10 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                         const cx = (wall.start[0] + wall.end[0]) / 2;
                         const cz = (wall.start[1] + wall.end[1]) / 2;
                         const col = wall.color || (wall.is_exterior ? defaultExterior : defaultInterior);
+                        const wallBaseY = (wall.floor_level || 0) * 2.8;
 
                         return (
-                            <mesh key={`wall-${i}`} position={[cx, wall.height / 2, cz]} rotation={[0, -ang, 0]} castShadow receiveShadow>
+                            <mesh key={`wall-${i}`} position={[cx, wallBaseY + wall.height / 2, cz]} rotation={[0, -ang, 0]} castShadow receiveShadow>
                                 <boxGeometry args={[len, wall.height, wall.thickness]} />
                                 <meshStandardMaterial
                                     color={col}
@@ -448,38 +467,42 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                     })}
 
                     {/* Doors */}
-                    {data.doors.map((door, i) => (
-                        <group key={`door-${i}`} position={[door.position[0], door.height / 2, door.position[1]]}>
-                            <mesh castShadow>
-                                <boxGeometry args={[door.width, door.height, 0.08]} />
-                                <meshStandardMaterial color={door.color || defaultDoor} roughness={0.4} />
-                                <Edges color="#3e2a12" threshold={15} />
-                            </mesh>
-                            <mesh position={[door.width * 0.35, -0.1, 0.05]}>
-                                <sphereGeometry args={[0.04, 8, 8]} />
-                                <meshStandardMaterial color="#c0a060" metalness={0.85} roughness={0.15} />
-                            </mesh>
-                        </group>
-                    ))}
+                    {data.doors.map((door, i) => {
+                        const doorY = (door.floor_level || 0) * 2.8;
+                        return (
+                            <group key={`door-${i}`} position={[door.position[0], doorY + door.height / 2, door.position[1]]}>
+                                <mesh castShadow>
+                                    <boxGeometry args={[door.width, door.height, 0.08]} />
+                                    <meshStandardMaterial color={door.color || defaultDoor} roughness={0.4} />
+                                    <Edges color="#3e2a12" threshold={15} />
+                                </mesh>
+                                <mesh position={[door.width * 0.35, -0.1, 0.05]}>
+                                    <sphereGeometry args={[0.04, 8, 8]} />
+                                    <meshStandardMaterial color="#c0a060" metalness={0.85} roughness={0.15} />
+                                </mesh>
+                            </group>
+                        );
+                    })}
 
                     {/* Windows */}
                     {data.windows.map((win, i) => {
                         const wh = 1.2;
+                        const winY = (win.floor_level || 0) * 2.8;
                         return (
                             <group key={`win-${i}`}>
-                                <mesh position={[win.position[0], win.sill_height + wh / 2, win.position[1]]}>
+                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
                                     <boxGeometry args={[win.width + 0.1, wh + 0.1, 0.12]} />
                                     <meshStandardMaterial color="#f0ece4" roughness={0.3} />
                                 </mesh>
-                                <mesh position={[win.position[0], win.sill_height + wh / 2, win.position[1]]}>
+                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
                                     <boxGeometry args={[win.width, wh, 0.04]} />
                                     <meshStandardMaterial color={win.color || defaultWindow} transparent opacity={0.4} metalness={0.7} roughness={0.1} />
                                 </mesh>
-                                <mesh position={[win.position[0], win.sill_height + wh / 2, win.position[1]]}>
+                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
                                     <boxGeometry args={[0.025, wh, 0.06]} />
                                     <meshStandardMaterial color="#f0ece4" />
                                 </mesh>
-                                <mesh position={[win.position[0], win.sill_height + wh / 2, win.position[1]]}>
+                                <mesh position={[win.position[0], winY + win.sill_height + wh / 2, win.position[1]]}>
                                     <boxGeometry args={[win.width, 0.025, 0.06]} />
                                     <meshStandardMaterial color="#f0ece4" />
                                 </mesh>
@@ -490,8 +513,10 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                     {/* Roof */}
                     {data.roof && <RoofMesh roof={data.roof} />}
 
-                    {/* Staircase */}
-                    <Staircase position={[(bounds.minX + bounds.maxX) / 2 - 1, 0, (bounds.minZ + bounds.maxZ) / 2]} />
+                    {/* Staircase (if multi-floor) */}
+                    {Array.from(new Set(data.walls.map(w => w.floor_level || 0))).length > 1 && (
+                        <Staircase position={[(bounds.minX + bounds.maxX) / 2 - 1, 0, (bounds.minZ + bounds.maxZ) / 2]} />
+                    )}
 
                     {/* Balcony on front */}
                     <Balcony position={[(bounds.minX + bounds.maxX) / 2 + 2, 2.7, bounds.minZ]} width={3.5} depth={1.3} />
@@ -507,19 +532,19 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
             {/* Landscaping - Trees */}
             {p >= 0.6 && (
                 <group>
-                    <Tree position={[bounds.maxX + 2, 0, bounds.minZ + 1]} scale={1.2} />
-                    <Tree position={[bounds.maxX + 2.5, 0, bounds.maxZ - 1]} scale={0.9} />
-                    <Tree position={[bounds.minX - 2, 0, bounds.maxZ]} scale={1.1} />
-                    <Tree position={[bounds.minX - 2.5, 0, bounds.minZ + 2]} scale={0.8} />
-                    <Tree position={[(bounds.minX + bounds.maxX) / 2 + 4, 0, bounds.maxZ + 2]} scale={1.3} />
-                    <Tree position={[(bounds.minX + bounds.maxX) / 2 - 3, 0, bounds.maxZ + 2.5]} scale={1.0} />
+                    <Tree position={[bounds.maxX + 4, 0, bounds.minZ + 1]} scale={1.2} />
+                    <Tree position={[bounds.maxX + 5, 0, bounds.maxZ - 1]} scale={0.9} />
+                    <Tree position={[bounds.minX - 4, 0, bounds.maxZ]} scale={1.1} />
+                    <Tree position={[bounds.minX - 5, 0, bounds.minZ - 2]} scale={0.8} />
+                    <Tree position={[(bounds.minX + bounds.maxX) / 2 + 6, 0, bounds.maxZ + 5]} scale={1.3} />
+                    <Tree position={[(bounds.minX + bounds.maxX) / 2 - 6, 0, bounds.maxZ + 6]} scale={1.0} />
 
                     {/* Bushes along boundary */}
-                    {Array.from({ length: 8 }).map((_, i) => (
+                    {Array.from({ length: 12 }).map((_, i) => (
                         <Bush key={`bush-${i}`} position={[
-                            bounds.minX - 2.5 + i * ((bounds.maxX - bounds.minX + 5) / 7),
+                            bounds.minX - 5 + i * ((bounds.maxX - bounds.minX + 10) / 11),
                             0.15,
-                            bounds.maxZ + 2.8
+                            bounds.maxZ + 5
                         ]} color={i % 2 === 0 ? "#3d8b37" : "#4a9e45"} />
                     ))}
                 </group>

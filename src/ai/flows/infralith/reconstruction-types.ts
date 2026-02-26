@@ -6,6 +6,7 @@ export interface WallGeometry {
     height: number;
     color?: string; // hex color for the wall
     is_exterior?: boolean;
+    floor_level?: number; // 0 for Ground, 1 for First Floor, etc.
 }
 
 export interface DoorGeometry {
@@ -15,6 +16,7 @@ export interface DoorGeometry {
     width: number;
     height: number;
     color?: string;
+    floor_level?: number;
 }
 
 export interface WindowGeometry {
@@ -24,6 +26,7 @@ export interface WindowGeometry {
     width: number;
     sill_height: number;
     color?: string;
+    floor_level?: number;
 }
 
 export interface RoomGeometry {
@@ -32,6 +35,7 @@ export interface RoomGeometry {
     polygon: [number, number][];
     area: number;
     floor_color?: string; // hex color for the floor tile
+    floor_level?: number;
 }
 
 export interface RoofGeometry {
@@ -59,4 +63,5 @@ export interface GeometricReconstruction {
     building_name?: string;
     exterior_color?: string;
     debug_image?: string;
+    is_vision_only?: boolean;
 }

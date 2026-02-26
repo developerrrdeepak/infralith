@@ -1,6 +1,10 @@
 'use server';
 
-import { generateAzureVisionObject, generateAzureObject } from '@/ai/azure-ai';
+import {
+  getDocumentClient,
+  generateAzureVisionObject,
+  generateAzureObject,
+} from "@/ai/azure-ai";
 import { exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -63,37 +67,31 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
 
     Task:
     1. Parse the blueprint and combine it with the OpenCV lines provided above.
-    2. Determine Scales: Search for dimension text (e.g., "12'0\" x 10'0\"", "3.5m"). Compare the pixel length of the OpenCV line to the text dimension to find the Scale Factor (px per meter).
-    3. Metrics: If no text is found, assume 50px = 1 meter.
-    4. Respond with a metrically consistent 3D model in METERS.
+    2. MULTI-FLOOR ANALYSIS: Many blueprints show multiple floors side-by-side (e.g. "Ground Floor", "First Floor", "Roof Floor").
+       - Detect each floor plan section.
+       - Assign "floor_level": 0 for Ground, 1 for First Floor, etc.
+       - IMPORTANT: Align all floors to a shared [0,0] origin point (usually the bottom-left corner of the building core) so they stack correctly in 3D.
+    3. Determine Scales: Search for dimension text (e.g., "12'0\" x 10'0\"", "3.5m"). Compare the pixel length of the OpenCV line to the text dimension to find the Scale Factor (px per meter).
+    4. Metrics: If no text is found, assume 50px = 1 meter.
+    5. Respond with a metrically consistent 3D model in METERS.
     
     Rules for Reconstruction:
-    - MAP OpenCV lines to walls. Pixel [x,y] coordinates from OpenCV must be converted to meters [x', y'] using your scale factor.
+    - MAP OpenCV lines to walls. Pixel [x,y] coordinates from OpenCV must be converted to meters [x', y'] relative to the floor's origin.
     - All dimensions in output MUST be in meters.
     - Exterior walls: 0.23m thick. Interior: 0.115m.
-    - Wall height: 2.7m.
+    - Wall height: 2.7m per floor.
     - Ensure topological closure. All wall endpoints MUST snap together if they are within 0.1m.
     - Assign realistic colors.
 
-    Color Guidelines:
-    - Living Room floor: "#e8d5b7" (warm beige)
-    - Bedroom floor: "#d4c4a8" (light wood)
-    - Kitchen floor: "#c9c9c9" (grey tile)
-    - Bathroom floor: "#a8d5e2" (light blue tile)
-    - Exterior walls: "#f5e6d3" (cream)
-    - Interior walls: "#faf7f2" (off-white)
-    - Doors: "#8B4513" (wood brown)
-    - Windows: "#87CEEB" (sky blue glass)
-
-    Output JSON:
+    Output JSON Format:
     {
       "building_name": "Name",
       "exterior_color": "#f5e6d3",
-      "walls": [{ "id": "w1", "start": [x,y], "end": [x,y], "thickness": v, "height": v, "color": "#hex", "is_exterior": bool }],
-      "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x,y], "width": v, "height": v, "color": "#hex" }],
-      "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x,y], "width": v, "sill_height": v, "color": "#hex" }],
-      "rooms": [{ "id": "r1", "name": "Living Room", "polygon": [[x,y],...], "area": v, "floor_color": "#hex" }],
-      "roof": { "type": "gable"|"flat"|"hip", "polygon": [[x,y],...], "height": v, "base_height": 2.7, "color": "#8B4513" },
+      "walls": [{ "id": "w1", "start": [x,y], "end": [x,y], "thickness": v, "height": v, "color": "#hex", "is_exterior": bool, "floor_level": index }],
+      "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x,y], "width": v, "height": v, "color": "#hex", "floor_level": index }],
+      "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x,y], "width": v, "sill_height": v, "color": "#hex", "floor_level": index }],
+      "rooms": [{ "id": "r1", "name": "Living Room", "polygon": [[x,y],...], "area": v, "floor_color": "#hex", "floor_level": index }],
+      "roof": { "type": "gable"|"flat"|"hip", "polygon": [[x,y],...], "height": v, "base_height": v, "color": "#8B4513" },
       "conflicts": [{ "type": "structural", "severity": "medium", "description": "text", "location": [x,y] }]
     }
   `;
@@ -104,12 +102,11 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
       return generateDemoBungalow();
     }
 
-    // Attach debug image from OpenCV if available
-    if (opencvData?.debug_image) {
-      result.debug_image = opencvData.debug_image;
-    }
-
-    return result;
+    return {
+      ...result,
+      debug_image: opencvData?.debug_image,
+      is_vision_only: !opencvData?.lines || opencvData.lines.length === 0
+    };
   } catch (e) {
     console.error("Engineering Pipeline Error:", e);
     throw e;
