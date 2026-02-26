@@ -1,8 +1,16 @@
+import sys
+import os
+import site
+
+# High-Integrity Path Discovery: Ensure user-installed packages (OpenCV) are visible on Azure/Cloud environments
+sys.path.append(site.getusersitepackages())
+# Potential Azure path fallback
+sys.path.append(os.path.join(os.path.expanduser('~'), '.local/lib/python3.11/site-packages'))
+
 import cv2
 import numpy as np
 import base64
 import json
-import sys
 import io
 
 def process_blueprint(base64_string):
