@@ -94,54 +94,9 @@ export const getDocumentClient = () => {
     return new DocumentAnalysisClient(docIntelEndpoint, new AzureKeyCredential(docIntelKey));
 };
 
-/**
- * Vision Logic using generateObject with Azure OpenAI
- */
-async function simulateVisionResponse<T>(prompt: string): Promise<T> {
-    const p = prompt.toLowerCase();
-
-    // Simulate thinking/delay
-    await new Promise(res => setTimeout(res, 1200));
-
-    if (p.includes("floorplan") || p.includes("2d")) {
-        return {
-            walls: [
-                { id: 1, start: [0, 0], end: [10, 0], thickness: 0.2, height: 2.7, color: "#f5e6d3", is_exterior: true },
-                { id: 2, start: [10, 0], end: [10, 10], thickness: 0.2, height: 2.7, color: "#f5e6d3", is_exterior: true },
-                { id: 3, start: [10, 10], end: [0, 10], thickness: 0.2, height: 2.7, color: "#f5e6d3", is_exterior: true },
-                { id: 4, start: [0, 10], end: [0, 0], thickness: 0.2, height: 2.7, color: "#f5e6d3", is_exterior: true },
-            ],
-            doors: [{ id: "d1", host_wall_id: 1, position: [5, 0], width: 1.2, height: 2.1, color: "#8B4513" }],
-            windows: [{ id: "w1", host_wall_id: 2, position: [10, 5], width: 1.5, sill_height: 0.9, color: "#87CEEB" }],
-            rooms: [{ id: "r1", name: "Main Hall", polygon: [[0, 0], [10, 0], [10, 10], [0, 10]], area: 100, floor_color: "#e8d5b7" }],
-            roof: { type: 'gable', polygon: [[-1, -1], [11, -1], [11, 11], [-1, 11]], height: 2.5, base_height: 2.7, color: "#a0522d" },
-            conflicts: [],
-            building_name: "Simulated Foundation",
-            confidenceScore: 0.92
-        } as unknown as T;
-    }
-
-    if (p.includes("blueprint") && p.includes("extract")) {
-        return {
-            projectScope: "Project Alpha Commercial",
-            totalFloors: 40,
-            height: 160,
-            totalArea: 120000,
-            seismicZone: "IV",
-            materials: [
-                { item: "High-Tensile Steel", quantity: 6000, unit: "Tons", spec: "FE-500D" },
-                { item: "Ready-Mix Concrete", quantity: 45000, unit: "CUM", spec: "M40" }
-            ]
-        } as unknown as T;
-    }
-
-    return {} as T;
-}
-
 export async function generateAzureVisionObject<T>(prompt: string, base64Image: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
     if (!azureKey) {
-        console.warn("Azure OpenAI credentials missing. Returning simulated JSON structure for vision.");
-        return simulateVisionResponse<T>(prompt);
+        throw new Error("Azure OpenAI credentials (AZURE_OPENAI_KEY) are not configured. Vision synthesis requires a production key.");
     }
 
     try {
@@ -155,6 +110,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         const result = await generateObject({
             model: getAzureModel(true),
             schema: dynamicSchema || GeometricReconstructionSchema,
+            temperature: 0.8, // Increased for architectural variety
             system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project. All coordinates are in pixels unless specified.",
             messages: [
                 {
@@ -180,8 +136,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
  */
 export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
     if (!azureKey) {
-        console.warn("Azure OpenAI credentials missing. Returning simulated JSON structure.");
-        return simulateVisionResponse<T>(prompt);
+        throw new Error("Azure OpenAI credentials (AZURE_OPENAI_KEY) are not configured. Text-to-BIM generation requires a production key.");
     }
 
     try {
@@ -190,6 +145,7 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
         const result = await generateObject({
             model: getAzureModel(false),
             schema: dynamicSchema || GeometricReconstructionSchema,
+            temperature: 0.9, // Higher variety for design brainstorming
             system: "You are an expert Engineering Intelligence Agent. Generate a precise JSON analysis or reconstruction based on the input context.",
             prompt: prompt
         });
