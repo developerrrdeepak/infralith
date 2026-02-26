@@ -44,8 +44,13 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
 
     opencvData = JSON.parse(stdout.toString());
     console.log(`OpenCV: Detected ${opencvData.lines?.length || 0} physical lines.`);
-  } catch (err) {
-    console.warn("OpenCV Pre-processing failed. Falling back to direct vision analysis.", err);
+  } catch (err: any) {
+    const errorMsg = err?.message || String(err);
+    if (errorMsg.includes('ModuleNotFoundError') || err?.stderr?.includes('ModuleNotFoundError')) {
+      console.warn("OpenCV dependencies (cv2) not found on server. Using direct Vision analysis.");
+    } else {
+      console.warn("OpenCV Pre-processing failed. Falling back to direct vision analysis.", errorMsg);
+    }
   }
 
   const prompt = `

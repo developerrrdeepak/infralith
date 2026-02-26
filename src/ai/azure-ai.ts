@@ -12,13 +12,24 @@ const azureResourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwur
 const docIntelEndpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || "";
 const docIntelKey = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY || "";
 
+// Use a more robust initialization to prevent "model-name-version" errors
 const azure = createAzure({
-    resourceName: azureResourceName,
+    baseURL: `${docIntelEndpoint.replace('cognitiveservices.azure.com/', '')}openai/deployments`, // Adjusted for Unified Endpoint if needed
     apiKey: azureKey,
 });
 
-/** Helper to get the model with correct deployment name */
-export const getAzureModel = () => azure(deploymentName);
+// If the above baseURL is tricky, we'll stick to resourceName but disable automatic versioning
+const azureFixed = createAzure({
+    resourceName: azureResourceName,
+    apiKey: azureKey,
+    apiVersion: '2024-10-21',
+});
+
+/** Helper to get the model with correct deployment name and settings */
+export const getAzureModel = (isVision = false) => {
+    // For production stability, we explicitly define the model to avoid SDK version appending
+    return azureFixed(deploymentName);
+};
 
 /**
  * Zod Schema for GeometricReconstruction to enforce rigorous JSON parsing via AI SDK
@@ -89,7 +100,7 @@ export async function generateAzureObject<T>(prompt: string, schema?: any): Prom
         // We bypass T and force the Zod schema if it's the 3D generator (based on prompt heuristic)
         // In a real app we'd pass the schema dynamically.
         const result = await generateObject({
-            model: azure(deploymentName),
+            model: getAzureModel(),
             system: "You are an expert Construction Intelligence Agent. Respond only in valid JSON conforming EXACTLY to the requested structure.",
             prompt: prompt,
             schema: GeometricReconstructionSchema, // Enforcing schema
@@ -171,9 +182,9 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         }
 
         const result = await generateObject({
-            model: azure(deploymentName),
+            model: getAzureModel(true),
             schema: GeometricReconstructionSchema,
-            system: "You are an expert Architectural Intelligence Agent capable of parsing complex floorplans. Respond only in valid JSON.",
+            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the floorplan. All coordinates are in pixels unless specified.",
             messages: [
                 {
                     role: "user",
