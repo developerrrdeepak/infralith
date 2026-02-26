@@ -39,7 +39,7 @@ const GeometricReconstructionSchema = z.object({
         height: z.number(),
         color: z.string(),
         is_exterior: z.boolean(),
-        floor_level: z.number().optional(),
+        floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of walls"),
     doors: z.array(z.object({
         id: z.union([z.string(), z.number()]),
@@ -48,7 +48,7 @@ const GeometricReconstructionSchema = z.object({
         width: z.number(),
         height: z.number(),
         color: z.string(),
-        floor_level: z.number().optional(),
+        floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of doors"),
     windows: z.array(z.object({
         id: z.union([z.string(), z.number()]),
@@ -57,7 +57,7 @@ const GeometricReconstructionSchema = z.object({
         width: z.number(),
         sill_height: z.number(),
         color: z.string(),
-        floor_level: z.number().optional(),
+        floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of windows"),
     rooms: z.array(z.object({
         id: z.union([z.string(), z.number()]),
@@ -65,7 +65,7 @@ const GeometricReconstructionSchema = z.object({
         polygon: z.array(z.array(z.number())),
         area: z.number(),
         floor_color: z.string(),
-        floor_level: z.number().optional(),
+        floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of rooms"),
     roof: z.object({
         type: z.enum(['flat', 'gable', 'hip']),
@@ -73,18 +73,18 @@ const GeometricReconstructionSchema = z.object({
         height: z.number(),
         base_height: z.number(),
         color: z.string(),
-    }).optional().describe("Building roof structure"),
+    }).nullable().describe("Building roof structure (null if no roof)"),
     conflicts: z.array(z.object({
         type: z.enum(['structural', 'safety', 'code']),
         severity: z.enum(['low', 'medium', 'high']),
         description: z.string(),
         location: z.array(z.number()),
     })).describe("Potential construction issues"),
-    building_name: z.string().optional(),
-    exterior_color: z.string().optional(),
+    building_name: z.string().describe("Descriptive name of the project"),
+    exterior_color: z.string().describe("Main color of the building exterior"),
 });
 
-export type GeometricReconstruction = z.infer<typeof GeometricReconstructionSchema>;
+// GeometricReconstruction type is imported from reconstruction-types.ts in the consumer files
 
 /**
  * Common Logic for Document Intelligence (OCR)
