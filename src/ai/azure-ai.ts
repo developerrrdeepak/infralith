@@ -29,7 +29,8 @@ const azureFixed = createAzure({
 /** Helper to get the model with correct deployment name and settings */
 export const getAzureModel = (isVision = false) => {
     // For production stability, we explicitly define the model to avoid SDK version appending
-    return azureFixed(deploymentName);
+    // Must use .chat() because the default goes to the unsupported /responses endpoint
+    return azureFixed.chat(deploymentName);
 };
 
 /**
