@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --turbopack -p 3500",
-    "build": "(python3 -m pip install opencv-python-headless numpy --user || pip3 install opencv-python-headless numpy --user || echo 'Python/Pip not ready for C-libs') && next build",
+    "build": "python3 -m pip install -r requirements.txt --user --no-cache-dir || pip3 install -r requirements.txt --user || echo 'Python deps failed, falling back to Vision API' && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "postinstall": "pip3 install -r requirements.txt --user || echo 'Pip not found, skipping python deps'"
+    "postinstall": "python3 -m pip install -r requirements.txt --user || pip3 install -r requirements.txt --user || echo 'Pip not found'"
   },
   "dependencies": {
     "@ai-sdk/azure": "^3.0.34",
@@ -75,6 +75,7 @@
     "tailwind-merge": "^3.0.1",
     "tailwindcss-animate": "^1.0.7",
     "three": "^0.183.1",
+    "three-mesh-bvh": "^0.9.8",
     "wav": "^1.0.2",
     "zod": "^4.3.6"
   },
