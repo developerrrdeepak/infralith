@@ -1,5 +1,6 @@
 import { generateObject } from 'ai';
 import { createAzure } from '@ai-sdk/azure';
+import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import { DocumentAnalysisClient, AzureKeyCredential } from "@azure/ai-form-recognizer";
 
@@ -198,6 +199,45 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
         return result.object as unknown as T;
     } catch (e: any) {
         console.error(`[Azure AI SDK] Failed: ${e?.message || e}`);
+        throw e;
+    }
+}
+
+/**
+ * Direct OpenAI Vision — GPT-4o with a public image URL.
+ * Accepts any publicly accessible image URL (Azure Blob SAS URL, CDN, etc).
+ * Used by Blueprint-to-3D for pure OpenAI vision without Azure routing.
+ */
+export async function generateOpenAIVisionObject<T>(prompt: string, imageUrl: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
+    const openaiKey = process.env.OPENAI_API_KEY || '';
+    if (!openaiKey) {
+        throw new Error("[OpenAI Vision] OPENAI_API_KEY is not configured. Please add it to your environment variables.");
+    }
+
+    const openai = createOpenAI({ apiKey: openaiKey });
+
+    try {
+        console.log(`[OpenAI Vision] Routing blueprint to GPT-4o Vision...`);
+
+        const result = await generateObject({
+            model: openai('gpt-4o'),
+            schema: dynamicSchema || GeometricReconstructionSchema,
+            system: "You are an expert Architectural Intelligence Agent. Analyze the provided floor plan image and generate a precise JSON reconstruction.",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: prompt },
+                        { type: "image", image: new URL(imageUrl) }
+                    ]
+                }
+            ]
+        });
+
+        console.log(`[OpenAI Vision] Success`);
+        return result.object as unknown as T;
+    } catch (e: any) {
+        console.error(`[OpenAI Vision] Failed: ${e?.message || e}`);
         throw e;
     }
 }

@@ -1,20 +1,21 @@
 'use server';
 
 import {
-  generateAzureVisionObject,
+  generateOpenAIVisionObject,
   generateAzureObject,
 } from "@/ai/azure-ai";
 import {
   GeometricReconstruction,
 } from './reconstruction-types';
+import { applyBuildingCodes } from './building-codes';
 
 /**
  * Construction-grade geometric reconstruction engine.
  * Converts 2D architectural floor plans into metrically consistent parametric 3D models.
- * Uses Azure OpenAI Vision exclusively — no local pre-processing required.
+ * Uses OpenAI GPT-4o Vision with a direct image URL — no base64 encoding required.
  */
-export async function processBlueprintTo3D(base64Image: string): Promise<GeometricReconstruction> {
-  console.log("[Infralith Vision Engine] Routing blueprint to Azure OpenAI Vision...");
+export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricReconstruction> {
+  console.log("[Infralith Vision Engine] Routing blueprint to OpenAI GPT-4o Vision...");
 
   const prompt = `
     You are the Infralith Engineering Engine—a world-class architectural auditor and spatial synthesis AI powered by advanced computer vision.
@@ -86,17 +87,20 @@ export async function processBlueprintTo3D(base64Image: string): Promise<Geometr
   `;
 
   try {
-    const result = await generateAzureVisionObject<GeometricReconstruction>(prompt, base64Image);
+    const result = await generateOpenAIVisionObject<GeometricReconstruction>(prompt, imageUrl);
     if (!result || !result.walls || result.walls.length === 0) {
-      throw new Error("Engineering Synthesis Failed: Azure Vision AI could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
+      throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
 
+    // Apply strict deterministic architectural building code checks
+    const validatedResult = applyBuildingCodes(result);
+
     return {
-      ...result,
+      ...validatedResult,
       is_vision_only: true
     };
   } catch (e) {
-    console.error("[Infralith Vision Engine] Engineering Pipeline Error:", e);
+    console.error("[Infralith Vision Engine] OpenAI Vision Pipeline Error:", e);
     throw e;
   }
 }

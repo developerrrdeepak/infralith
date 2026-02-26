@@ -22,6 +22,12 @@ import {
     CheckCircle2,
     RefreshCw,
     Download,
+    Calculator,
+    Sun,
+    Moon,
+    CloudUpload,
+    Library,
+    FolderOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +42,9 @@ import {
     RoofGeometry,
     ConstructionConflict
 } from '@/ai/flows/infralith/reconstruction-types';
+import { BIMProvider, useBIM } from '@/contexts/bim-context';
+import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
+import { estimateConstructionCost, CostEstimate } from '@/lib/cost-estimator';
 
 // -- Conflict Markers --
 
@@ -350,7 +359,7 @@ function RoofMesh({ roof }: { roof: RoofGeometry }) {
 
 // -- Wall with CSG Openings --
 
-const WallSegment = ({ wall, allWindows, allDoors, defaultColor }: any) => {
+const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect }: any) => {
     const dx = wall.end[0] - wall.start[0];
     const dz = wall.end[1] - wall.start[1];
     const len = Math.sqrt(dx * dx + dz * dz);
@@ -365,7 +374,11 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor }: any) => {
 
     return (
         <group position={[cx, baseY + wall.height / 2, cz]} rotation={[0, -ang, 0]}>
-            <mesh castShadow receiveShadow>
+            <mesh castShadow receiveShadow
+                onClick={(e) => { e.stopPropagation(); onSelect?.({ type: 'wall', data: wall }) }}
+                onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+                onPointerOut={() => { document.body.style.cursor = 'auto'; }}
+            >
                 <Geometry>
                     <Base geometry={new THREE.BoxGeometry(len, wall.height, wall.thickness)} />
 
@@ -440,7 +453,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor }: any) => {
     );
 };
 
-function GeneratedStructure({ progress, data }: { progress: number, data: GeometricReconstruction | null }) {
+function GeneratedStructure({ progress, data, onSelect }: { progress: number, data: GeometricReconstruction | null, onSelect?: (el: any) => void }) {
     if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
     const p = progress;
@@ -509,7 +522,11 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
 
                         return (
                             <group key={`room-${i}`}>
-                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, zPos + 0.02, 0]} receiveShadow>
+                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, zPos + 0.02, 0]} receiveShadow
+                                    onClick={(e) => { e.stopPropagation(); onSelect?.({ type: 'room', data: room }); }}
+                                    onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+                                    onPointerOut={() => { document.body.style.cursor = 'auto'; }}
+                                >
                                     <shapeGeometry args={[shape]} />
                                     <meshStandardMaterial
                                         color={room.floor_color || defaultFloor}
@@ -540,6 +557,7 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
                             allWindows={data.windows}
                             allDoors={data.doors}
                             defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
+                            onSelect={onSelect}
                         />
                     ))}
 
@@ -593,7 +611,7 @@ function GeneratedStructure({ progress, data }: { progress: number, data: Geomet
 
 // -- Main Page --
 
-export default function BlueprintTo3D() {
+function BlueprintWorkspace() {
     const { toast } = useToast();
     const [mode, setMode] = useState<'upload' | 'describe'>('upload');
     const [file, setFile] = useState<File | null>(null);
@@ -601,7 +619,15 @@ export default function BlueprintTo3D() {
     const [description, setDescription] = useState('');
     const [status, setStatus] = useState<'idle' | 'preprocessing' | 'analyzing' | 'generating' | 'complete'>('idle');
     const [progress, setProgress] = useState(0);
-    const [elements, setElements] = useState<GeometricReconstruction | null>(null);
+    const [showCost, setShowCost] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [showProjects, setShowProjects] = useState(false);
+    const [projects, setProjects] = useState<any[]>([]);
+    const [isLoadingProjects, setIsLoadingProjects] = useState(false);
+    const [timeOfDay, setTimeOfDay] = useState(14); // 2 PM default
+    const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
+
+    const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
     const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf'];
 
@@ -698,23 +724,79 @@ export default function BlueprintTo3D() {
         }
     };
 
+    const handleSaveToCloud = async () => {
+        setIsSaving(true);
+        const success = await saveToCloud();
+        setIsSaving(false);
+        if (success) {
+            toast({ title: "Saved to Cosmos DB", description: "Your BIM parametric model has been securely stored in the cloud.", variant: 'default' });
+            // Refresh projects list if it's already open
+            if (showProjects) fetchProjects();
+        } else {
+            toast({ title: "Sync Failed", description: "Could not connect to Azure Cosmos DB.", variant: 'destructive' });
+        }
+    };
+
+    const fetchProjects = async () => {
+        setIsLoadingProjects(true);
+        try {
+            const res = await fetch('/api/infralith/list-models');
+            if (res.ok) setProjects(await res.json());
+        } catch (e) {
+            console.error("Failed to fetch projects", e);
+        } finally {
+            setIsLoadingProjects(false);
+        }
+    };
+
+    const handleLoadProject = async (id: string) => {
+        setStatus('analyzing'); setProgress(0.5);
+        const success = await loadModel(id);
+        if (success) {
+            setStatus('complete'); setProgress(1);
+            setShowProjects(false);
+            toast({ title: "Project Loaded", description: "Successfully retrieved from Azure Cosmos DB." });
+        } else {
+            setStatus('idle');
+            toast({ title: "Load Failed", description: "Could not retrieve project.", variant: 'destructive' });
+        }
+    };
+
     return (
         <div className="h-[calc(100vh-100px)] w-full flex flex-col relative overflow-hidden">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 z-30 pointer-events-none absolute top-0 w-full">
-                <div className="pointer-events-auto">
+                <div className="flex items-center gap-6 pointer-events-auto">
                     <h1 className="text-xl font-black tracking-tight flex items-center gap-2">
                         <Box className="h-6 w-6 text-primary" />
                         <span className="text-gradient">3D Building Generator</span>
                     </h1>
+                    <Button variant="ghost" size="sm" className="h-9 text-muted-foreground hover:text-foreground font-bold" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
+                        <Library className="h-4 w-4 mr-2" /> My Projects
+                    </Button>
                 </div>
-                {status === 'complete' && (
+                {status === 'complete' && elements && (
                     <div className="flex gap-2 pointer-events-auto">
                         <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={resetState}>
                             <RefreshCw className="h-4 w-4 mr-2" /> New
                         </Button>
-                        <Button size="sm" className="h-9 bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20">
-                            <Download className="h-4 w-4 mr-2" /> Export IFC
+                        <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
+                            Export SVG
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => setShowCost(!showCost)}>
+                            <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
+                        </Button>
+                        <Button
+                            size="sm"
+                            className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
+                            onClick={handleSaveToCloud}
+                            disabled={isSaving}
+                        >
+                            {isSaving ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <CloudUpload className="h-4 w-4 mr-2" />}
+                            {isSaving ? "Syncing..." : "Save to Cloud"}
+                        </Button>
+                        <Button size="sm" className="h-9 bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
+                            <Download className="h-4 w-4 mr-2" /> Export CAD (DXF)
                         </Button>
                     </div>
                 )}
@@ -731,13 +813,30 @@ export default function BlueprintTo3D() {
                             style={{ background: 'transparent' }}
                         >
                             <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete'} autoRotateSpeed={0.35} maxPolarAngle={Math.PI / 2.1} />
-                            <ambientLight intensity={0.7} />
-                            <pointLight position={[15, 25, 15]} intensity={1.5} castShadow shadow-mapSize={[2048, 2048]} />
-                            <directionalLight position={[-12, 30, 12]} intensity={2.5} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]} />
-                            <directionalLight position={[8, -5, 8]} intensity={0.4} />
+
+                            {/* Environmental Lighting based on Time of Day */}
+                            {(() => {
+                                // Clamp 6am to 6pm for daylight
+                                const isNight = timeOfDay < 6 || timeOfDay > 18;
+                                const sunAngle = ((timeOfDay - 6) / 12) * Math.PI; // 0 at 6am, PI at 6pm
+                                const sunX = Math.cos(sunAngle) * -30;
+                                const sunY = Math.max(Math.sin(sunAngle) * 30, -5);
+                                const sunZ = 15;
+                                const intensity = isNight ? 0 : Math.sin(sunAngle) * 2.5;
+
+                                return (
+                                    <>
+                                        <ambientLight intensity={isNight ? 0.2 : 0.6} color={isNight ? "#4a5a70" : "#ffffff"} />
+                                        <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={[2048, 2048]} />
+                                        <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
+                                            shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
+                                        <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
+                                    </>
+                                );
+                            })()}
 
                             <Suspense fallback={null}>
-                                <GeneratedStructure progress={progress} data={elements} />
+                                <GeneratedStructure progress={progress} data={elements} onSelect={setSelectedElement} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
@@ -784,13 +883,153 @@ export default function BlueprintTo3D() {
                                 </div>
                             </div>
                         )}
+
+                        {/* Project Gallery Modal */}
+                        {showProjects && (
+                            <div className="absolute inset-0 flex items-center justify-center z-50 bg-black/40 backdrop-blur-sm p-6" onClick={() => setShowProjects(false)}>
+                                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+                                    className="w-full max-w-[500px] bg-background/95 backdrop-blur-xl border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col max-h-[80vh]"
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <div className="p-6 bg-secondary/30 border-b border-border flex items-center justify-between shrink-0">
+                                        <h3 className="font-black text-foreground">Project Gallery</h3>
+                                        <button onClick={() => setShowProjects(false)} className="text-muted-foreground hover:text-foreground">✕</button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                                        {isLoadingProjects ? (
+                                            <div className="flex flex-col items-center py-12 gap-3 text-muted-foreground">
+                                                <RefreshCw className="h-8 w-8 animate-spin opacity-50" />
+                                                <p className="text-sm font-bold uppercase tracking-widest">Accessing Cosmos DB...</p>
+                                            </div>
+                                        ) : projects.length === 0 ? (
+                                            <div className="text-center py-12 space-y-2">
+                                                <FolderOpen className="h-12 w-12 mx-auto text-muted-foreground opacity-20" />
+                                                <p className="font-bold text-muted-foreground">No saved designs yet.</p>
+                                            </div>
+                                        ) : (
+                                            projects.map((proj) => (
+                                                <div key={proj.id} className="group p-4 bg-background border border-border rounded-xl hover:border-primary/50 transition-all flex items-center justify-between">
+                                                    <div className="space-y-1">
+                                                        <h4 className="font-bold text-foreground group-hover:text-primary transition-colors">{proj.modelName}</h4>
+                                                        <p className="text-[11px] text-muted-foreground uppercase tracking-widest">Last synced {new Date(proj.updatedAt).toLocaleDateString()}</p>
+                                                    </div>
+                                                    <Button size="sm" variant="outline" className="h-8 rounded-lg font-bold" onClick={() => handleLoadProject(proj.id)}>
+                                                        Open
+                                                    </Button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </motion.div>
+                            </div>
+                        )}
+
+                        {/* Sunlight Simulation Timeline */}
+                        {status === 'complete' && elements && (
+                            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md pointer-events-auto">
+                                <div className="bg-background/80 backdrop-blur-xl border border-border p-3 rounded-[20px] shadow-2xl flex items-center gap-4">
+                                    <Moon className="h-4 w-4 text-slate-400 shrink-0" />
+                                    <div className="flex-1 flex flex-col gap-1">
+                                        <input
+                                            type="range"
+                                            min="0" max="24" step="0.5"
+                                            value={timeOfDay}
+                                            onChange={(e) => setTimeOfDay(parseFloat(e.target.value))}
+                                            className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-[#f97316]"
+                                        />
+                                        <div className="flex justify-between px-1 text-[9px] font-black uppercase tracking-widest text-muted-foreground">
+                                            <span>12am</span>
+                                            <span>6am</span>
+                                            <span className="text-[#f97316]">12pm</span>
+                                            <span>6pm</span>
+                                            <span>12am</span>
+                                        </div>
+                                    </div>
+                                    <Sun className="h-5 w-5 text-[#f97316] shrink-0" />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Cost Estimate Overlay */}
+                        {showCost && costEstimate && (
+                            <div className="absolute inset-0 flex items-center justify-center z-50 bg-black/40 backdrop-blur-sm p-6" onClick={() => setShowCost(false)}>
+                                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+                                    className="w-full max-w-[400px] bg-background/95 backdrop-blur-xl border border-border shadow-2xl rounded-2xl overflow-hidden"
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <div className="p-6 bg-secondary/50 border-b border-border flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className="h-10 w-10 bg-primary/20 text-primary flex items-center justify-center rounded-xl border border-primary/30">
+                                                <Calculator className="h-5 w-5" />
+                                            </div>
+                                            <div>
+                                                <h3 className="font-black text-foreground text-[15px]">Construction Cost</h3>
+                                                <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-widest">{costEstimate.sqmTotal.toFixed(0)} SQM BUILD</p>
+                                            </div>
+                                        </div>
+                                        <button onClick={() => setShowCost(false)} className="text-muted-foreground hover:text-foreground">✕</button>
+                                    </div>
+                                    <div className="p-6 space-y-4">
+                                        <div className="space-y-3 pt-2 text-[13px]">
+                                            <div className="flex justify-between items-center text-muted-foreground"><span>Foundation & Slab</span> <span className="font-bold text-foreground">${costEstimate.breakdown.foundationAndSlab.toLocaleString()}</span></div>
+                                            <div className="flex justify-between items-center text-muted-foreground"><span>Wall Framing</span> <span className="font-bold text-foreground">${costEstimate.breakdown.framingAndWalls.toLocaleString()}</span></div>
+                                            <div className="flex justify-between items-center text-muted-foreground"><span>Doors & Windows</span> <span className="font-bold text-foreground">${costEstimate.breakdown.doorsAndWindows.toLocaleString()}</span></div>
+                                            <div className="flex justify-between items-center text-muted-foreground"><span>Roofing</span> <span className="font-bold text-foreground">${costEstimate.breakdown.roofing.toLocaleString()}</span></div>
+                                            <div className="flex justify-between items-center text-muted-foreground"><span>Interior Finishing</span> <span className="font-bold text-foreground">${costEstimate.breakdown.interiorFinishing.toLocaleString()}</span></div>
+                                        </div>
+                                        <div className="pt-4 border-t border-border mt-4 flex justify-between items-end">
+                                            <span className="text-[12px] font-bold text-muted-foreground uppercase tracking-widest">Estimated Total</span>
+                                            <span className="text-2xl font-black text-primary">${costEstimate.totalUSD.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            </div>
+                        )}
+
+                        {selectedElement && !showCost && (
+                            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                                className="absolute bottom-6 left-6 p-5 bg-background/95 backdrop-blur-xl border border-border rounded-[20px] shadow-2xl w-[320px] pointer-events-auto z-40">
+                                <h3 className="font-black text-foreground tracking-tight mb-4 flex items-center justify-between">
+                                    <span>{selectedElement.type === 'room' ? 'Room Details' : 'Wall Segment'}</span>
+                                    <button onClick={() => setSelectedElement(null)} className="text-muted-foreground hover:text-foreground">✕</button>
+                                </h3>
+                                {selectedElement.type === 'room' && (
+                                    <div className="space-y-3 text-[13px] text-muted-foreground">
+                                        <div className="flex justify-between border-b border-border pb-2"><span>Name</span> <span className="font-bold text-foreground">{(selectedElement.data as any).name}</span></div>
+                                        <div className="flex justify-between border-b border-border pb-2"><span>Area</span> <span className="font-bold text-foreground">{(selectedElement.data as any).area?.toFixed(2)} m²</span></div>
+                                        <div className="flex justify-between border-b border-border pb-2"><span>Level</span> <span className="font-bold text-foreground">{(selectedElement.data as any).floor_level || 0}</span></div>
+                                        <div className="pt-2">
+                                            <p className="text-[11px] font-bold mb-2 uppercase text-foreground">Material</p>
+                                            <div className="flex gap-2">
+                                                {['#e8d5b7', '#8a9a5b', '#7c98ab', '#6b5b95'].map(c => (
+                                                    <button key={c} className="w-6 h-6 rounded-full border-2 border-white shadow-md transition-transform hover:scale-110 active:scale-95" style={{ backgroundColor: c }} onClick={() => typeof updateRoomColor === 'function' && updateRoomColor(selectedElement.data.id, c)} />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {selectedElement.type === 'wall' && (
+                                    <div className="space-y-3 text-[13px] text-muted-foreground">
+                                        <div className="flex justify-between border-b border-border pb-2"><span>Thickness</span> <span className="font-bold text-foreground">{(selectedElement.data as any).thickness}m</span></div>
+                                        <div className="flex justify-between border-b border-border pb-2"><span>Height</span> <span className="font-bold text-foreground">{(selectedElement.data as any).height}m</span></div>
+                                        <div className="pt-2">
+                                            <p className="text-[11px] font-bold mb-2 uppercase text-foreground">Material</p>
+                                            <div className="flex gap-2">
+                                                {['#f5e6d3', '#e2c2a3', '#d0e0e3', '#e3d0db'].map(c => (
+                                                    <button key={c} className="w-6 h-6 rounded-full border-2 border-white shadow-md transition-transform hover:scale-110 active:scale-95" style={{ backgroundColor: c }} onClick={() => typeof updateWallColor === 'function' && updateWallColor(selectedElement.data.id, c)} />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </motion.div>
+                        )}
                     </div>
                 </div>
 
                 {/* Centered Idle Screen */}
                 {status === 'idle' && (
                     <div className="absolute inset-0 z-20 flex items-center justify-center p-6 bg-background/80 backdrop-blur-sm" style={{
-                        backgroundImage: `linear-gradient(rgba(128,128,128,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(128,128,128,0.1) 1px, transparent 1px)`,
                         backgroundSize: '20px 20px'
                     }}>
                         <motion.div
@@ -990,5 +1229,13 @@ export default function BlueprintTo3D() {
                 )}
             </div>
         </div>
+    );
+}
+
+export default function BlueprintTo3D() {
+    return (
+        <BIMProvider>
+            <BlueprintWorkspace />
+        </BIMProvider>
     );
 }
