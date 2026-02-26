@@ -1,7 +1,7 @@
 'use server';
 
 import {
-  generateOpenAIVisionObject,
+  generateAzureVisionObject,
   generateAzureObject,
 } from "@/ai/azure-ai";
 import {
@@ -12,10 +12,10 @@ import { applyBuildingCodes } from './building-codes';
 /**
  * Construction-grade geometric reconstruction engine.
  * Converts 2D architectural floor plans into metrically consistent parametric 3D models.
- * Uses OpenAI GPT-4o Vision with a direct image URL — no base64 encoding required.
+ * Uses Azure OpenAI GPT-4o Vision to process base64 encoded blueprint images.
  */
 export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricReconstruction> {
-  console.log("[Infralith Vision Engine] Routing blueprint to OpenAI GPT-4o Vision...");
+  console.log("[Infralith Vision Engine] Routing blueprint to Azure OpenAI Vision...");
 
   const prompt = `
     You are the Infralith Engineering Engine—a world-class architectural auditor and spatial synthesis AI powered by advanced computer vision.
@@ -87,7 +87,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   `;
 
   try {
-    const result = await generateOpenAIVisionObject<GeometricReconstruction>(prompt, imageUrl);
+    const result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
     if (!result || !result.walls || result.walls.length === 0) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
@@ -100,7 +100,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       is_vision_only: true
     };
   } catch (e) {
-    console.error("[Infralith Vision Engine] OpenAI Vision Pipeline Error:", e);
+    console.error("[Infralith Vision Engine] Azure Vision Pipeline Error:", e);
     throw e;
   }
 }
