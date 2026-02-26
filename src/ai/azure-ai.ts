@@ -201,39 +201,3 @@ export async function generateAzureObject<T>(prompt: string): Promise<T> {
         return simulateVisionResponse<T>(prompt);
     }
 }
-
-/**
- * Azure Document Intelligence Logic
- */
-export async function analyzeBlueprintDocument(data: string | File): Promise<string> {
-    const client = getDocumentClient();
-    if (!client) {
-        console.warn("Azure Document Intelligence credentials missing. Returning simulated OCR text.");
-        return "PROJECT: ALPHA COMMERCIAL HUB\nFLOORS: 40\nHEIGHT: 160 METERS\nSEISMIC ZONE: IV\nSTEEL: 6000 TONS SPEC FE-500D\nCONCRETE: 45000 CUM M40";
-    }
-
-    try {
-        console.log(`[Azure Doc Intel] Analyzing document...`);
-        let buffer: Buffer;
-
-        if (typeof data === 'string') {
-            // Assume base64
-            let clean = data;
-            if (data.includes('base64,')) clean = data.split('base64,')[1];
-            buffer = Buffer.from(clean, 'base64');
-        } else {
-            // Assume File/Blob
-            const arrayBuffer = await (data as any).arrayBuffer();
-            buffer = Buffer.from(arrayBuffer);
-        }
-
-        const poller = await client.beginAnalyzeDocument("prebuilt-layout", buffer);
-        const { content } = await poller.pollUntilDone();
-
-        console.log(`[Azure Doc Intel] OCR Success: ${content?.length || 0} chars detected.`);
-        return content || "";
-    } catch (e: any) {
-        console.error(`[Azure Doc Intel] Failed: ${e?.message || e}. Returning simplified text.`);
-        return "ERROR_IN_OCR_PIPELINE";
-    }
-}

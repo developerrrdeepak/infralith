@@ -108,5 +108,5 @@ This project is developed for the **AI Dev Days Hackathon**. All rights reserved
 ---
 
 <p align="center">
-  Built with ❤️ by the Ascend AI Team
+  Built with ❤️ by the nfralithI AI Team
 </p>
