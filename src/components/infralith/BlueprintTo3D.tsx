@@ -30,7 +30,16 @@ import {
     Library,
     FolderOpen,
     Map as MapIcon,
-    CloudUpload
+    CloudUpload,
+    Stairs,
+    Settings,
+    ChevronDown,
+    Layers,
+    Maximize,
+    Minimize,
+    ArrowUpRight,
+    ChevronRight,
+    ChevronUp
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -774,7 +783,24 @@ function BlueprintWorkspace() {
     const [timeOfDay, setTimeOfDay] = useState(14); // 2 PM default
     const [isWalkthrough, setIsWalkthrough] = useState(false);
     const [isTopView, setIsTopView] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
+
+    React.useEffect(() => {
+        if (status === 'complete' && elements) {
+            setIsFullscreen(true);
+        }
+    }, [status, elements]);
+
+    React.useEffect(() => {
+        const handleEsc = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setIsFullscreen(false);
+            }
+        };
+        window.addEventListener('keydown', handleEsc);
+        return () => window.removeEventListener('keydown', handleEsc);
+    }, []);
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
@@ -931,77 +957,269 @@ function BlueprintWorkspace() {
     };
 
     return (
-        <div className="h-[calc(100vh-100px)] w-full flex flex-col relative overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 z-30 pointer-events-none absolute top-0 w-full">
-                <div className="flex items-center gap-6 pointer-events-auto">
-                    <h1 className="text-xl font-black tracking-tight flex items-center gap-2">
-                        <Box className="h-6 w-6 text-primary" />
-                        <span className="text-gradient">3D Building Generator</span>
-                    </h1>
-                    <Button variant="ghost" size="sm" className="h-9 text-muted-foreground hover:text-foreground font-bold" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
-                        <Library className="h-4 w-4 mr-2" /> My Projects
-                    </Button>
-                </div>
-                {status === 'complete' && elements && (
-                    <div className="flex gap-2 pointer-events-auto">
-                        <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={resetState}>
-                            <RefreshCw className="h-4 w-4 mr-2" /> New
-                        </Button>
-                        <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
-                            Export SVG
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn("h-9 backdrop-blur-md transition-colors", isTopView ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
-                            onClick={() => {
-                                setIsWalkthrough(false);
-                                setIsTopView(!isTopView);
-                            }}
-                        >
-                            <MapIcon className="h-4 w-4 mr-2" /> Top View
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn("h-9 backdrop-blur-md transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
-                            onClick={() => {
-                                setIsTopView(false);
-                                setIsWalkthrough(!isWalkthrough);
-                                if (!isWalkthrough) {
-                                    toast({ title: "Walkthrough Active", description: "Click on the scene to look around. Use W, A, S, D to move. Press ESC to free your mouse." });
-                                }
-                            }}
-                        >
-                            <Footprints className="h-4 w-4 mr-2" /> Walk
-                        </Button>
-                        <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => setShowCost(!showCost)}>
-                            <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
-                        </Button>
-                        <Button
-                            size="sm"
-                            className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
-                            onClick={handleSaveToCloud}
-                            disabled={isSaving}
-                        >
-                            {isSaving ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <CloudUpload className="h-4 w-4 mr-2" />}
-                            {isSaving ? "Syncing..." : "Save to Cloud"}
-                        </Button>
-                        <Button size="sm" className="h-9 bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
-                            <Download className="h-4 w-4 mr-2" /> Export CAD (DXF)
+        <div className={cn(
+            "w-full flex flex-col relative overflow-hidden transition-all duration-700",
+            isFullscreen ? "fixed inset-0 z-[9999] bg-[#f8f5f0]" : "h-[calc(100vh-100px)] bg-background"
+        )}>
+            {/* --- IMMERSIVE UI ELEMENTS (Only visible when isFullscreen) --- */}
+            {isFullscreen && status === 'complete' && (
+                <>
+                    {/* Top Header */}
+                    <div className="absolute top-0 left-0 right-0 h-24 px-8 flex items-center justify-between z-[110] pointer-events-none">
+                        <div className="flex items-center gap-12 pointer-events-auto">
+                            <div className="flex flex-col">
+                                <h1 className="text-3xl font-black tracking-tighter text-[#f8a14d] flex items-center gap-2">
+                                    <Box className="h-8 w-8" />
+                                    3D Building Generator
+                                </h1>
+                            </div>
+
+                            <div className="flex items-center gap-2 bg-white/40 backdrop-blur-md p-1.5 rounded-2xl border border-white/40 shadow-sm transition-all hover:bg-white/60">
+                                <Button variant="ghost" size="sm" className="h-10 text-slate-600 hover:text-slate-900 font-black text-xs uppercase tracking-widest px-4" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
+                                    <Layers className="h-4 w-4 mr-2" /> My Projects
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 pointer-events-auto">
+                            <Button variant="outline" size="sm" className="h-11 px-5 rounded-2xl bg-[#2d334a] border-none text-white hover:bg-[#1e2235] font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95" onClick={resetState}>
+                                <RefreshCw className="h-4 w-4 mr-2" /> New
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-11 px-5 rounded-2xl bg-[#2d334a] border-none text-white hover:bg-[#1e2235] font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95" onClick={() => downloadStringAsFile(exportToSVG(elements!, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
+                                Export SVG
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className={cn(
+                                    "h-11 px-5 rounded-2xl border-none font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95",
+                                    isWalkthrough ? "bg-[#f8a14d] text-white" : "bg-[#2d334a] text-white hover:bg-[#1e2235]"
+                                )}
+                                onClick={() => {
+                                    setIsTopView(false);
+                                    setIsWalkthrough(!isWalkthrough);
+                                    if (!isWalkthrough) {
+                                        toast({ title: "Walkthrough Active", description: "Use W, A, S, D to move. ESC to exit." });
+                                    }
+                                }}
+                            >
+                                <Footprints className="h-4 w-4 mr-2" /> Walk
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-11 px-5 rounded-2xl bg-[#2d334a] border-none text-white hover:bg-[#1e2235] font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95" onClick={() => setShowCost(!showCost)}>
+                                <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
+                            </Button>
+                            <Button
+                                size="sm"
+                                className="h-11 px-6 rounded-2xl bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[11px] tracking-widest shadow-2xl shadow-orange-500/20 transition-all active:scale-95"
+                                onClick={handleSaveToCloud}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <CloudUpload className="h-4 w-4 mr-2" />}
+                                Save to Cloud
+                            </Button>
+                            <Button size="sm" className="h-11 px-6 rounded-2xl bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[11px] tracking-widest shadow-2xl shadow-orange-500/20 transition-all active:scale-95" onClick={() => downloadStringAsFile(exportToDXF(elements!, activeFloor), 'floorplan.dxf', 'application/dxf')}>
+                                <Download className="h-4 w-4 mr-2" /> Export CAD (DXF)
+                            </Button>
+                        </div>
+                    </div>
+
+                    {/* Left Sidebar Toolbar */}
+                    <div className="absolute left-8 top-1/2 -translate-y-1/2 w-16 bg-[#0f1429]/95 backdrop-blur-2xl rounded-[32px] border border-white/5 py-8 flex flex-col items-center gap-6 z-[110] shadow-[0_20px_50px_rgba(0,0,0,0.3)] pointer-events-auto">
+                        <button className="p-3 text-[#f8a14d] hover:bg-white/10 rounded-2xl transition-all" onClick={() => setTimeOfDay(12)} title="Noon Lighting"><Sun className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={resetState} title="Reset"><RefreshCw className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setShowProjects(true)} title="Projects"><Library className="h-5 w-5" /></button>
+                        <div className="w-8 h-[1px] bg-white/10 my-2" />
+                        <button className="p-3 bg-[#f8a14d]/10 text-[#f8a14d] border border-[#f8a14d]/20 rounded-2xl transition-all" title="Selection"><MapIcon className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Structural"><Stairs className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setIsWalkthrough(!isWalkthrough)} title="3D Navigation"><Footprints className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Assets"><Box className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setShowCost(true)} title="Estimates"><Calculator className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Edit Mode"><ArrowUpRight className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all mt-auto" title="Settings"><Settings className="h-5 w-5" /></button>
+                    </div>
+
+                    {/* Right Sidebar - Room List */}
+                    <div className="absolute right-8 top-1/2 -translate-y-[40%] w-[340px] z-[110] pointer-events-auto">
+                        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+                            className="bg-white/50 backdrop-blur-3xl p-8 rounded-[40px] border border-white/60 shadow-[0_40px_100px_rgba(0,0,0,0.1)] space-y-8 min-h-[500px] flex flex-col items-stretch">
+
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-800 flex items-center gap-2">
+                                    <ChevronDown className="h-4 w-4" />
+                                    {elements?.building_name || "LUXURY RESIDENCE"}
+                                </span>
+                            </div>
+
+                            <div className="flex items-center gap-4 bg-emerald-500/5 p-4 rounded-3xl border border-emerald-500/10">
+                                <div className="h-12 w-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                                    <CheckCircle2 className="h-6 w-6" />
+                                </div>
+                                <div>
+                                    <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600/60">Built Successfully</p>
+                                    <p className="text-sm font-black text-slate-800 truncate">{elements?.building_name || "Modern Structure"}</p>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 space-y-3 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar">
+                                {elements?.rooms?.map((r, i) => (
+                                    <div key={i} className="flex items-center gap-4 bg-slate-400/10 border border-white/40 p-5 rounded-[24px] hover:bg-white/40 transition-all cursor-pointer group">
+                                        <div className="h-4 w-4 rounded-full border-2 border-white shadow-sm shrink-0" style={{ backgroundColor: r.floor_color || '#e8d5b7' }} />
+                                        <span className="font-bold text-slate-700 flex-1 text-[13px]">{r.name}</span>
+                                        <span className="text-slate-500 font-black text-[11px] bg-slate-200/50 px-3 py-1 rounded-full">{r.area?.toFixed(0)} sqm</span>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 pt-3">
+                                <Button className="bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-2xl shadow-xl shadow-orange-500/20">+ Add Wall</Button>
+                                <Button className="bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-2xl shadow-xl shadow-orange-500/20">+ Add Door</Button>
+                            </div>
+                        </motion.div>
+                    </div>
+
+                    {/* Context Panel - Wall Profile */}
+                    {selectedElement && (
+                        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+                            className="absolute top-1/2 left-32 -translate-y-1/2 w-[280px] bg-[#0f1429]/95 backdrop-blur-2xl rounded-[32px] border border-white/5 p-8 z-[110] shadow-2xl pointer-events-auto">
+                            <h3 className="text-white font-black uppercase text-xs tracking-widest mb-6 flex items-center justify-between">
+                                {selectedElement.type === 'room' ? 'Room Profile' : 'Wall Segment'}
+                                <button onClick={() => setSelectedElement(null)} className="text-white/20 hover:text-white transition-colors">✕</button>
+                            </h3>
+
+                            <div className="space-y-6">
+                                <div className="flex justify-between items-center group">
+                                    <span className="text-white/40 text-[11px] font-bold uppercase tracking-wider">Thickness</span>
+                                    <span className="text-white font-black text-sm">{(selectedElement.data as any).thickness || "0.23"}m</span>
+                                </div>
+                                <div className="flex justify-between items-center group">
+                                    <span className="text-white/40 text-[11px] font-bold uppercase tracking-wider">Height</span>
+                                    <span className="text-white font-black text-sm">{(selectedElement.data as any).height || "2.8"}m</span>
+                                </div>
+
+                                <div className="pt-4 border-t border-white/5">
+                                    <p className="text-white/40 text-[10px] font-black uppercase tracking-widest mb-4">Material</p>
+                                    <div className="flex gap-3">
+                                        {['#f5e6d3', '#e2c2a3', '#d0e0e3', '#e3d0db'].map(c => (
+                                            <button
+                                                key={c}
+                                                className="w-8 h-8 rounded-full border-2 border-white/20 hover:border-white shadow-xl transition-all hover:scale-110 active:scale-90"
+                                                style={{ backgroundColor: c }}
+                                                onClick={() => {
+                                                    if (selectedElement.type === 'wall') updateWallColor(selectedElement.data.id, c);
+                                                    else updateRoomColor(selectedElement.data.id, c);
+                                                }}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* Bottom Toolbar - Time Selection */}
+                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[540px] z-[110] pointer-events-auto">
+                        <div className="bg-[#0f1429]/95 backdrop-blur-3xl border border-white/5 p-5 rounded-[28px] shadow-[0_30px_60px_rgba(0,0,0,0.4)] flex items-center gap-6">
+                            <Moon className="h-5 w-5 text-white/40 shrink-0" />
+                            <div className="flex-1 flex flex-col gap-2">
+                                <input
+                                    type="range"
+                                    min="0" max="24" step="0.5"
+                                    value={timeOfDay}
+                                    onChange={(e) => setTimeOfDay(parseFloat(e.target.value))}
+                                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[#f8a14d]"
+                                />
+                                <div className="flex justify-between px-1 text-[10px] font-black uppercase tracking-widest text-white/30 italic">
+                                    <span className={timeOfDay < 4 ? "text-white" : ""}>12am</span>
+                                    <span className={timeOfDay >= 4 && timeOfDay < 10 ? "text-white" : ""}>6am</span>
+                                    <span className={timeOfDay >= 10 && timeOfDay < 14 ? "text-[#f8a14d]" : ""}>12pm</span>
+                                    <span className={timeOfDay >= 14 && timeOfDay < 20 ? "text-white" : ""}>6pm</span>
+                                    <span className={timeOfDay >= 20 ? "text-white" : ""}>12am</span>
+                                </div>
+                            </div>
+                            <Sun className="h-6 w-6 text-[#f8a14d] shrink-0 drop-shadow-[0_0_8px_rgba(248,161,77,0.5)]" />
+                        </div>
+                    </div>
+                </>
+            )}
+
+            {/* --- STANDARD (PRE-COMPLETION) UI --- */}
+            {!isFullscreen && (
+                <div className="flex items-center justify-between px-6 py-4 z-30 pointer-events-none absolute top-0 w-full">
+                    <div className="flex items-center gap-6 pointer-events-auto">
+                        <h1 className="text-xl font-black tracking-tight flex items-center gap-2">
+                            <Box className="h-6 w-6 text-primary" />
+                            <span className="text-gradient">3D Building Generator</span>
+                        </h1>
+                        <Button variant="ghost" size="sm" className="h-9 text-muted-foreground hover:text-foreground font-bold" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
+                            <Library className="h-4 w-4 mr-2" /> My Projects
                         </Button>
                     </div>
-                )}
-            </div>
+                    {status === 'complete' && elements && (
+                        <div className="flex gap-2 pointer-events-auto">
+                            <Button variant="ghost" size="sm" className="h-9 text-primary font-black hover:bg-primary/10 mr-2" onClick={() => setIsFullscreen(true)}>
+                                <Maximize className="h-4 w-4 mr-2" /> Immersive Mode
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={resetState}>
+                                <RefreshCw className="h-4 w-4 mr-2" /> New
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
+                                Export SVG
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className={cn("h-9 backdrop-blur-md transition-colors", isTopView ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
+                                onClick={() => {
+                                    setIsWalkthrough(false);
+                                    setIsTopView(!isTopView);
+                                }}
+                            >
+                                <MapIcon className="h-4 w-4 mr-2" /> Top View
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className={cn("h-9 backdrop-blur-md transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
+                                onClick={() => {
+                                    setIsTopView(false);
+                                    setIsWalkthrough(!isWalkthrough);
+                                    if (!isWalkthrough) {
+                                        toast({ title: "Walkthrough Active", description: "Click on the scene to look around. Use W, A, S, D to move. Press ESC to free your mouse." });
+                                    }
+                                }}
+                            >
+                                <Footprints className="h-4 w-4 mr-2" /> Walk
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => setShowCost(!showCost)}>
+                                <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
+                            </Button>
+                            <Button
+                                size="sm"
+                                className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
+                                onClick={handleSaveToCloud}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <CloudUpload className="h-4 w-4 mr-2" />}
+                                {isSaving ? "Syncing..." : "Save to Cloud"}
+                            </Button>
+                            <Button size="sm" className="h-9 bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
+                                <Download className="h-4 w-4 mr-2" /> Export CAD (DXF)
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            )}
 
-            <div className="flex-1 relative flex flex-col md:flex-row bg-background">
+            <div className="flex-1 relative flex flex-col md:flex-row">
                 {/* 3D Viewport */}
                 <div className="absolute inset-0 z-0">
-                    <div className="w-full h-full relative" style={{ background: 'linear-gradient(180deg, #f0ece4 0%, #e8e2d6 50%, #ddd7c9 100%)' }}>
+                    <div className="w-full h-full relative" style={{
+                        background: isFullscreen ? 'linear-gradient(180deg, #f8f5f0 0%, #e8e2d6 100%)' : 'linear-gradient(180deg, #f0ece4 0%, #e8e2d6 50%, #ddd7c9 100%)'
+                    }}>
                         <Canvas
+                            key={isFullscreen ? 'canvas-fullscreen' : 'canvas-standard'}
                             dpr={[1, 2]}
-                            camera={{ position: [18, 14, 18], fov: 32 }}
+                            camera={{ position: [18, 14, 18], fov: isFullscreen ? 28 : 32 }}
                             gl={{ antialias: true, alpha: true }}
                             style={{ background: 'transparent' }}
                         >
