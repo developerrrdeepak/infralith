@@ -40,7 +40,21 @@ import {
     ChevronRight,
     ChevronUp,
     FileCode,
-    FileBox
+    FileBox,
+    PanelLeft,
+    PanelRight,
+    MousePointer2,
+    Move,
+    Scaling,
+    Trash2,
+    Eye,
+    EyeOff,
+    Edit2,
+    Lightbulb,
+    Camera,
+    DoorOpen,
+    Square,
+    Window as WindowIcon
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -61,6 +75,94 @@ import {
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
 import { estimateConstructionCost, CostEstimate } from '@/lib/cost-estimator';
+
+// -- UI Helper Components for Professional CAD Interface --
+
+const ToolButton = ({ icon, label, active, onClick, expanded, shortcut, color, className }: any) => (
+    <button
+        onClick={onClick}
+        className={cn(
+            "w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 group relative",
+            active ? "bg-[#f8a14d] text-white shadow-lg shadow-orange-500/20" : "text-white/40 hover:text-white hover:bg-white/5",
+            !expanded && "justify-center",
+            className
+        )}
+        title={!expanded ? `${label} (${shortcut || ''})` : ""}
+    >
+        <div className={cn("transition-transform duration-200 group-hover:scale-110", color)}>
+            {icon}
+        </div>
+        {expanded && (
+            <div className="flex flex-1 items-center justify-between min-w-0">
+                <span className="text-[11px] font-bold truncate">{label}</span>
+                {shortcut && <span className="text-[9px] font-black opacity-30 ml-2">{shortcut}</span>}
+            </div>
+        )}
+        {!expanded && active && (
+            <motion.div layoutId="activeTool" className="absolute left-0 w-1 h-6 bg-white rounded-r-full" />
+        )}
+    </button>
+);
+
+const InspectorGroup = ({ title, children, isOpen, onToggle }: any) => (
+    <div className="space-y-1">
+        <button
+            onClick={onToggle}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors group"
+        >
+            <div className="flex items-center gap-2">
+                <ChevronRight className={cn("h-3 w-3 text-slate-400 transition-transform", isOpen && "rotate-90")} />
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">{title}</span>
+            </div>
+            <Badge variant="outline" className="text-[9px] px-1.5 h-4 border-slate-200 text-slate-400">
+                {React.Children.count(children)}
+            </Badge>
+        </button>
+        {isOpen && <div className="pl-2 space-y-1">{children}</div>}
+    </div>
+);
+
+const InspectorItem = ({ icon, label, sublabel, active, visible, onSelect, onToggleVisibility, onEdit, onDelete }: any) => (
+    <div
+        className={cn(
+            "group flex items-center gap-3 p-2 rounded-xl transition-all cursor-pointer",
+            active ? "bg-slate-100 ring-1 ring-slate-200" : "hover:bg-slate-50"
+        )}
+        onClick={onSelect}
+    >
+        <div className="shrink-0">{icon}</div>
+        <div className="flex-1 min-w-0">
+            <p className={cn("text-[11px] font-bold truncate", active ? "text-slate-900" : "text-slate-600")}>{label}</p>
+            {sublabel && <p className="text-[9px] text-slate-400 font-medium">{sublabel}</p>}
+        </div>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {onToggleVisibility && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onToggleVisibility(); }}
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
+                >
+                    {visible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                </button>
+            )}
+            {onEdit && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onEdit(); }}
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
+                >
+                    <Edit2 className="h-3 w-3" />
+                </button>
+            )}
+            {onDelete && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                    className="p-1 text-slate-400 hover:text-red-500 rounded-md"
+                >
+                    <Trash2 className="h-3 w-3" />
+                </button>
+            )}
+        </div>
+    </div>
+);
 
 // -- Conflict Markers --
 
@@ -526,7 +628,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect }: any
     );
 };
 
-function GeneratedStructure({ progress, data, onSelect }: { progress: number, data: GeometricReconstruction | null, onSelect?: (el: any) => void }) {
+function GeneratedStructure({ progress, data, visibleElements, onSelect }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void }) {
     if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
     const p = progress;
@@ -582,7 +684,7 @@ function GeneratedStructure({ progress, data, onSelect }: { progress: number, da
                     })}
 
                     {/* Room Floors */}
-                    {data.rooms.map((room, i) => {
+                    {data.rooms.filter(r => !visibleElements || visibleElements.has(`room-${r.id}`)).map((room, i) => {
                         const shape = new THREE.Shape();
                         room.polygon.forEach((pt, idx) => {
                             if (idx === 0) shape.moveTo(pt[0], pt[1]);
@@ -612,7 +714,7 @@ function GeneratedStructure({ progress, data, onSelect }: { progress: number, da
                     })}
 
                     {/* Walls, Windows, and Doors (Integrated via CSG) */}
-                    {data.walls.map((wall, i) => (
+                    {data.walls.filter(w => !visibleElements || visibleElements.has(`wall-${w.id}`)).map((wall, i) => (
                         <WallSegment
                             key={`wall-${i}`}
                             wall={wall}
@@ -774,7 +876,33 @@ function BlueprintWorkspace() {
     const [isWalkthrough, setIsWalkthrough] = useState(false);
     const [isTopView, setIsTopView] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [activeTool, setActiveTool] = useState('select');
+    const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
+    const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
+
+    // Initialize visibility
+    React.useEffect(() => {
+        if (elements) {
+            const allIds = [
+                ...(elements.rooms?.map(r => `room-${r.id}`) || []),
+                ...(elements.walls?.map(w => `wall-${w.id}`) || []),
+                ...(elements.doors?.map(d => `door-${d.id}`) || []),
+                ...(elements.windows?.map(w => `win-${w.id}`) || [])
+            ];
+            setVisibleElements(new Set(allIds));
+        }
+    }, [elements]);
+
+    const toggleElementVisibility = (type: string, id: string | number) => {
+        const key = `${type}-${id}`;
+        setVisibleElements(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    };
 
     React.useEffect(() => {
         if (status === 'complete' && elements) {
@@ -937,10 +1065,10 @@ function BlueprintWorkspace() {
             "w-full flex flex-col relative overflow-hidden transition-all duration-700",
             isFullscreen ? "fixed inset-0 z-[9999] bg-[#f8f5f0]" : "h-[calc(100vh-100px)] bg-background"
         )}>
-            {/* --- IMMERSIVE UI ELEMENTS (Only visible when isFullscreen) --- */}
-            {isFullscreen && status === 'complete' && (
+            {/* Fullscreen UI */}
+            {isFullscreen && status === 'complete' && elements && (
                 <>
-                    {/* Top Header */}
+                    {/* --- TOP HEADER --- */}
                     <div className="absolute top-0 left-0 right-0 h-24 px-8 flex items-center justify-between z-[110] pointer-events-none">
                         <div className="flex items-center gap-12 pointer-events-auto">
                             <div className="flex flex-col">
@@ -965,26 +1093,6 @@ function BlueprintWorkspace() {
                                 Export SVG
                             </Button>
                             <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn(
-                                    "h-11 px-5 rounded-2xl border-none font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95",
-                                    isWalkthrough ? "bg-[#f8a14d] text-white" : "bg-[#2d334a] text-white hover:bg-[#1e2235]"
-                                )}
-                                onClick={() => {
-                                    setIsTopView(false);
-                                    setIsWalkthrough(!isWalkthrough);
-                                    if (!isWalkthrough) {
-                                        toast({ title: "Walkthrough Active", description: "Use W, A, S, D to move. ESC to exit." });
-                                    }
-                                }}
-                            >
-                                <Footprints className="h-4 w-4 mr-2" /> Walk
-                            </Button>
-                            <Button variant="outline" size="sm" className="h-11 px-5 rounded-2xl bg-[#2d334a] border-none text-white hover:bg-[#1e2235] font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95" onClick={() => setShowCost(!showCost)}>
-                                <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
-                            </Button>
-                            <Button
                                 size="sm"
                                 className="h-11 px-6 rounded-2xl bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[11px] tracking-widest shadow-2xl shadow-orange-500/20 transition-all active:scale-95"
                                 onClick={handleSaveToCloud}
@@ -993,104 +1101,259 @@ function BlueprintWorkspace() {
                                 {isSaving ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <CloudUpload className="h-4 w-4 mr-2" />}
                                 Save to Cloud
                             </Button>
-                            <Button size="sm" className="h-11 px-6 rounded-2xl bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[11px] tracking-widest shadow-2xl shadow-orange-500/20 transition-all active:scale-95" onClick={() => downloadStringAsFile(exportToDXF(elements!, activeFloor), 'floorplan.dxf', 'application/dxf')}>
-                                <Download className="h-4 w-4 mr-2" /> Export CAD (DXF)
+                            <Button variant="ghost" size="sm" className="h-11 w-11 p-0 rounded-2xl bg-white/50 backdrop-blur-md border border-white/40 text-slate-600 hover:text-slate-900 shadow-sm transition-all" onClick={() => setIsFullscreen(false)}>
+                                <Minimize2 className="h-5 w-5" />
                             </Button>
                         </div>
                     </div>
 
-                    {/* Left Sidebar Toolbar */}
-                    <div className="absolute left-8 top-1/2 -translate-y-1/2 w-16 bg-[#0f1429]/95 backdrop-blur-2xl rounded-[32px] border border-white/5 py-8 flex flex-col items-center gap-6 z-[110] shadow-[0_20px_50px_rgba(0,0,0,0.3)] pointer-events-auto">
-                        <button className="p-3 text-[#f8a14d] hover:bg-white/10 rounded-2xl transition-all" onClick={() => setTimeOfDay(12)} title="Noon Lighting"><Sun className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={resetState} title="Reset"><RefreshCw className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setShowProjects(true)} title="Projects"><Library className="h-5 w-5" /></button>
-                        <div className="w-8 h-[1px] bg-white/10 my-2" />
-                        <button className="p-3 bg-[#f8a14d]/10 text-[#f8a14d] border border-[#f8a14d]/20 rounded-2xl transition-all" title="Selection"><MapIcon className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Structural"><Layers className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setIsWalkthrough(!isWalkthrough)} title="3D Navigation"><Footprints className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Assets"><Box className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setShowCost(true)} title="Estimates"><Calculator className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Edit Mode"><ArrowUpRight className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all mt-auto" title="Settings"><Settings className="h-5 w-5" /></button>
+                    {/* --- LEFT NAVIGATION BAR (Tool System) --- */}
+                    <div
+                        className={cn(
+                            "absolute left-6 top-1/2 -translate-y-1/2 bg-[#0f1429]/95 backdrop-blur-xl rounded-2xl border border-white/10 py-6 flex flex-col items-start z-[110] shadow-2xl transition-all duration-300 ease-in-out pointer-events-auto",
+                            isLeftPanelExpanded ? "w-48 px-4" : "w-16 items-center"
+                        )}
+                        onMouseEnter={() => setIsLeftPanelExpanded(true)}
+                        onMouseLeave={() => setIsLeftPanelExpanded(false)}
+                    >
+                        {/* Tool Group: BUILD */}
+                        <div className="w-full space-y-2">
+                            {isLeftPanelExpanded && <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2 px-2">Build</p>}
+                            <ToolButton
+                                icon={<Square className="h-4 w-4" />}
+                                label="Wall"
+                                active={activeTool === 'wall'}
+                                onClick={() => setActiveTool('wall')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="W"
+                            />
+                            <ToolButton
+                                icon={<DoorOpen className="h-4 w-4" />}
+                                label="Door"
+                                active={activeTool === 'door'}
+                                onClick={() => setActiveTool('door')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="D"
+                            />
+                            <ToolButton
+                                icon={<WindowIcon className="h-4 w-4" />}
+                                label="Window"
+                                active={activeTool === 'window'}
+                                onClick={() => setActiveTool('window')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="N"
+                            />
+                        </div>
+
+                        <div className="w-full h-[1px] bg-white/5 my-6" />
+
+                        {/* Tool Group: EDIT */}
+                        <div className="w-full space-y-2">
+                            {isLeftPanelExpanded && <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2 px-2">Edit</p>}
+                            <ToolButton
+                                icon={<MousePointer2 className="h-4 w-4" />}
+                                label="Select"
+                                active={activeTool === 'select'}
+                                onClick={() => setActiveTool('select')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="V"
+                            />
+                            <ToolButton
+                                icon={<Move className="h-4 w-4" />}
+                                label="Move"
+                                active={activeTool === 'move'}
+                                onClick={() => setActiveTool('move')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="M"
+                            />
+                            <ToolButton
+                                icon={<Scaling className="h-4 w-4" />}
+                                label="Scale"
+                                active={activeTool === 'scale'}
+                                onClick={() => setActiveTool('scale')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="S"
+                            />
+                            <ToolButton
+                                icon={<Trash2 className="h-4 w-4" />}
+                                label="Delete"
+                                active={activeTool === 'delete'}
+                                onClick={() => setActiveTool('delete')}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="DEL"
+                                color="text-red-400"
+                            />
+                        </div>
+
+                        <div className="w-full h-[1px] bg-white/5 my-6" />
+
+                        {/* Tool Group: VIEW */}
+                        <div className="w-full space-y-2">
+                            {isLeftPanelExpanded && <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2 px-2">View</p>}
+                            <ToolButton
+                                icon={<Footprints className="h-4 w-4" />}
+                                label="Walk Mode"
+                                active={isWalkthrough}
+                                onClick={() => setIsWalkthrough(!isWalkthrough)}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="P"
+                            />
+                            <ToolButton
+                                icon={<Lightbulb className="h-4 w-4" />}
+                                label="Lighting"
+                                active={activeTool === 'lighting'}
+                                onClick={() => setTimeOfDay(12)}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="L"
+                            />
+                            <ToolButton
+                                icon={<Camera className="h-4 w-4" />}
+                                label="Camera"
+                                active={isTopView}
+                                onClick={() => setIsTopView(!isTopView)}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="C"
+                            />
+                        </div>
+
+                        <ToolButton
+                            icon={<Settings className="h-4 w-4" />}
+                            label="Settings"
+                            active={activeTool === 'settings'}
+                            onClick={() => setActiveTool('settings')}
+                            expanded={isLeftPanelExpanded}
+                            className="mt-auto"
+                        />
                     </div>
 
-                    {/* Right Sidebar - Room List */}
-                    <div className="absolute right-8 top-1/2 -translate-y-[40%] w-[340px] z-[110] pointer-events-auto">
-                        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-                            className="bg-white/50 backdrop-blur-3xl p-8 rounded-[40px] border border-white/60 shadow-[0_40px_100px_rgba(0,0,0,0.1)] space-y-8 min-h-[500px] flex flex-col items-stretch">
+                    {/* --- RIGHT NAVIGATION PANEL (Project / Room Inspector) --- */}
+                    <div className="absolute right-6 top-1/2 -translate-y-1/2 w-[320px] bg-white/95 rounded-2xl border border-slate-200 shadow-2xl z-[110] flex flex-col pointer-events-auto h-[80vh] overflow-hidden">
+                        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                            <h2 className="text-[11px] font-black uppercase tracking-widest text-slate-800 flex items-center gap-2">
+                                <Box className="h-4 w-4 text-[#f8a14d]" />
+                                Project Inspector
+                            </h2>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-lg hover:bg-slate-100" onClick={() => setIsFullscreen(false)}>
+                                <Minimize2 className="h-3.5 w-3.5" />
+                            </Button>
+                        </div>
 
-                            <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-800 flex items-center gap-2">
-                                    <ChevronDown className="h-4 w-4" />
-                                    {elements?.building_name || "LUXURY RESIDENCE"}
-                                </span>
+                        {/* Status Header */}
+                        <div className="px-4 py-3 bg-[#f8a14d]/5 flex items-center gap-3 border-b border-slate-100">
+                            <div className="h-8 w-8 rounded-lg bg-[#f8a14d] text-white flex items-center justify-center shadow-md">
+                                <CheckCircle2 className="h-4 w-4" />
                             </div>
-
-                            <div className="flex items-center gap-4 bg-emerald-500/5 p-4 rounded-3xl border border-emerald-500/10">
-                                <div className="h-12 w-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/20">
-                                    <CheckCircle2 className="h-6 w-6" />
-                                </div>
-                                <div>
-                                    <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600/60">Built Successfully</p>
-                                    <p className="text-sm font-black text-slate-800 truncate">{elements?.building_name || "Modern Structure"}</p>
-                                </div>
+                            <div className="min-w-0">
+                                <p className="text-[8px] font-black uppercase text-[#f8a14d] tracking-widest">Active Model</p>
+                                <p className="text-xs font-bold text-slate-800 truncate">{elements?.building_name || "New Architecture Design"}</p>
                             </div>
+                        </div>
 
-                            <div className="flex-1 space-y-3 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar">
-                                {elements?.rooms?.map((r, i) => (
-                                    <div key={i} className="flex items-center gap-4 bg-slate-400/10 border border-white/40 p-5 rounded-[24px] hover:bg-white/40 transition-all cursor-pointer group">
-                                        <div className="h-4 w-4 rounded-full border-2 border-white shadow-sm shrink-0" style={{ backgroundColor: r.floor_color || '#e8d5b7' }} />
-                                        <span className="font-bold text-slate-700 flex-1 text-[13px]">{r.name}</span>
-                                        <span className="text-slate-500 font-black text-[11px] bg-slate-200/50 px-3 py-1 rounded-full">{r.area?.toFixed(0)} sqm</span>
-                                    </div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
+                            {/* Hierarchy: PROJECT -> FLOORS -> ROOMS */}
+                            <div className="space-y-1">
+                                <div className="flex items-center gap-2 px-2 py-1">
+                                    <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Building Model</span>
+                                </div>
+
+                                {Array.from(new Set([
+                                    ...(elements?.walls?.map(w => w.floor_level || 0) || []),
+                                    ...(elements?.rooms?.map(r => r.floor_level || 0) || [])
+                                ])).sort().map(floor => (
+                                    <InspectorGroup
+                                        key={`floor-${floor}`}
+                                        title={`Floor Level ${floor}`}
+                                        isOpen={activeFloor === null || activeFloor === floor}
+                                        onToggle={() => setActiveFloor(activeFloor === floor ? null : floor)}
+                                    >
+                                        <div className="space-y-1 ml-2">
+                                            {/* Rooms on this floor */}
+                                            {elements?.rooms?.filter(r => (r.floor_level || 0) === floor).map(room => (
+                                                <InspectorItem
+                                                    key={`room-${room.id}`}
+                                                    icon={<div className="h-2 w-2 rounded-full" style={{ backgroundColor: room.floor_color || '#e8d5b7' }} />}
+                                                    label={room.name}
+                                                    sublabel={`${room.area?.toFixed(0)}m²`}
+                                                    active={selectedElement?.type === 'room' && selectedElement.data.id === room.id}
+                                                    visible={visibleElements.has(`room-${room.id}`)}
+                                                    onSelect={() => setSelectedElement({ type: 'room', data: room })}
+                                                    onToggleVisibility={() => toggleElementVisibility('room', room.id)}
+                                                    onEdit={() => setSelectedElement({ type: 'room', data: room })}
+                                                    onDelete={() => { }} // TODO: Implement delete
+                                                />
+                                            ))}
+
+                                            {/* Elements summary for this floor */}
+                                            <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+                                                <InspectorItem
+                                                    label="Walls"
+                                                    sublabel={`${elements?.walls?.filter(w => (w.floor_level || 0) === floor).length} Units`}
+                                                    icon={<Layers className="h-3 w-3 text-slate-400" />}
+                                                />
+                                                <InspectorItem
+                                                    label="Doors"
+                                                    sublabel={`${elements?.doors?.filter(d => (d.floor_level || 0) === floor).length} Units`}
+                                                    icon={<DoorOpen className="h-3 w-3 text-slate-400" />}
+                                                />
+                                            </div>
+                                        </div>
+                                    </InspectorGroup>
                                 ))}
                             </div>
+                        </div>
 
-                            <div className="grid grid-cols-2 gap-3 pt-3">
-                                <Button className="bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-2xl shadow-xl shadow-orange-500/20">+ Add Wall</Button>
-                                <Button className="bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-2xl shadow-xl shadow-orange-500/20">+ Add Door</Button>
-                            </div>
-                        </motion.div>
+                        {/* Inspector Actions */}
+                        <div className="p-4 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-2">
+                            <Button size="sm" variant="outline" className="h-9 border-slate-200 text-[#f8a14d] font-bold text-[10px] uppercase tracking-widest hover:bg-white rounded-xl">
+                                <Layers className="h-3.5 w-3.5 mr-2" /> Add Level
+                            </Button>
+                            <Button size="sm" className="h-9 bg-[#f8a14d] hover:bg-[#ea8d35] text-white font-bold text-[10px] uppercase tracking-widest rounded-xl shadow-lg shadow-orange-500/10">
+                                Export BIM
+                            </Button>
+                        </div>
                     </div>
 
                     {/* Context Panel - Wall Profile */}
-                    {selectedElement && (
-                        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
-                            className="absolute top-1/2 left-32 -translate-y-1/2 w-[280px] bg-[#0f1429]/95 backdrop-blur-2xl rounded-[32px] border border-white/5 p-8 z-[110] shadow-2xl pointer-events-auto">
-                            <h3 className="text-white font-black uppercase text-xs tracking-widest mb-6 flex items-center justify-between">
-                                {selectedElement.type === 'room' ? 'Room Profile' : 'Wall Segment'}
-                                <button onClick={() => setSelectedElement(null)} className="text-white/20 hover:text-white transition-colors">✕</button>
-                            </h3>
+                    {
+                        selectedElement && (
+                            <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+                                className="absolute top-1/2 left-32 -translate-y-1/2 w-[280px] bg-[#0f1429]/95 backdrop-blur-2xl rounded-[32px] border border-white/5 p-8 z-[110] shadow-2xl pointer-events-auto">
+                                <h3 className="text-white font-black uppercase text-xs tracking-widest mb-6 flex items-center justify-between">
+                                    {selectedElement.type === 'room' ? 'Room Profile' : 'Wall Segment'}
+                                    <button onClick={() => setSelectedElement(null)} className="text-white/20 hover:text-white transition-colors">✕</button>
+                                </h3>
 
-                            <div className="space-y-6">
-                                <div className="flex justify-between items-center group">
-                                    <span className="text-white/40 text-[11px] font-bold uppercase tracking-wider">Thickness</span>
-                                    <span className="text-white font-black text-sm">{(selectedElement.data as any).thickness || "0.23"}m</span>
-                                </div>
-                                <div className="flex justify-between items-center group">
-                                    <span className="text-white/40 text-[11px] font-bold uppercase tracking-wider">Height</span>
-                                    <span className="text-white font-black text-sm">{(selectedElement.data as any).height || "2.8"}m</span>
-                                </div>
+                                <div className="space-y-6">
+                                    <div className="flex justify-between items-center group">
+                                        <span className="text-white/40 text-[11px] font-bold uppercase tracking-wider">Thickness</span>
+                                        <span className="text-white font-black text-sm">{(selectedElement.data as any).thickness || "0.23"}m</span>
+                                    </div>
+                                    <div className="flex justify-between items-center group">
+                                        <span className="text-white/40 text-[11px] font-bold uppercase tracking-wider">Height</span>
+                                        <span className="text-white font-black text-sm">{(selectedElement.data as any).height || "2.8"}m</span>
+                                    </div>
 
-                                <div className="pt-4 border-t border-white/5">
-                                    <p className="text-white/40 text-[10px] font-black uppercase tracking-widest mb-4">Material</p>
-                                    <div className="flex gap-3">
-                                        {['#f5e6d3', '#e2c2a3', '#d0e0e3', '#e3d0db'].map(c => (
-                                            <button
-                                                key={c}
-                                                className="w-8 h-8 rounded-full border-2 border-white/20 hover:border-white shadow-xl transition-all hover:scale-110 active:scale-90"
-                                                style={{ backgroundColor: c }}
-                                                onClick={() => {
-                                                    if (selectedElement.type === 'wall') updateWallColor(selectedElement.data.id, c);
-                                                    else updateRoomColor(selectedElement.data.id, c);
-                                                }}
-                                            />
-                                        ))}
+                                    <div className="pt-4 border-t border-white/5">
+                                        <p className="text-white/40 text-[10px] font-black uppercase tracking-widest mb-4">Material</p>
+                                        <div className="flex gap-3">
+                                            {['#f5e6d3', '#e2c2a3', '#d0e0e3', '#e3d0db'].map(c => (
+                                                <button
+                                                    key={c}
+                                                    className="w-8 h-8 rounded-full border-2 border-white/20 hover:border-white shadow-xl transition-all hover:scale-110 active:scale-90"
+                                                    style={{ backgroundColor: c }}
+                                                    onClick={() => {
+                                                        if (selectedElement.type === 'wall') updateWallColor(selectedElement.data.id, c);
+                                                        else updateRoomColor(selectedElement.data.id, c);
+                                                    }}
+                                                />
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        </motion.div>
-                    )}
+                            </motion.div>
+                        )
+                    }
 
                     {/* Bottom Toolbar - Time Selection */}
                     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[540px] z-[110] pointer-events-auto">
@@ -1120,6 +1383,7 @@ function BlueprintWorkspace() {
 
             {/* --- STANDARD (PRE-COMPLETION) UI --- */}
             {!isFullscreen && (
+
                 <div className="flex flex-col z-30 pointer-events-none absolute top-0 w-full px-4 pt-3 pb-2 gap-2 bg-gradient-to-b from-background/90 to-transparent backdrop-blur-sm">
                     {/* Row 1: Title + Essential Actions */}
                     <div className="flex items-center justify-between pointer-events-auto">
@@ -1186,6 +1450,7 @@ function BlueprintWorkspace() {
                 </div>
             )}
 
+
             <div className="flex-1 relative flex flex-col md:flex-row">
                 {/* 3D Viewport */}
                 <div className="absolute inset-0 z-0">
@@ -1245,7 +1510,7 @@ function BlueprintWorkspace() {
                             })()}
 
                             <Suspense fallback={null}>
-                                <GeneratedStructure progress={progress} data={elements} onSelect={setSelectedElement} />
+                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
@@ -1650,7 +1915,7 @@ function BlueprintWorkspace() {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }
 
