@@ -1118,60 +1118,66 @@ function BlueprintWorkspace() {
 
             {/* --- STANDARD (PRE-COMPLETION) UI --- */}
             {!isFullscreen && (
-                <div className="flex flex-col z-30 pointer-events-none absolute top-0 w-full px-4 pt-3 pb-2 gap-2 bg-gradient-to-b from-background/80 to-transparent backdrop-blur-sm">
-                    {/* Row 1: Title + My Projects */}
+                <div className="flex flex-col z-30 pointer-events-none absolute top-0 w-full px-4 pt-3 pb-2 gap-2 bg-gradient-to-b from-background/90 to-transparent backdrop-blur-sm">
+                    {/* Row 1: Title + Essential Actions */}
                     <div className="flex items-center justify-between pointer-events-auto">
-                        <h1 className="text-lg font-black tracking-tight flex items-center gap-2">
-                            <Box className="h-5 w-5 text-primary shrink-0" />
-                            <span className="text-gradient">3D Building Generator</span>
-                        </h1>
-                        <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="sm" className="h-8 text-muted-foreground hover:text-foreground font-bold text-xs" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
-                                <Library className="h-4 w-4 mr-1.5" /> My Projects
+                        <div className="flex items-center gap-4">
+                            <h1 className="text-lg font-black tracking-tight flex items-center gap-2">
+                                <Box className="h-5 w-5 text-primary shrink-0" />
+                                <span className="hidden sm:inline text-gradient uppercase tracking-tighter">BIM Engine</span>
+                            </h1>
+                            <Button variant="ghost" size="sm" className="h-8 text-muted-foreground hover:text-foreground font-bold text-[10px] uppercase tracking-widest px-2" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
+                                <Library className="h-3.5 w-3.5 mr-1.5" /> Projects
                             </Button>
+                        </div>
+                        <div className="flex items-center gap-1.5">
                             {status === 'complete' && elements && (
-                                <Button variant="ghost" size="sm" className="h-8 text-primary font-black hover:bg-primary/10 text-xs" onClick={() => setIsFullscreen(true)}>
-                                    <Maximize2 className="h-4 w-4 mr-1.5" /> Immersive
-                                </Button>
+                                <>
+                                    <Button variant="ghost" size="sm" className="h-8 text-primary font-black hover:bg-primary/10 text-[10px] uppercase tracking-widest px-3" onClick={() => setIsFullscreen(true)}>
+                                        <Maximize2 className="h-3.5 w-3.5 mr-1.5" /> Fullscreen
+                                    </Button>
+                                    <Button variant="outline" size="sm" className="h-8 bg-background/50 border-border text-[10px] uppercase tracking-widest font-black px-3" onClick={resetState}>
+                                        <RefreshCw className="h-3 w-3 mr-1.5" /> Reset
+                                    </Button>
+                                </>
                             )}
                         </div>
                     </div>
 
-                    {/* Row 2: Action Buttons (only when complete) */}
+                    {/* Row 2: Secondary Toolbar (only when complete) */}
                     {status === 'complete' && elements && (
-                        <div className="flex items-center gap-1.5 pointer-events-auto flex-wrap">
-                            <Button variant="outline" size="sm" className="h-8 bg-background/70 backdrop-blur-md border-border text-xs px-3" onClick={resetState}>
-                                <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> New
-                            </Button>
+                        <div className="flex items-center gap-1.5 pointer-events-auto flex-wrap bg-white/5 backdrop-blur-md p-1 rounded-xl border border-white/10 w-fit">
                             <Button
-                                variant="outline" size="sm"
-                                className={cn("h-8 backdrop-blur-md text-xs px-3 transition-colors", isTopView ? "bg-primary text-primary-foreground border-primary" : "bg-background/70 border-border")}
+                                variant="ghost" size="sm"
+                                className={cn("h-7 text-[9px] font-black uppercase tracking-wider px-2 transition-all rounded-lg", isTopView ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-white/5")}
                                 onClick={() => { setIsWalkthrough(false); setIsTopView(!isTopView); }}
                             >
-                                <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Top View
+                                <MapIcon className="h-3 w-3 mr-1.5" /> Ortho
                             </Button>
                             <Button
-                                variant="outline" size="sm"
-                                className={cn("h-8 backdrop-blur-md text-xs px-3 transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/70 border-border")}
-                                onClick={() => { setIsTopView(false); setIsWalkthrough(!isWalkthrough); if (!isWalkthrough) { toast({ title: "Walkthrough Active", description: "W/A/S/D to move. Click to look. ESC to exit." }); } }}
+                                variant="ghost" size="sm"
+                                className={cn("h-7 text-[9px] font-black uppercase tracking-wider px-2 transition-all rounded-lg", isWalkthrough ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-white/5")}
+                                onClick={() => { setIsTopView(false); setIsWalkthrough(!isWalkthrough); if (!isWalkthrough) { toast({ title: "Walkthrough Active", description: "Use WASD to move. Click to look." }); } }}
                             >
-                                <Footprints className="h-3.5 w-3.5 mr-1.5" /> Walk
+                                <Footprints className="h-3 w-3 mr-1.5" /> Walk
                             </Button>
-                            <Button variant="outline" size="sm" className="h-8 bg-background/70 backdrop-blur-md border-border text-xs px-3" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
-                                Export SVG
+                            <div className="w-[1px] h-3 bg-white/20 mx-1" />
+                            <Button variant="ghost" size="sm" className="h-7 text-muted-foreground hover:bg-white/5 text-[9px] font-black uppercase tracking-wider px-2" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
+                                <FileCode className="h-3 w-3 mr-1.5" /> SVG
                             </Button>
-                            <Button variant="outline" size="sm" className="h-8 bg-background/70 backdrop-blur-md border-border text-xs px-3" onClick={() => setShowCost(!showCost)}>
-                                <Calculator className="h-3.5 w-3.5 mr-1.5" /> Cost
+                            <Button variant="ghost" size="sm" className="h-7 text-muted-foreground hover:bg-white/5 text-[9px] font-black uppercase tracking-wider px-2" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
+                                <FileBox className="h-3 w-3 mr-1.5" /> DXF
                             </Button>
+                            <Button variant="ghost" size="sm" className="h-7 text-muted-foreground hover:bg-white/5 text-[9px] font-black uppercase tracking-wider px-2" onClick={() => setShowCost(!showCost)}>
+                                <Calculator className="h-3 w-3 mr-1.5" /> Budget
+                            </Button>
+                            <div className="w-[1px] h-3 bg-white/20 mx-1" />
                             <Button
-                                size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3"
+                                size="sm" className="h-7 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[9px] uppercase tracking-wider px-3 rounded-lg border-0"
                                 onClick={handleSaveToCloud} disabled={isSaving}
                             >
-                                {isSaving ? <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5 mr-1.5" />}
-                                {isSaving ? 'Saving...' : 'Save'}
-                            </Button>
-                            <Button size="sm" className="h-8 bg-primary text-primary-foreground font-bold text-xs px-3" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
-                                <Download className="h-3.5 w-3.5 mr-1.5" /> DXF
+                                {isSaving ? <RefreshCw className="h-3 w-3 mr-1.5 animate-spin" /> : <CloudUpload className="h-3 w-3 mr-1.5" />}
+                                {isSaving ? 'Syncing...' : 'Save'}
                             </Button>
                         </div>
                     )}
@@ -1530,102 +1536,115 @@ function BlueprintWorkspace() {
                     </div>
                 )}
 
-                {/* Side Panel (Processing Status & Complete Info) */}
+                {/* Side Info Sidebar (Floating Right) */}
                 {status !== 'idle' && !isFullscreen && (
-                    <div className="absolute right-0 top-0 bottom-0 z-20 w-[280px] p-4 pointer-events-none flex flex-col justify-end">
-                        <div className="pointer-events-auto space-y-3">
-                            {/* Analyzing */}
-                            {(status === 'preprocessing' || status === 'analyzing' || status === 'generating') && (
-                                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-                                    className="bg-background/95 backdrop-blur-xl p-6 rounded-2xl border border-border shadow-2xl flex flex-col items-center">
-                                    {(preview || elements?.debug_image) && (
-                                        <div className="w-full h-24 rounded-lg overflow-hidden mb-4 border border-slate-200 bg-white relative">
-                                            <img
-                                                src={elements?.debug_image || preview || undefined}
-                                                alt="Analyzing"
-                                                className={cn(
-                                                    "w-full h-full object-cover transition-opacity duration-1000",
-                                                    status === 'preprocessing' ? "opacity-60" : "opacity-100"
-                                                )}
-                                            />
-                                            {elements?.debug_image && status === 'analyzing' && (
-                                                <div className="absolute inset-0 flex items-center justify-center bg-primary/5">
-                                                    <span className="text-[8px] font-black uppercase text-primary/60 bg-white/80 px-2 py-0.5 rounded shadow-sm">CV Line Map</span>
-                                                </div>
-                                            )}
+                    <div className="absolute right-4 top-16 bottom-20 z-20 w-[240px] pointer-events-none flex flex-col gap-3">
+                        {/* Processing Status */}
+                        {(status === 'preprocessing' || status === 'analyzing' || status === 'generating') && (
+                            <motion.div
+                                initial={{ opacity: 0, x: 20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                className="bg-background/90 backdrop-blur-xl p-4 rounded-2xl border border-white/10 shadow-2xl pointer-events-auto"
+                            >
+                                <div className="flex items-center gap-3 mb-4">
+                                    <div className="relative flex items-center justify-center">
+                                        <div className="absolute inset-0 rounded-full border border-primary/20 animate-ping" />
+                                        <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                                            <Wand2 className="h-5 w-5 text-primary animate-pulse" />
                                         </div>
-                                    )}
-                                    <div className="relative h-14 w-14 flex items-center justify-center mb-3">
-                                        <div className="absolute inset-0 rounded-full border-2 border-[#f97316]/20 animate-ping" />
-                                        <Wand2 className="h-6 w-6 text-[#f97316] animate-pulse" />
                                     </div>
-                                    <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-foreground">
-                                        {status === 'preprocessing' ? ((file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') || file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')) ? 'Extracting Metadata' : 'CV Pre-processing') :
-                                            status === 'analyzing' ? (mode === 'describe' || (file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') || file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')) ? 'Generating Pattern' : 'AI Analysis') :
-                                                'Constructing 3D'}
-                                    </h4>
-                                    <p className="text-[10px] text-muted-foreground mb-3 text-center max-w-[250px] truncate">
-                                        {status === 'preprocessing' ? ((file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') || file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')) ? `Parsing ${file?.name.split('.').pop()?.toUpperCase()} document...` : 'Running OpenCV Line Detection...') :
-                                            file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
+                                    <div>
+                                        <p className="text-[8px] font-black uppercase text-primary tracking-[0.2em]">Processing</p>
+                                        <p className="text-[10px] font-bold text-foreground">AI Generation</p>
+                                    </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <div className="flex justify-between text-[9px] font-black uppercase text-muted-foreground px-0.5">
+                                        <span>Progress</span>
+                                        <span>{Math.round(progress * 100)}%</span>
+                                    </div>
+                                    <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden p-[2px]">
+                                        <motion.div
+                                            className="h-full bg-primary rounded-full"
+                                            initial={{ width: 0 }}
+                                            animate={{ width: `${progress * 100}%` }}
+                                        />
+                                    </div>
+                                    <p className="text-[9px] text-muted-foreground/60 italic text-center pt-1 truncate">
+                                        {status === 'preprocessing' ? 'Analyzing structure...' : status === 'analyzing' ? 'Planning spaces...' : 'Generating 3D...'}
                                     </p>
-                                    <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
-                                        <motion.div className="h-full bg-[#f97316] rounded-full" initial={{ width: 0 }} animate={{ width: `${progress * 100}%` }} transition={{ ease: 'easeOut' }} />
-                                    </div>
-                                    <p className="text-[10px] text-muted-foreground mt-2 font-black">{Math.round(progress * 100)}%</p>
-                                </motion.div>
-                            )}
+                                </div>
+                            </motion.div>
+                        )}
 
-                            {/* Complete */}
-                            {status === 'complete' && (
-                                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-                                    className="bg-white/95 backdrop-blur-xl p-5 rounded-2xl border border-slate-200 shadow-2xl space-y-3">
+                        {/* Complete Details Sidebar */}
+                        {status === 'complete' && elements && (
+                            <motion.div
+                                initial={{ opacity: 0, x: 20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                className="flex-1 min-h-0 bg-background/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl pointer-events-auto flex flex-col overflow-hidden"
+                            >
+                                <div className="p-4 border-b border-white/10 bg-white/5">
                                     <div className="flex items-center gap-3">
-                                        <div className="h-10 w-10 rounded-lg bg-emerald-50 flex items-center justify-center border border-emerald-100">
-                                            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                                        <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30">
+                                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                                         </div>
-                                        <div>
-                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Built Successfully</p>
-                                            <p className="text-[13px] font-bold truncate max-w-[200px] text-slate-800">{elements?.building_name || file?.name || 'Custom Building'}</p>
+                                        <div className="min-w-0">
+                                            <p className="text-[8px] font-black uppercase text-emerald-500 tracking-[0.2em]">Success</p>
+                                            <p className="text-[11px] font-bold text-foreground truncate">{elements.building_name || "Custom Project"}</p>
                                         </div>
                                     </div>
+                                </div>
 
-                                    {elements?.rooms && elements.rooms.length > 0 && (
-                                        <div className="space-y-1.5 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                                            {elements.rooms.map((r, i) => (
-                                                <div key={i} className="flex items-center gap-2 text-[11px] bg-slate-50 border border-slate-100 p-2 rounded-lg">
-                                                    <div className="h-3 w-3 rounded-full border border-slate-200" style={{ backgroundColor: r.floor_color || '#e8d5b7' }} />
-                                                    <span className="font-bold text-slate-600 flex-1 truncate">{r.name}</span>
-                                                    <span className="text-slate-400 font-mono text-[10px]">{r.area?.toFixed(0)} sqm</span>
-                                                </div>
-                                            ))}
+                                <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
+                                    {/* Room Inventory */}
+                                    {elements.rooms && elements.rooms.length > 0 && (
+                                        <div className="space-y-2">
+                                            <h5 className="text-[8px] font-black uppercase text-muted-foreground tracking-widest px-1">Inventory</h5>
+                                            <div className="space-y-1">
+                                                {elements.rooms.map((room, i) => (
+                                                    <div key={i} className="group flex items-center gap-2 p-2 rounded-xl bg-white/5 border border-transparent hover:border-white/10 hover:bg-white/10 transition-all cursor-pointer">
+                                                        <div className="h-2 w-2 rounded-full border border-white/20 shrink-0" style={{ backgroundColor: room.floor_color || '#e8d5b7' }} />
+                                                        <span className="text-[10px] font-bold text-muted-foreground group-hover:text-foreground flex-1 truncate">{room.name}</span>
+                                                        <span className="text-[9px] font-mono text-muted-foreground/60">{room.area?.toFixed(0)}m²</span>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                     )}
 
-                                    {elements?.conflicts && elements.conflicts.length > 0 && (
-                                        <div className="space-y-1 pt-3 border-t border-slate-200">
-                                            <p className="text-[9px] font-black uppercase text-red-500 tracking-widest mb-2">Architectural Issues ({elements.conflicts.length})</p>
-                                            {elements.conflicts.slice(0, 3).map((c, i) => (
-                                                <div key={i} className="p-2 bg-red-50 rounded-lg border border-red-100 flex flex-col gap-0.5">
-                                                    <span className="font-bold text-red-600 text-[10px] uppercase">{c.type}</span>
-                                                    <span className="text-slate-600 text-[11px] leading-tight">{c.description}</span>
-                                                </div>
-                                            ))}
+                                    {/* Issues/Conflicts */}
+                                    {elements.conflicts && elements.conflicts.length > 0 && (
+                                        <div className="space-y-2">
+                                            <h5 className="text-[8px] font-black uppercase text-red-500 tracking-widest px-1">Compliance ({elements.conflicts.length})</h5>
+                                            <div className="space-y-1.5">
+                                                {elements.conflicts.map((conflict, i) => (
+                                                    <div key={i} className="p-2 rounded-xl bg-red-500/5 border border-red-500/20">
+                                                        <div className="flex items-center gap-1.5 mb-1">
+                                                            <div className="h-1 w-1 rounded-full bg-red-500" />
+                                                            <span className="text-[8px] font-black text-red-500 uppercase">{conflict.type}</span>
+                                                        </div>
+                                                        <p className="text-[9px] text-muted-foreground/80 leading-snug">{conflict.description}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                     )}
+                                </div>
 
-                                    <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-200 mt-2">
-                                        <Button variant="outline" size="sm" className="bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 text-[11px] font-bold h-9" onClick={() => {
-                                            if (!elements) return;
-                                            setElements({ ...elements, walls: [...elements.walls, { id: Date.now(), start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7, color: '#f5e6d3', is_exterior: true }] })
-                                        }}>+ Add Wall</Button>
-                                        <Button variant="outline" size="sm" className="bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 text-[11px] font-bold h-9" onClick={() => {
-                                            if (!elements) return;
-                                            setElements({ ...elements, doors: [...elements.doors, { id: Date.now(), host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1, color: '#8B4513' }] })
-                                        }}>+ Add Door</Button>
-                                    </div>
-                                </motion.div>
-                            )}
-                        </div>
+                                {/* Quick Tools */}
+                                <div className="p-3 border-t border-white/10 bg-white/5 grid grid-cols-2 gap-2">
+                                    <Button variant="outline" size="sm" className="h-8 bg-background border-white/10 text-[9px] font-black hover:bg-white/5 rounded-lg" onClick={() => {
+                                        if (!elements) return;
+                                        setElements({ ...elements, walls: [...elements.walls, { id: Date.now(), start: [0, 0], end: [2, 2], thickness: 0.23, height: 2.7, color: '#f5e6d3', is_exterior: true }] })
+                                    }}>+ Wall</Button>
+                                    <Button variant="outline" size="sm" className="h-8 bg-background border-white/10 text-[9px] font-black hover:bg-white/5 rounded-lg" onClick={() => {
+                                        if (!elements) return;
+                                        setElements({ ...elements, doors: [...elements.doors, { id: Date.now(), host_wall_id: 0, position: [1, 1], width: 0.9, height: 2.1, color: '#8B4513' }] })
+                                    }}>+ Door</Button>
+                                </div>
+                            </motion.div>
+                        )}
                     </div>
                 )}
             </div>
