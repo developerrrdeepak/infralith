@@ -623,6 +623,22 @@ function GeneratedStructure({ progress, data, onSelect }: { progress: number, da
                         />
                     ))}
 
+                    {/* Procedurally Generated Furniture / Decor */}
+                    {data.furnitures?.map((furniture, i) => {
+                        const zPos = (furniture.floor_level || 0) * 2.8;
+                        return (
+                            <group key={`furniture-${i}`} position={[furniture.position[0], zPos + furniture.height / 2, furniture.position[1]]}>
+                                <AIAssetRenderer
+                                    description={furniture.description}
+                                    width={furniture.width}
+                                    height={furniture.height}
+                                    depth={furniture.depth}
+                                    fallbackColor={furniture.color || "#cccccc"}
+                                />
+                            </group>
+                        );
+                    })}
+
                     {/* Roof */}
                     {data.roof && <RoofMesh roof={data.roof} />}
 

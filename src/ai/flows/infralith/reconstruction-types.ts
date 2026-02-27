@@ -46,6 +46,19 @@ export interface RoofGeometry {
     color?: string;
 }
 
+export interface FurnitureGeometry {
+    id: string | number;
+    room_id?: string | number;
+    type: string; // e.g. "sofa", "bed", "dining table", "hvac"
+    position: [number, number]; // [x, z] center position
+    width: number;
+    depth: number;
+    height: number;
+    color?: string;
+    description: string; // detailed description for AI asset generation
+    floor_level?: number;
+}
+
 export interface ConstructionConflict {
     type: 'structural' | 'safety' | 'code';
     severity: 'low' | 'medium' | 'high';
@@ -71,6 +84,7 @@ export interface GeometricReconstruction {
     doors: DoorGeometry[];
     windows: WindowGeometry[];
     rooms: RoomGeometry[];
+    furnitures?: FurnitureGeometry[];
     roof?: RoofGeometry;
     conflicts: ConstructionConflict[];
     building_name?: string;

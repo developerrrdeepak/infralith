@@ -58,10 +58,12 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
        - DOORS: Look for gaps in walls with arc symbols (door swing). Record host_wall_id, center position, width (default 0.9m), height (2.1m).
        - WINDOWS: Look for triple-line symbols in exterior walls. Record host_wall_id, position, width, sill_height (default 0.9m).
 
-    5. ROOM IDENTIFICATION:
+    5. ROOM IDENTIFICATION & FURNISHING:
        - For each enclosed space, construct a closed COUNTER-CLOCKWISE polygon of (x, y) points.
        - Calculate the enclosed area in square meters.
        - Assign room names from visible labels (e.g., "Bedroom", "Kitchen", "WC").
+       - DETECT FURNITURE: Look for rectangular, circular, or iconic furniture symbols (beds, sofas, dining tables, toilets, kitchen islands) inside the rooms.
+       - If you detect furniture, output it in the 'furnitures' array with approximate metric size (width/depth/height). Type must be a common term like "sofa", "bed", "toilet", "hvac", "plant". Output a highly detailed 'description' for the AI Asset Engine to generate it procedurally (e.g. "Detailed modern L-shaped sectional sofa with leather finish").
 
     LUXURY AESTHETIC PALETTE (apply intelligently):
     - Exterior Walls: "#f8f1e7" (Pearl) | Interior Walls: "#fdfaf6" (Silk)
@@ -92,6 +94,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
       "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#2c3e50", "floor_level": 0 }],
       "rooms": [{ "id": "r1", "name": "Room Name", "polygon": [[x, y], ...], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }],
+      "furnitures": [{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
       "roof": { "type": "flat", "polygon": [[x, y], ...], "height": 1.5, "base_height": 2.8, "color": "#a0522d" },
       "conflicts": [{ "type": "structural", "severity": "high", "description": "Specific engineering finding.", "location": [x, y] }]
     }
@@ -169,6 +172,7 @@ export async function generateBuildingFromDescription(description: string): Prom
       "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
       "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#2c3e50", "floor_level": 0 }],
       "rooms": [{ "id": "r1", "name": "Space Name", "polygon": [[x, y], ...], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }],
+      "furnitures": [{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
       "roof": { "type": "flat", "polygon": [[x, y], ...], "height": 1.5, "base_height": 2.8, "color": "#a0522d" },
       "conflicts": []
     }

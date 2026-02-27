@@ -67,6 +67,18 @@ const GeometricReconstructionSchema = z.object({
         floor_color: z.string(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of rooms"),
+    furnitures: z.array(z.object({
+        id: z.union([z.string(), z.number()]),
+        room_id: z.union([z.string(), z.number()]).optional(),
+        type: z.string(),
+        position: z.array(z.number()),
+        width: z.number(),
+        depth: z.number(),
+        height: z.number(),
+        color: z.string().optional(),
+        description: z.string(),
+        floor_level: z.number().optional()
+    })).optional().describe("Interior furniture or equipment elements"),
     roof: z.object({
         type: z.enum(['flat', 'gable', 'hip']),
         polygon: z.array(z.array(z.number())),
@@ -110,8 +122,8 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         const result = await generateObject({
             model: getAzureModel(true),
             schema: dynamicSchema || GeometricReconstructionSchema,
-            temperature: 0.8, // Increased for architectural variety
-            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project. All coordinates are in pixels unless specified.",
+            temperature: 0.1, // Reduced to prevent unclosed JSON from hallucinated extreme details
+            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project.",
             messages: [
                 {
                     role: "user",
@@ -145,7 +157,7 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
         const result = await generateObject({
             model: getAzureModel(false),
             schema: dynamicSchema || GeometricReconstructionSchema,
-            temperature: 0.9, // Higher variety for design brainstorming
+            temperature: 0.2, // Lower variety for strict structured output without hallucinated massive structures
             system: "You are an expert Engineering Intelligence Agent. Generate a precise JSON analysis or reconstruction based on the input context.",
             prompt: prompt
         });
