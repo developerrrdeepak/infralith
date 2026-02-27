@@ -38,7 +38,9 @@ import {
     Minimize2,
     ArrowUpRight,
     ChevronRight,
-    ChevronUp
+    ChevronUp,
+    FileCode,
+    FileBox
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
