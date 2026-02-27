@@ -1292,7 +1292,7 @@ function BlueprintWorkspace() {
                         </Canvas>
 
                         {/* Overlays */}
-                        {status === 'complete' && (
+                        {status === 'complete' && !isFullscreen && (
                             <div className="absolute top-20 right-6 flex flex-col gap-2">
                                 <Badge className="bg-primary/20 backdrop-blur-md border-primary/30 text-primary font-black uppercase text-[10px] py-1 px-3 tracking-widest shadow-xl">
                                     {elements?.building_name || 'BUILDING'}
@@ -1308,7 +1308,7 @@ function BlueprintWorkspace() {
                             </div>
                         )}
 
-                        {preview && status !== 'idle' && (
+                        {preview && status !== 'idle' && !isFullscreen && (
                             <div className="absolute bottom-6 right-6">
                                 <div className="w-24 h-24 rounded-xl overflow-hidden border-2 border-primary/30 shadow-2xl">
                                     <img src={preview} alt="Blueprint" className="w-full h-full object-cover" />
@@ -1357,7 +1357,7 @@ function BlueprintWorkspace() {
                         )}
 
                         {/* Sunlight Simulation Timeline */}
-                        {status === 'complete' && elements && (
+                        {status === 'complete' && elements && !isFullscreen && (
                             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md pointer-events-auto">
                                 <div className="bg-background/80 backdrop-blur-xl border border-border p-3 rounded-[20px] shadow-2xl flex items-center gap-4">
                                     <Moon className="h-4 w-4 text-slate-400 shrink-0" />
@@ -1418,7 +1418,7 @@ function BlueprintWorkspace() {
                             </div>
                         )}
 
-                        {selectedElement && !showCost && (
+                        {selectedElement && !showCost && !isFullscreen && (
                             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                                 className="absolute bottom-6 left-6 p-5 bg-background/95 backdrop-blur-xl border border-border rounded-[20px] shadow-2xl w-[320px] pointer-events-auto z-40">
                                 <h3 className="font-black text-foreground tracking-tight mb-4 flex items-center justify-between">
@@ -1562,7 +1562,7 @@ function BlueprintWorkspace() {
                 )}
 
                 {/* Side Panel Overlay (Progress & Completed Status) */}
-                {status !== 'idle' && (
+                {status !== 'idle' && !isFullscreen && (
                     <div className="relative z-10 w-full md:w-[380px] p-6 h-full pointer-events-none flex flex-col ml-auto">
                         <div className="mt-auto pointer-events-auto">
                             {/* Analyzing */}
