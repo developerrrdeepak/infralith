@@ -31,12 +31,11 @@ import {
     FolderOpen,
     Map as MapIcon,
     CloudUpload,
-    Stairs,
     Settings,
     ChevronDown,
     Layers,
-    Maximize,
-    Minimize,
+    Maximize2,
+    Minimize2,
     ArrowUpRight,
     ChevronRight,
     ChevronUp
@@ -1030,7 +1029,7 @@ function BlueprintWorkspace() {
                         <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setShowProjects(true)} title="Projects"><Library className="h-5 w-5" /></button>
                         <div className="w-8 h-[1px] bg-white/10 my-2" />
                         <button className="p-3 bg-[#f8a14d]/10 text-[#f8a14d] border border-[#f8a14d]/20 rounded-2xl transition-all" title="Selection"><MapIcon className="h-5 w-5" /></button>
-                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Structural"><Stairs className="h-5 w-5" /></button>
+                        <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Structural"><Layers className="h-5 w-5" /></button>
                         <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setIsWalkthrough(!isWalkthrough)} title="3D Navigation"><Footprints className="h-5 w-5" /></button>
                         <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" title="Assets"><Box className="h-5 w-5" /></button>
                         <button className="p-3 text-white/50 hover:text-white hover:bg-white/10 rounded-2xl transition-all" onClick={() => setShowCost(true)} title="Estimates"><Calculator className="h-5 w-5" /></button>
@@ -1157,7 +1156,7 @@ function BlueprintWorkspace() {
                     {status === 'complete' && elements && (
                         <div className="flex gap-2 pointer-events-auto">
                             <Button variant="ghost" size="sm" className="h-9 text-primary font-black hover:bg-primary/10 mr-2" onClick={() => setIsFullscreen(true)}>
-                                <Maximize className="h-4 w-4 mr-2" /> Immersive Mode
+                                <Maximize2 className="h-4 w-4 mr-2" /> Immersive Mode
                             </Button>
                             <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={resetState}>
                                 <RefreshCw className="h-4 w-4 mr-2" /> New
