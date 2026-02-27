@@ -605,17 +605,6 @@ function GeneratedStructure({ progress, data, onSelect }: { progress: number, da
                                         metalness={0.05}
                                     />
                                 </mesh>
-                                {/* Level label */}
-                                <Html position={[cx, zPos + 0.15, cz]} distanceFactor={14} center>
-                                    <div className="px-3 py-1 bg-black/80 backdrop-blur-md rounded-lg shadow-2xl border border-white/10 flex flex-col items-center">
-                                        <p className="text-[9px] font-black uppercase text-white select-none whitespace-nowrap tracking-widest mb-0.5">
-                                            {room.name} {room.floor_level !== undefined ? `• L${room.floor_level}` : ''}
-                                        </p>
-                                        {room.area > 0 && (
-                                            <p className="text-[7px] text-primary/80 font-bold">{room.area.toFixed(0)}m²</p>
-                                        )}
-                                    </div>
-                                </Html>
                             </group>
                         );
                     })}
@@ -1129,66 +1118,60 @@ function BlueprintWorkspace() {
 
             {/* --- STANDARD (PRE-COMPLETION) UI --- */}
             {!isFullscreen && (
-                <div className="flex items-center justify-between px-6 py-4 z-30 pointer-events-none absolute top-0 w-full">
-                    <div className="flex items-center gap-6 pointer-events-auto">
-                        <h1 className="text-xl font-black tracking-tight flex items-center gap-2">
-                            <Box className="h-6 w-6 text-primary" />
+                <div className="flex flex-col z-30 pointer-events-none absolute top-0 w-full px-4 pt-3 pb-2 gap-2 bg-gradient-to-b from-background/80 to-transparent backdrop-blur-sm">
+                    {/* Row 1: Title + My Projects */}
+                    <div className="flex items-center justify-between pointer-events-auto">
+                        <h1 className="text-lg font-black tracking-tight flex items-center gap-2">
+                            <Box className="h-5 w-5 text-primary shrink-0" />
                             <span className="text-gradient">3D Building Generator</span>
                         </h1>
-                        <Button variant="ghost" size="sm" className="h-9 text-muted-foreground hover:text-foreground font-bold" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
-                            <Library className="h-4 w-4 mr-2" /> My Projects
-                        </Button>
+                        <div className="flex items-center gap-2">
+                            <Button variant="ghost" size="sm" className="h-8 text-muted-foreground hover:text-foreground font-bold text-xs" onClick={() => { setShowProjects(!showProjects); if (!showProjects) fetchProjects(); }}>
+                                <Library className="h-4 w-4 mr-1.5" /> My Projects
+                            </Button>
+                            {status === 'complete' && elements && (
+                                <Button variant="ghost" size="sm" className="h-8 text-primary font-black hover:bg-primary/10 text-xs" onClick={() => setIsFullscreen(true)}>
+                                    <Maximize2 className="h-4 w-4 mr-1.5" /> Immersive
+                                </Button>
+                            )}
+                        </div>
                     </div>
+
+                    {/* Row 2: Action Buttons (only when complete) */}
                     {status === 'complete' && elements && (
-                        <div className="flex gap-2 pointer-events-auto">
-                            <Button variant="ghost" size="sm" className="h-9 text-primary font-black hover:bg-primary/10 mr-2" onClick={() => setIsFullscreen(true)}>
-                                <Maximize2 className="h-4 w-4 mr-2" /> Immersive Mode
+                        <div className="flex items-center gap-1.5 pointer-events-auto flex-wrap">
+                            <Button variant="outline" size="sm" className="h-8 bg-background/70 backdrop-blur-md border-border text-xs px-3" onClick={resetState}>
+                                <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> New
                             </Button>
-                            <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={resetState}>
-                                <RefreshCw className="h-4 w-4 mr-2" /> New
+                            <Button
+                                variant="outline" size="sm"
+                                className={cn("h-8 backdrop-blur-md text-xs px-3 transition-colors", isTopView ? "bg-primary text-primary-foreground border-primary" : "bg-background/70 border-border")}
+                                onClick={() => { setIsWalkthrough(false); setIsTopView(!isTopView); }}
+                            >
+                                <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Top View
                             </Button>
-                            <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
+                            <Button
+                                variant="outline" size="sm"
+                                className={cn("h-8 backdrop-blur-md text-xs px-3 transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/70 border-border")}
+                                onClick={() => { setIsTopView(false); setIsWalkthrough(!isWalkthrough); if (!isWalkthrough) { toast({ title: "Walkthrough Active", description: "W/A/S/D to move. Click to look. ESC to exit." }); } }}
+                            >
+                                <Footprints className="h-3.5 w-3.5 mr-1.5" /> Walk
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-8 bg-background/70 backdrop-blur-md border-border text-xs px-3" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
                                 Export SVG
                             </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn("h-9 backdrop-blur-md transition-colors", isTopView ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
-                                onClick={() => {
-                                    setIsWalkthrough(false);
-                                    setIsTopView(!isTopView);
-                                }}
-                            >
-                                <MapIcon className="h-4 w-4 mr-2" /> Top View
+                            <Button variant="outline" size="sm" className="h-8 bg-background/70 backdrop-blur-md border-border text-xs px-3" onClick={() => setShowCost(!showCost)}>
+                                <Calculator className="h-3.5 w-3.5 mr-1.5" /> Cost
                             </Button>
                             <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn("h-9 backdrop-blur-md transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
-                                onClick={() => {
-                                    setIsTopView(false);
-                                    setIsWalkthrough(!isWalkthrough);
-                                    if (!isWalkthrough) {
-                                        toast({ title: "Walkthrough Active", description: "Click on the scene to look around. Use W, A, S, D to move. Press ESC to free your mouse." });
-                                    }
-                                }}
+                                size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3"
+                                onClick={handleSaveToCloud} disabled={isSaving}
                             >
-                                <Footprints className="h-4 w-4 mr-2" /> Walk
+                                {isSaving ? <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5 mr-1.5" />}
+                                {isSaving ? 'Saving...' : 'Save'}
                             </Button>
-                            <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => setShowCost(!showCost)}>
-                                <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
-                            </Button>
-                            <Button
-                                size="sm"
-                                className="h-9 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
-                                onClick={handleSaveToCloud}
-                                disabled={isSaving}
-                            >
-                                {isSaving ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <CloudUpload className="h-4 w-4 mr-2" />}
-                                {isSaving ? "Syncing..." : "Save to Cloud"}
-                            </Button>
-                            <Button size="sm" className="h-9 bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
-                                <Download className="h-4 w-4 mr-2" /> Export CAD (DXF)
+                            <Button size="sm" className="h-8 bg-primary text-primary-foreground font-bold text-xs px-3" onClick={() => downloadStringAsFile(exportToDXF(elements, activeFloor), 'floorplan.dxf', 'application/dxf')}>
+                                <Download className="h-3.5 w-3.5 mr-1.5" /> DXF
                             </Button>
                         </div>
                     )}
@@ -1547,10 +1530,10 @@ function BlueprintWorkspace() {
                     </div>
                 )}
 
-                {/* Side Panel Overlay (Progress & Completed Status) */}
+                {/* Side Panel (Processing Status & Complete Info) */}
                 {status !== 'idle' && !isFullscreen && (
-                    <div className="relative z-10 w-full md:w-[380px] p-6 h-full pointer-events-none flex flex-col ml-auto">
-                        <div className="mt-auto pointer-events-auto">
+                    <div className="absolute right-0 top-0 bottom-0 z-20 w-[280px] p-4 pointer-events-none flex flex-col justify-end">
+                        <div className="pointer-events-auto space-y-3">
                             {/* Analyzing */}
                             {(status === 'preprocessing' || status === 'analyzing' || status === 'generating') && (
                                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
