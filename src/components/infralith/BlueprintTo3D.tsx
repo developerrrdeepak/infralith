@@ -195,204 +195,6 @@ function ConflictMarker({ conflict }: { conflict: ConstructionConflict }) {
     );
 }
 
-// -- Stylized Tree Component --
-
-function Tree({ position, scale = 1 }: { position: [number, number, number], scale?: number }) {
-    return (
-        <group position={position} scale={scale}>
-            {/* Trunk */}
-            <mesh position={[0, 0.6, 0]} castShadow>
-                <cylinderGeometry args={[0.08, 0.12, 1.2, 6]} />
-                <meshStandardMaterial color="#5c3a1e" roughness={0.9} />
-            </mesh>
-            {/* Foliage layers */}
-            <mesh position={[0, 1.6, 0]} castShadow>
-                <sphereGeometry args={[0.6, 8, 6]} />
-                <meshStandardMaterial color="#3d7a3a" roughness={0.8} />
-            </mesh>
-            <mesh position={[0, 2.0, 0]} castShadow>
-                <sphereGeometry args={[0.45, 8, 6]} />
-                <meshStandardMaterial color="#4a9e45" roughness={0.8} />
-            </mesh>
-            <mesh position={[0, 2.3, 0]} castShadow>
-                <sphereGeometry args={[0.3, 8, 6]} />
-                <meshStandardMaterial color="#5cb356" roughness={0.8} />
-            </mesh>
-        </group>
-    );
-}
-
-// -- Bush / Shrub Component --
-
-function Bush({ position, color = "#3d8b37" }: { position: [number, number, number], color?: string }) {
-    return (
-        <mesh position={position} castShadow>
-            <sphereGeometry args={[0.3, 6, 5]} />
-            <meshStandardMaterial color={color} roughness={0.85} />
-        </mesh>
-    );
-}
-
-// -- Boundary Wall with Gate --
-
-function BoundaryWall({ bounds }: { bounds: { minX: number, maxX: number, minZ: number, maxZ: number } }) {
-    const { minX, maxX, minZ, maxZ } = bounds;
-    const pad = 3;
-    const wallH = 1.2;
-    const wallT = 0.12;
-    const bX1 = minX - pad, bX2 = maxX + pad, bZ1 = minZ - pad, bZ2 = maxZ + pad;
-    const gateW = 3;
-    const cx = (bX1 + bX2) / 2;
-
-    return (
-        <group>
-            {/* Front wall (left of gate) */}
-            <mesh position={[(bX1 + (cx - gateW / 2)) / 2, wallH / 2, bZ1]} castShadow>
-                <boxGeometry args={[(cx - gateW / 2) - bX1, wallH, wallT]} />
-                <meshStandardMaterial color="#d4c4a0" roughness={0.7} />
-                <Edges color="#b5a580" threshold={15} />
-            </mesh>
-            {/* Front wall (right of gate) */}
-            <mesh position={[((cx + gateW / 2) + bX2) / 2, wallH / 2, bZ1]} castShadow>
-                <boxGeometry args={[bX2 - (cx + gateW / 2), wallH, wallT]} />
-                <meshStandardMaterial color="#d4c4a0" roughness={0.7} />
-                <Edges color="#b5a580" threshold={15} />
-            </mesh>
-            {/* Gate pillars */}
-            <mesh position={[cx - gateW / 2, wallH * 0.7, bZ1]} castShadow>
-                <boxGeometry args={[0.3, wallH * 1.4, 0.3]} />
-                <meshStandardMaterial color="#c4b48a" roughness={0.6} />
-            </mesh>
-            <mesh position={[cx + gateW / 2, wallH * 0.7, bZ1]} castShadow>
-                <boxGeometry args={[0.3, wallH * 1.4, 0.3]} />
-                <meshStandardMaterial color="#c4b48a" roughness={0.6} />
-            </mesh>
-            {/* Gate bars */}
-            {[-1, -0.5, 0, 0.5, 1].map((offset, i) => (
-                <mesh key={`gate-${i}`} position={[cx + offset * 0.5, wallH * 0.5, bZ1]}>
-                    <cylinderGeometry args={[0.02, 0.02, wallH * 0.8, 4]} />
-                    <meshStandardMaterial color="#2a2a2a" metalness={0.9} roughness={0.3} />
-                </mesh>
-            ))}
-            {/* Back wall */}
-            <mesh position={[cx, wallH / 2, bZ2]} castShadow>
-                <boxGeometry args={[bX2 - bX1, wallH, wallT]} />
-                <meshStandardMaterial color="#d4c4a0" roughness={0.7} />
-            </mesh>
-            {/* Left wall */}
-            <mesh position={[bX1, wallH / 2, (bZ1 + bZ2) / 2]} castShadow>
-                <boxGeometry args={[wallT, wallH, bZ2 - bZ1]} />
-                <meshStandardMaterial color="#d4c4a0" roughness={0.7} />
-            </mesh>
-            {/* Right wall */}
-            <mesh position={[bX2, wallH / 2, (bZ1 + bZ2) / 2]} castShadow>
-                <boxGeometry args={[wallT, wallH, bZ2 - bZ1]} />
-                <meshStandardMaterial color="#d4c4a0" roughness={0.7} />
-            </mesh>
-            {/* Driveway */}
-            <mesh position={[cx, 0.01, bZ1 - pad / 2 + 0.5]} rotation={[-Math.PI / 2, 0, 0]}>
-                <planeGeometry args={[gateW - 0.5, pad]} />
-                <meshStandardMaterial color="#9e9e9e" roughness={0.95} />
-            </mesh>
-        </group>
-    );
-}
-
-// -- Staircase --
-
-function Staircase({ position, floors = 1 }: { position: [number, number, number], floors?: number }) {
-    const stepsPerFloor = 14;
-    const stepH = 0.19;
-    const stepD = 0.28;
-    const stepW = 1.2;
-    const totalSteps = stepsPerFloor * floors;
-
-    return (
-        <group position={position}>
-            {Array.from({ length: totalSteps }).map((_, i) => (
-                <mesh key={`step-${i}`} position={[0, stepH * i + stepH / 2, stepD * i]} castShadow>
-                    <boxGeometry args={[stepW, stepH, stepD]} />
-                    <meshStandardMaterial color="#e0d5c0" roughness={0.5} />
-                </mesh>
-            ))}
-            {/* Railing */}
-            {[stepW / 2 + 0.05, -stepW / 2 - 0.05].map((xOff, ri) => (
-                <group key={`rail-${ri}`}>
-                    {[0, Math.floor(totalSteps / 2), totalSteps - 1].map((si, pi) => (
-                        <mesh key={`post-${ri}-${pi}`} position={[xOff, stepH * si + 0.5, stepD * si]}>
-                            <cylinderGeometry args={[0.03, 0.03, 1, 6]} />
-                            <meshStandardMaterial color="#2a2a2a" metalness={0.8} roughness={0.3} />
-                        </mesh>
-                    ))}
-                </group>
-            ))}
-        </group>
-    );
-}
-
-// -- Pergola --
-
-function Pergola({ position, width = 4, depth = 3, height = 2.8 }: { position: [number, number, number], width?: number, depth?: number, height?: number }) {
-    const beamCount = 5;
-    return (
-        <group position={position}>
-            {/* 4 corner posts */}
-            {[[-width / 2, -depth / 2], [width / 2, -depth / 2], [-width / 2, depth / 2], [width / 2, depth / 2]].map(([x, z], i) => (
-                <mesh key={`post-${i}`} position={[x, height / 2, z]} castShadow>
-                    <boxGeometry args={[0.12, height, 0.12]} />
-                    <meshStandardMaterial color="#5c3a1e" roughness={0.6} />
-                </mesh>
-            ))}
-            {/* Crossbeams */}
-            {Array.from({ length: beamCount }).map((_, i) => {
-                const z = -depth / 2 + (depth / (beamCount - 1)) * i;
-                return (
-                    <mesh key={`beam-${i}`} position={[0, height, z]} castShadow>
-                        <boxGeometry args={[width + 0.4, 0.08, 0.1]} />
-                        <meshStandardMaterial color="#5c3a1e" roughness={0.6} />
-                    </mesh>
-                );
-            })}
-        </group>
-    );
-}
-
-// -- Balcony --
-
-function Balcony({ position, width = 3, depth = 1.2 }: { position: [number, number, number], width?: number, depth?: number }) {
-    const railH = 0.9;
-    const railPosts = 6;
-    return (
-        <group position={position}>
-            {/* Slab */}
-            <mesh position={[0, 0, depth / 2]} castShadow receiveShadow>
-                <boxGeometry args={[width, 0.15, depth]} />
-                <meshStandardMaterial color="#e0d5c0" roughness={0.5} />
-            </mesh>
-            {/* Glass railing */}
-            <mesh position={[0, railH / 2, depth]} castShadow>
-                <boxGeometry args={[width, railH, 0.04]} />
-                <meshStandardMaterial color="#87CEEB" transparent opacity={0.3} metalness={0.5} roughness={0.1} />
-            </mesh>
-            {/* Railing posts */}
-            {Array.from({ length: railPosts }).map((_, i) => {
-                const x = -width / 2 + (width / (railPosts - 1)) * i;
-                return (
-                    <mesh key={i} position={[x, railH / 2, depth]}>
-                        <cylinderGeometry args={[0.02, 0.02, railH, 4]} />
-                        <meshStandardMaterial color="#2a2a2a" metalness={0.9} roughness={0.2} />
-                    </mesh>
-                );
-            })}
-            {/* Top rail */}
-            <mesh position={[0, railH, depth]}>
-                <boxGeometry args={[width, 0.04, 0.04]} />
-                <meshStandardMaterial color="#2a2a2a" metalness={0.8} roughness={0.3} />
-            </mesh>
-        </group>
-    );
-}
-
 // -- Gable Roof --
 
 function RoofMesh({ roof }: { roof: RoofGeometry }) {
@@ -743,43 +545,10 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect }: { pro
 
                     {/* Roof */}
                     {data.roof && <RoofMesh roof={data.roof} />}
-
-                    {/* Staircase (if multi-floor) */}
-                    {Array.from(new Set(data.walls.map(w => w.floor_level || 0))).length > 1 && (
-                        <Staircase position={[(bounds.minX + bounds.maxX) / 2 - 1, 0, (bounds.minZ + bounds.maxZ) / 2]} />
-                    )}
-
-                    {/* Balcony on front */}
-                    <Balcony position={[(bounds.minX + bounds.maxX) / 2 + 2, 2.7, bounds.minZ]} width={3.5} depth={1.3} />
-
-                    {/* Pergola on terrace (back) */}
-                    <Pergola position={[(bounds.minX + bounds.maxX) / 2, (data.roof?.base_height || 2.7) + (data.roof?.height || 1.5) + 0.1, bounds.maxZ - 1.5]} width={4} depth={3} height={2.5} />
                 </group>
             )}
 
-            {/* Boundary Wall */}
-            {p >= 0.5 && <BoundaryWall bounds={bounds} />}
 
-            {/* Landscaping - Trees */}
-            {p >= 0.6 && (
-                <group>
-                    <Tree position={[bounds.maxX + 4, 0, bounds.minZ + 1]} scale={1.2} />
-                    <Tree position={[bounds.maxX + 5, 0, bounds.maxZ - 1]} scale={0.9} />
-                    <Tree position={[bounds.minX - 4, 0, bounds.maxZ]} scale={1.1} />
-                    <Tree position={[bounds.minX - 5, 0, bounds.minZ - 2]} scale={0.8} />
-                    <Tree position={[(bounds.minX + bounds.maxX) / 2 + 6, 0, bounds.maxZ + 5]} scale={1.3} />
-                    <Tree position={[(bounds.minX + bounds.maxX) / 2 - 6, 0, bounds.maxZ + 6]} scale={1.0} />
-
-                    {/* Bushes along boundary */}
-                    {Array.from({ length: 12 }).map((_, i) => (
-                        <Bush key={`bush-${i}`} position={[
-                            bounds.minX - 5 + i * ((bounds.maxX - bounds.minX + 10) / 11),
-                            0.15,
-                            bounds.maxZ + 5
-                        ]} color={i % 2 === 0 ? "#3d8b37" : "#4a9e45"} />
-                    ))}
-                </group>
-            )}
 
             {/* Conflict markers */}
             {p >= 1 && data.conflicts?.map((conflict, i) => (
@@ -791,12 +560,13 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect }: { pro
 
 // -- Walkthrough First Person Controller --
 
-function WalkthroughController({ bounds }: { bounds?: any }) {
+function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] }) {
     const { camera } = useThree();
     const [moveForward, setMoveForward] = useState(false);
     const [moveBackward, setMoveBackward] = useState(false);
     const [moveLeft, setMoveLeft] = useState(false);
     const [moveRight, setMoveRight] = useState(false);
+    const [isSprinting, setIsSprinting] = useState(false);
 
     // Initialize camera position when entering walkthrough
     React.useEffect(() => {
@@ -813,6 +583,7 @@ function WalkthroughController({ bounds }: { bounds?: any }) {
                 case 'KeyA': case 'ArrowLeft': setMoveLeft(true); break;
                 case 'KeyS': case 'ArrowDown': setMoveBackward(true); break;
                 case 'KeyD': case 'ArrowRight': setMoveRight(true); break;
+                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(true); break;
             }
         };
         const handleKeyUp = (e: KeyboardEvent) => {
@@ -821,6 +592,7 @@ function WalkthroughController({ bounds }: { bounds?: any }) {
                 case 'KeyA': case 'ArrowLeft': setMoveLeft(false); break;
                 case 'KeyS': case 'ArrowDown': setMoveBackward(false); break;
                 case 'KeyD': case 'ArrowRight': setMoveRight(false); break;
+                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(false); break;
             }
         };
         document.addEventListener('keydown', handleKeyDown);
@@ -831,26 +603,82 @@ function WalkthroughController({ bounds }: { bounds?: any }) {
         };
     }, []);
 
+    // A simple function to check collision with walls (2D line segments)
+    const checkCollision = (position: THREE.Vector3, radius: number) => {
+        if (!walls) return false;
+        for (const wall of walls) {
+            // wall is a segment from { x: start[0], z: start[1] } to { x: end[0], z: end[1] }
+            const p = new THREE.Vector2(position.x, position.z);
+            const a = new THREE.Vector2(wall.start[0], wall.start[1]);
+            const b = new THREE.Vector2(wall.end[0], wall.end[1]);
+
+            const ab = new THREE.Vector2().subVectors(b, a);
+            const ap = new THREE.Vector2().subVectors(p, a);
+            let t = ap.dot(ab) / ab.lengthSq();
+            t = Math.max(0, Math.min(1, t)); // clamp
+
+            const closest = new THREE.Vector2().addVectors(a, ab.multiplyScalar(t));
+            const distance = p.distanceTo(closest);
+
+            // wall.thickness is around 0.2 to 0.4. Add half thickness to collision radius
+            if (distance < radius + (wall.thickness || 0.2) / 2) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     useFrame((state, delta) => {
-        const speed = 4.0 * delta;
+        const baseSpeed = 4.0;
+        const sprintMultiplier = isSprinting ? 2.5 : 1.0;
+        const speed = baseSpeed * sprintMultiplier * delta;
+
         const vel = new THREE.Vector3();
         if (moveForward) vel.z -= 1;
         if (moveBackward) vel.z += 1;
         if (moveLeft) vel.x -= 1;
         if (moveRight) vel.x += 1;
 
-        if (vel.length() > 0) {
+        if (vel.lengthSq() > 0) {
             vel.normalize().multiplyScalar(speed);
             const eul = new THREE.Euler(0, camera.rotation.y, 0);
             vel.applyEuler(eul);
-            camera.position.add(vel);
+
+            // Calculate next position
+            const nextPosition = camera.position.clone().add(vel);
+
+            // Collision check (radius 0.4 for the player)
+            if (!checkCollision(nextPosition, 0.4)) {
+                camera.position.add(vel);
+
+                // Head bobbing effect
+                const time = state.clock.getElapsedTime();
+                const bobFrequency = isSprinting ? 15 : 10;
+                const bobAmplitude = isSprinting ? 0.08 : 0.05;
+                camera.position.y = 1.7 + Math.sin(time * bobFrequency) * bobAmplitude;
+            } else {
+                // Sliding against the wall (try X and Z independently)
+                const nextX = camera.position.clone();
+                nextX.x += vel.x;
+                if (!checkCollision(nextX, 0.4)) {
+                    camera.position.x += vel.x;
+                } else {
+                    const nextZ = camera.position.clone();
+                    nextZ.z += vel.z;
+                    if (!checkCollision(nextZ, 0.4)) {
+                        camera.position.z += vel.z;
+                    }
+                }
+            }
 
             // Boundary constraints
             if (bounds) {
                 camera.position.x = Math.max(bounds.minX - 5, Math.min(bounds.maxX + 5, camera.position.x));
                 camera.position.z = Math.max(bounds.minZ - 5, Math.min(bounds.maxZ + 5, camera.position.z));
             }
-            camera.position.y = 1.7; // Lock player height
+        } else {
+            // Return to resting height smoothly
+            camera.position.y = THREE.MathUtils.lerp(camera.position.y, 1.7, 0.1);
         }
     });
 
@@ -1116,37 +944,6 @@ function BlueprintWorkspace() {
                         onMouseEnter={() => setIsLeftPanelExpanded(true)}
                         onMouseLeave={() => setIsLeftPanelExpanded(false)}
                     >
-                        {/* Tool Group: BUILD */}
-                        <div className="w-full space-y-2">
-                            {isLeftPanelExpanded && <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2 px-2">Build</p>}
-                            <ToolButton
-                                icon={<Square className="h-4 w-4" />}
-                                label="Wall"
-                                active={activeTool === 'wall'}
-                                onClick={() => setActiveTool('wall')}
-                                expanded={isLeftPanelExpanded}
-                                shortcut="W"
-                            />
-                            <ToolButton
-                                icon={<DoorOpen className="h-4 w-4" />}
-                                label="Door"
-                                active={activeTool === 'door'}
-                                onClick={() => setActiveTool('door')}
-                                expanded={isLeftPanelExpanded}
-                                shortcut="D"
-                            />
-                            <ToolButton
-                                icon={<WindowIcon className="h-4 w-4" />}
-                                label="Window"
-                                active={activeTool === 'window'}
-                                onClick={() => setActiveTool('window')}
-                                expanded={isLeftPanelExpanded}
-                                shortcut="N"
-                            />
-                        </div>
-
-                        <div className="w-full h-[1px] bg-white/5 my-6" />
-
                         {/* Tool Group: EDIT */}
                         <div className="w-full space-y-2">
                             {isLeftPanelExpanded && <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2 px-2">Edit</p>}
@@ -1465,12 +1262,15 @@ function BlueprintWorkspace() {
                             style={{ background: 'transparent' }}
                         >
                             {isWalkthrough ? (
-                                <WalkthroughController bounds={elements ? {
-                                    minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                    maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                    minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                    maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                } : undefined} />
+                                <WalkthroughController
+                                    bounds={elements ? {
+                                        minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                        maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                        minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                        maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                    } : undefined}
+                                    walls={elements?.walls}
+                                />
                             ) : (
                                 <OrbitControls
                                     makeDefault
@@ -1532,6 +1332,23 @@ function BlueprintWorkspace() {
                                 </EffectComposer>
                             </Suspense>
                         </Canvas>
+
+                        {/* PUBG-style Walkthrough UI */}
+                        {isWalkthrough && status !== 'idle' && (
+                            <>
+                                {/* Crosshair */}
+                                <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-[100]">
+                                    <div className="w-1.5 h-1.5 bg-white/80 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)] border border-black/50" />
+                                </div>
+                                {/* Instructions */}
+                                <div className="absolute top-8 left-1/2 -translate-x-1/2 pointer-events-none z-[100]">
+                                    <div className="bg-black/40 backdrop-blur-sm border border-white/10 text-white px-5 py-2.5 rounded-xl shadow-2xl flex flex-col items-center">
+                                        <span className="text-[11px] font-black tracking-widest uppercase mb-1">Interactive Walkthrough Enabled</span>
+                                        <span className="text-[9px] font-bold text-white/60 tracking-wider">CLICK TO LOOK AROUND • WASD TO MOVE • SHIFT TO SPRINT • ESC TO UNLOCK MOUSE</span>
+                                    </div>
+                                </div>
+                            </>
+                        )}
 
                         {/* Overlays */}
                         {status === 'complete' && !isFullscreen && (
