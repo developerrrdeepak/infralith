@@ -11,7 +11,7 @@ import {
 import { applyBuildingCodes } from './building-codes';
 import { z } from 'zod';
 
-export const AIAssetSchema = z.object({
+const AIAssetSchema = z.object({
   name: z.string(),
   parts: z.array(z.object({
     name: z.string(),

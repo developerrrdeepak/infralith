@@ -8,12 +8,14 @@ import {
     ContactShadows,
     Html,
     Edges,
-    MeshDistortMaterial
+    MeshDistortMaterial,
+    PointerLockControls
 } from '@react-three/drei';
 import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postprocessing';
 import { Geometry, Base, Subtraction } from '@react-three/csg';
 import * as THREE from 'three';
-import { AlertTriangle, ShieldAlert, PenLine, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { useThree } from '@react-three/fiber';
+import { AlertTriangle, ShieldAlert, PenLine, Image as ImageIcon, Sparkles, Footprints } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
     Upload,
@@ -63,9 +65,9 @@ function ConflictMarker({ conflict }: { conflict: ConstructionConflict }) {
                 <octahedronGeometry args={[0.3, 0]} />
                 <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2} transparent opacity={0.8} />
             </mesh>
-            <Html distanceFactor={10} position={[0, 2.8, 0]} center>
+            <Html distanceFactor={10} position={[0, 2.8, 0]} center zIndexRange={[100, 0]}>
                 <div className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur-xl shadow-2xl",
+                    "flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur-xl shadow-2xl pointer-events-none",
                     conflict.severity === 'high' ? "bg-red-500/20 border-red-500/50 text-red-500" :
                         conflict.severity === 'medium' ? "bg-amber-500/20 border-amber-500/50 text-amber-500" :
                             "bg-blue-500/20 border-blue-500/50 text-blue-500"
@@ -669,6 +671,68 @@ function GeneratedStructure({ progress, data, onSelect }: { progress: number, da
     );
 }
 
+// -- Walkthrough First Person Controller --
+
+function WalkthroughController({ bounds }: { bounds?: any }) {
+    const { camera } = useThree();
+    const [moveForward, setMoveForward] = useState(false);
+    const [moveBackward, setMoveBackward] = useState(false);
+    const [moveLeft, setMoveLeft] = useState(false);
+    const [moveRight, setMoveRight] = useState(false);
+
+    // Initialize camera position when entering walkthrough
+    React.useEffect(() => {
+        if (bounds) {
+            camera.position.set((bounds.minX + bounds.maxX) / 2, 1.7, bounds.maxZ + 5);
+            camera.rotation.set(0, 0, 0);
+        }
+    }, [bounds, camera]);
+
+    React.useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            switch (e.code) {
+                case 'KeyW': case 'ArrowUp': setMoveForward(true); break;
+                case 'KeyA': case 'ArrowLeft': setMoveLeft(true); break;
+                case 'KeyS': case 'ArrowDown': setMoveBackward(true); break;
+                case 'KeyD': case 'ArrowRight': setMoveRight(true); break;
+            }
+        };
+        const handleKeyUp = (e: KeyboardEvent) => {
+            switch (e.code) {
+                case 'KeyW': case 'ArrowUp': setMoveForward(false); break;
+                case 'KeyA': case 'ArrowLeft': setMoveLeft(false); break;
+                case 'KeyS': case 'ArrowDown': setMoveBackward(false); break;
+                case 'KeyD': case 'ArrowRight': setMoveRight(false); break;
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('keyup', handleKeyUp);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('keyup', handleKeyUp);
+        };
+    }, []);
+
+    useFrame((state, delta) => {
+        const speed = 4.0 * delta;
+        const vel = new THREE.Vector3();
+        if (moveForward) vel.z -= 1;
+        if (moveBackward) vel.z += 1;
+        if (moveLeft) vel.x -= 1;
+        if (moveRight) vel.x += 1;
+
+        if (vel.length() > 0) {
+            vel.normalize().multiplyScalar(speed);
+            const eul = new THREE.Euler(0, camera.rotation.y, 0);
+            vel.applyEuler(eul);
+            camera.position.add(vel);
+            camera.position.y = 1.7; // Lock player height
+        }
+    });
+
+    return <PointerLockControls />;
+}
+
 // -- Main Page --
 
 function BlueprintWorkspace() {
@@ -685,6 +749,7 @@ function BlueprintWorkspace() {
     const [projects, setProjects] = useState<any[]>([]);
     const [isLoadingProjects, setIsLoadingProjects] = useState(false);
     const [timeOfDay, setTimeOfDay] = useState(14); // 2 PM default
+    const [isWalkthrough, setIsWalkthrough] = useState(false);
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
@@ -843,6 +908,19 @@ function BlueprintWorkspace() {
                         <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
                             Export SVG
                         </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className={cn("h-9 backdrop-blur-md transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
+                            onClick={() => {
+                                setIsWalkthrough(!isWalkthrough);
+                                if (!isWalkthrough) {
+                                    toast({ title: "Walkthrough Active", description: "Click on the scene to look around. Use W, A, S, D to move. Press ESC to free your mouse." });
+                                }
+                            }}
+                        >
+                            <Footprints className="h-4 w-4 mr-2" /> Walk
+                        </Button>
                         <Button variant="outline" size="sm" className="h-9 bg-background/50 backdrop-blur-md border-border" onClick={() => setShowCost(!showCost)}>
                             <Calculator className="h-4 w-4 mr-2" /> Cost Estimate
                         </Button>
@@ -872,7 +950,16 @@ function BlueprintWorkspace() {
                             gl={{ antialias: true, alpha: true }}
                             style={{ background: 'transparent' }}
                         >
-                            <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete'} autoRotateSpeed={0.35} maxPolarAngle={Math.PI / 2.1} />
+                            {isWalkthrough ? (
+                                <WalkthroughController bounds={elements ? {
+                                    minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                    maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                    minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                    maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                } : undefined} />
+                            ) : (
+                                <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete' && !isWalkthrough} autoRotateSpeed={0.35} maxPolarAngle={Math.PI / 2.1} />
+                            )}
 
                             {/* Environmental Lighting based on Time of Day */}
                             {(() => {

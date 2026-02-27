@@ -53,19 +53,6 @@ export interface ConstructionConflict {
     location: [number, number];
 }
 
-export interface GeometricReconstruction {
-    walls: WallGeometry[];
-    doors: DoorGeometry[];
-    windows: WindowGeometry[];
-    rooms: RoomGeometry[];
-    roof?: RoofGeometry;
-    conflicts: ConstructionConflict[];
-    building_name?: string;
-    exterior_color?: string;
-    debug_image?: string;
-    is_vision_only?: boolean;
-}
-
 export interface AIAssetPart {
     name: string;
     position: [number, number, number];
@@ -77,4 +64,17 @@ export interface AIAssetPart {
 export interface AIAsset {
     name: string;
     parts: AIAssetPart[];
+}
+
+export interface GeometricReconstruction {
+    walls: WallGeometry[];
+    doors: DoorGeometry[];
+    windows: WindowGeometry[];
+    rooms: RoomGeometry[];
+    roof?: RoofGeometry;
+    conflicts: ConstructionConflict[];
+    building_name?: string;
+    exterior_color?: string;
+    debug_image?: string;
+    is_vision_only?: boolean;
 }
