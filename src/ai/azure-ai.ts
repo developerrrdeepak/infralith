@@ -69,16 +69,16 @@ const GeometricReconstructionSchema = z.object({
     })).describe("List of rooms"),
     furnitures: z.array(z.object({
         id: z.union([z.string(), z.number()]),
-        room_id: z.union([z.string(), z.number()]).optional(),
+        room_id: z.union([z.string(), z.number()]),
         type: z.string(),
         position: z.array(z.number()),
         width: z.number(),
         depth: z.number(),
         height: z.number(),
-        color: z.string().optional(),
+        color: z.string(),
         description: z.string(),
-        floor_level: z.number().optional()
-    })).optional().describe("Interior furniture or equipment elements"),
+        floor_level: z.number()
+    })).describe("Interior furniture or equipment elements"),
     roof: z.object({
         type: z.enum(['flat', 'gable', 'hip']),
         polygon: z.array(z.array(z.number())),

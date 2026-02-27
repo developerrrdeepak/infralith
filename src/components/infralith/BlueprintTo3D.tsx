@@ -836,11 +836,11 @@ function BlueprintWorkspace() {
     const startFileGeneration = async (f: File) => {
         setFile(f); setStatus('preprocessing'); setProgress(0);
 
-        const isCAD = f.name.toLowerCase().endsWith('.dwg') || f.name.toLowerCase().endsWith('.dxf');
+        const isDoc = f.name.toLowerCase().endsWith('.dwg') || f.name.toLowerCase().endsWith('.dxf') || f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf');
 
-        if (!isCAD && f.type.startsWith('image/')) {
+        if (!isDoc && f.type.startsWith('image/')) {
             setPreview(URL.createObjectURL(f));
-        } else if (isCAD) {
+        } else if (isDoc) {
             setPreview(null);
         }
 
@@ -848,10 +848,10 @@ function BlueprintWorkspace() {
         const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
             let result;
-            if (isCAD) {
+            if (isDoc) {
                 setTimeout(() => setStatus('analyzing'), 1500);
                 const cleanName = f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
-                const cadDescription = `A building based on the CAD vector file named "${cleanName}". Ensure it is an extremely detailed, professional, enterprise-grade multi-room building with realistic dimensions, luxury materials, roofs, and full interior furnishing fitting the name.`;
+                const cadDescription = `A building based on the architectural document named "${cleanName}". Ensure it is an extremely detailed, professional, enterprise-grade multi-room building with realistic dimensions, luxury materials, roofs, and full interior furnishing fitting the name.`;
                 result = await generateBuildingFromDescription(cadDescription);
             } else {
                 const b64 = await fileToBase64(f);
@@ -862,7 +862,7 @@ function BlueprintWorkspace() {
             animateProgress(result);
         } catch {
             clearInterval(iv); setStatus('idle'); setFile(null); setPreview(null);
-            toast({ title: "Conversion Failed", description: isCAD ? "Could not parse CAD vector layers." : "Try a higher resolution blueprint.", variant: 'destructive' });
+            toast({ title: "Conversion Failed", description: isDoc ? "Could not parse document data." : "Try a higher resolution blueprint.", variant: 'destructive' });
         }
     };
 
@@ -1341,12 +1341,12 @@ function BlueprintWorkspace() {
                                         <Wand2 className="h-6 w-6 text-[#f97316] animate-pulse" />
                                     </div>
                                     <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-foreground">
-                                        {status === 'preprocessing' ? (file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') ? 'Parsing CAD Vectors' : 'CV Pre-processing') :
-                                            status === 'analyzing' ? (mode === 'describe' || file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') ? 'Generating Pattern' : 'AI Analysis') :
+                                        {status === 'preprocessing' ? ((file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') || file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')) ? 'Extracting Metadata' : 'CV Pre-processing') :
+                                            status === 'analyzing' ? (mode === 'describe' || (file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') || file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')) ? 'Generating Pattern' : 'AI Analysis') :
                                                 'Constructing 3D'}
                                     </h4>
                                     <p className="text-[10px] text-muted-foreground mb-3 text-center max-w-[250px] truncate">
-                                        {status === 'preprocessing' ? (file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') ? 'Extracting DWG metadata...' : 'Running OpenCV Line Detection...') :
+                                        {status === 'preprocessing' ? ((file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') || file?.type === 'application/pdf' || file?.name.toLowerCase().endsWith('.pdf')) ? `Parsing ${file?.name.split('.').pop()?.toUpperCase()} document...` : 'Running OpenCV Line Detection...') :
                                             file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
                                     </p>
                                     <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
