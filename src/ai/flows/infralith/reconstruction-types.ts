@@ -65,3 +65,16 @@ export interface GeometricReconstruction {
     debug_image?: string;
     is_vision_only?: boolean;
 }
+
+export interface AIAssetPart {
+    name: string;
+    position: [number, number, number];
+    size: [number, number, number];
+    color: string;
+    material: 'wood' | 'metal' | 'glass' | 'plastic' | 'stone' | 'cloth';
+}
+
+export interface AIAsset {
+    name: string;
+    parts: AIAssetPart[];
+}

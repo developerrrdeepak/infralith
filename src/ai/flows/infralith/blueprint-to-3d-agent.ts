@@ -6,8 +6,21 @@ import {
 } from "@/ai/azure-ai";
 import {
   GeometricReconstruction,
+  AIAsset,
 } from './reconstruction-types';
 import { applyBuildingCodes } from './building-codes';
+import { z } from 'zod';
+
+export const AIAssetSchema = z.object({
+  name: z.string(),
+  parts: z.array(z.object({
+    name: z.string(),
+    position: z.array(z.number()),
+    size: z.array(z.number()),
+    color: z.string(),
+    material: z.enum(['wood', 'metal', 'glass', 'plastic', 'stone', 'cloth'])
+  }))
+});
 
 /**
  * Construction-grade geometric reconstruction engine.
@@ -171,6 +184,40 @@ export async function generateBuildingFromDescription(description: string): Prom
     return result;
   } catch (e) {
     console.error("[Infralith Architect Engine] Text-to-3D Pipeline Error:", e);
+    throw e;
+  }
+}
+
+/**
+ * Enterprise Real-Time Asset Generator.
+ * Uses Azure OpenAI to procedurally generate a highly detailed 3D asset model made of bounding boxes.
+ * This guarantees the models are completely unique and not predefined templates.
+ */
+export async function generateRealTimeAsset(description: string): Promise<AIAsset> {
+  console.log(`[Procedural Voxel Engine] Generating asset: ${description}`);
+
+  const prompt = `
+    You are an expert technical 3D voxel modeler. Generate a precise, detailed procedural 3D asset for: "${description}".
+    The model must be constructed using a series of rectangular rectangular bounding boxes (parts).
+
+    CRITICAL CONSTRAINTS:
+    1. Bounding Box: The ENTIRE asset must fit exactly within a normalized 1x1x1 cube space (from -0.5 to 0.5 on each axis).
+    2. Coordinates: The position refers to the CENTER of the part relative to origin (0, 0, 0).
+    3. Sizes: The size provides the [width, height, depth] of the part.
+    4. Composition: Break the object down into logical components (e.g. for a door: the outer frame, inner door leaf, middle window, door handle, hinges). Use at least 4-8 distinct parts for "enterprise" level detail.
+    5. Aesthetics: Select high-end, realistic HEX colors.
+
+    Make it look extremely premium, detailed, and structurally correct.
+  `;
+
+  try {
+    const result = await generateAzureObject<AIAsset>(prompt, AIAssetSchema);
+    if (!result || !result.parts || result.parts.length === 0) {
+      throw new Error("Asset Generation Failed.");
+    }
+    return result;
+  } catch (e) {
+    console.error("[Procedural Voxel Engine] Error calling Azure OpenAI for asset:", e);
     throw e;
   }
 }
