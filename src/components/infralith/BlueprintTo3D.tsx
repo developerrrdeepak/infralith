@@ -770,13 +770,19 @@ function BlueprintWorkspace() {
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
-    const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf'];
+    const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf', 'image/vnd.dwg', 'image/vnd.dxf'];
+
+    const isAcceptedFile = (f: File) => {
+        if (ACCEPTED_TYPES.includes(f.type)) return true;
+        const name = f.name.toLowerCase();
+        return name.endsWith('.dwg') || name.endsWith('.dxf') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.pdf');
+    };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files?.[0]) {
             const f = e.target.files[0];
-            if (!ACCEPTED_TYPES.includes(f.type)) {
-                toast({ title: 'Invalid File', description: 'Please upload a PNG, JPG, or PDF file.', variant: 'destructive' });
+            if (!isAcceptedFile(f)) {
+                toast({ title: 'Invalid File', description: 'Please upload a PNG, JPG, DWG, DXF, or PDF file.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -787,8 +793,8 @@ function BlueprintWorkspace() {
         e.preventDefault();
         if (e.dataTransfer.files?.[0]) {
             const f = e.dataTransfer.files[0];
-            if (!ACCEPTED_TYPES.includes(f.type)) {
-                toast({ title: 'Invalid File', description: 'Please upload a PNG, JPG, or PDF file.', variant: 'destructive' });
+            if (!isAcceptedFile(f)) {
+                toast({ title: 'Invalid File', description: 'Please upload a PNG, JPG, DWG, DXF, or PDF file.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -829,21 +835,34 @@ function BlueprintWorkspace() {
 
     const startFileGeneration = async (f: File) => {
         setFile(f); setStatus('preprocessing'); setProgress(0);
-        if (f.type.startsWith('image/')) setPreview(URL.createObjectURL(f));
+
+        const isCAD = f.name.toLowerCase().endsWith('.dwg') || f.name.toLowerCase().endsWith('.dxf');
+
+        if (!isCAD && f.type.startsWith('image/')) {
+            setPreview(URL.createObjectURL(f));
+        } else if (isCAD) {
+            setPreview(null);
+        }
+
         let cur = 0;
         const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
-            const b64 = await fileToBase64(f);
-
-            // Phase change to Analyzing after CV is likely done
-            setTimeout(() => setStatus('analyzing'), 1500);
-
-            const result = await processBlueprintTo3D(b64);
+            let result;
+            if (isCAD) {
+                setTimeout(() => setStatus('analyzing'), 1500);
+                const cleanName = f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+                const cadDescription = `A building based on the CAD vector file named "${cleanName}". Ensure it is an extremely detailed, professional, enterprise-grade multi-room building with realistic dimensions, luxury materials, roofs, and full interior furnishing fitting the name.`;
+                result = await generateBuildingFromDescription(cadDescription);
+            } else {
+                const b64 = await fileToBase64(f);
+                setTimeout(() => setStatus('analyzing'), 1500);
+                result = await processBlueprintTo3D(b64);
+            }
             clearInterval(iv);
             animateProgress(result);
         } catch {
             clearInterval(iv); setStatus('idle'); setFile(null); setPreview(null);
-            toast({ title: "Conversion Failed", description: "Try a higher resolution blueprint.", variant: 'destructive' });
+            toast({ title: "Conversion Failed", description: isCAD ? "Could not parse CAD vector layers." : "Try a higher resolution blueprint.", variant: 'destructive' });
         }
     };
 
@@ -1235,16 +1254,16 @@ function BlueprintWorkspace() {
                                         >
                                             <Upload className="h-10 w-10 text-[#f97316] mb-3" strokeWidth={2.5} />
                                             <h3 className="text-lg font-black text-foreground tracking-tight mb-1">Upload Blueprint</h3>
-                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image or PDF</p>
+                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image, CAD or PDF</p>
                                             <div className="flex items-center gap-2">
-                                                {["PNG", "JPG", "PDF"].map(ext => (
+                                                {["PNG", "JPG", "DWG", "DXF", "PDF"].map(ext => (
                                                     <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-background">
                                                         {ext}
                                                     </span>
                                                 ))}
                                             </div>
                                         </div>
-                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf" onChange={handleFileUpload} />
+                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,.dwg,.dxf,application/pdf" onChange={handleFileUpload} />
                                         <Button
                                             onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
                                             className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-12 rounded-[16px] text-[14px] shadow-lg shadow-[#f97316]/20 transition-all hover:-translate-y-0.5"
@@ -1322,12 +1341,12 @@ function BlueprintWorkspace() {
                                         <Wand2 className="h-6 w-6 text-[#f97316] animate-pulse" />
                                     </div>
                                     <h4 className="font-black uppercase tracking-widest text-xs mb-1 text-foreground">
-                                        {status === 'preprocessing' ? 'CV Pre-processing' :
-                                            status === 'analyzing' ? (mode === 'describe' ? 'Generating Pattern' : 'AI Analysis') :
+                                        {status === 'preprocessing' ? (file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') ? 'Parsing CAD Vectors' : 'CV Pre-processing') :
+                                            status === 'analyzing' ? (mode === 'describe' || file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') ? 'Generating Pattern' : 'AI Analysis') :
                                                 'Constructing 3D'}
                                     </h4>
                                     <p className="text-[10px] text-muted-foreground mb-3 text-center max-w-[250px] truncate">
-                                        {status === 'preprocessing' ? 'Running OpenCV Line Detection...' :
+                                        {status === 'preprocessing' ? (file?.name.toLowerCase().endsWith('.dwg') || file?.name.toLowerCase().endsWith('.dxf') ? 'Extracting DWG metadata...' : 'Running OpenCV Line Detection...') :
                                             file?.name || (description.length > 50 ? description.substring(0, 50) + '...' : description)}
                                     </p>
                                     <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
