@@ -803,19 +803,19 @@ function BlueprintWorkspace() {
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
-    const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf', 'image/vnd.dwg', 'image/vnd.dxf'];
+    const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
 
     const isAcceptedFile = (f: File) => {
         if (ACCEPTED_TYPES.includes(f.type)) return true;
         const name = f.name.toLowerCase();
-        return name.endsWith('.dwg') || name.endsWith('.dxf') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.pdf');
+        return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files?.[0]) {
             const f = e.target.files[0];
             if (!isAcceptedFile(f)) {
-                toast({ title: 'Invalid File', description: 'Please upload a PNG, JPG, DWG, DXF, or PDF file.', variant: 'destructive' });
+                toast({ title: 'Invalid File', description: 'Please upload an Image file (PNG, JPG, WEBP). Document native parsing is coming soon.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -827,7 +827,7 @@ function BlueprintWorkspace() {
         if (e.dataTransfer.files?.[0]) {
             const f = e.dataTransfer.files[0];
             if (!isAcceptedFile(f)) {
-                toast({ title: 'Invalid File', description: 'Please upload a PNG, JPG, DWG, DXF, or PDF file.', variant: 'destructive' });
+                toast({ title: 'Invalid File', description: 'Please upload an Image file (PNG, JPG, WEBP). Document native parsing is coming soon.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -869,33 +869,19 @@ function BlueprintWorkspace() {
     const startFileGeneration = async (f: File) => {
         setFile(f); setStatus('preprocessing'); setProgress(0);
 
-        const isDoc = f.name.toLowerCase().endsWith('.dwg') || f.name.toLowerCase().endsWith('.dxf') || f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf');
-
-        if (!isDoc && f.type.startsWith('image/')) {
-            setPreview(URL.createObjectURL(f));
-        } else if (isDoc) {
-            setPreview(null);
-        }
+        setPreview(URL.createObjectURL(f));
 
         let cur = 0;
         const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
-            let result;
-            if (isDoc) {
-                setTimeout(() => setStatus('analyzing'), 1500);
-                const cleanName = f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
-                const cadDescription = `A building based on the architectural document named "${cleanName}". Ensure it is an extremely detailed, professional, enterprise-grade multi-room building with realistic dimensions, luxury materials, roofs, and full interior furnishing fitting the name.`;
-                result = await generateBuildingFromDescription(cadDescription);
-            } else {
-                const b64 = await fileToBase64(f);
-                setTimeout(() => setStatus('analyzing'), 1500);
-                result = await processBlueprintTo3D(b64);
-            }
+            const b64 = await fileToBase64(f);
+            setTimeout(() => setStatus('analyzing'), 1500);
+            const result = await processBlueprintTo3D(b64);
             clearInterval(iv);
             animateProgress(result);
         } catch {
             clearInterval(iv); setStatus('idle'); setFile(null); setPreview(null);
-            toast({ title: "Conversion Failed", description: isDoc ? "Could not parse document data." : "Try a higher resolution blueprint.", variant: 'destructive' });
+            toast({ title: "Construction Failed", description: "The vision engine could not understand this image layout. Please try a clearer blueprint.", variant: 'destructive' });
         }
     };
 
@@ -1506,14 +1492,14 @@ function BlueprintWorkspace() {
                                             <h3 className="text-lg font-black text-foreground tracking-tight mb-1">Upload Blueprint</h3>
                                             <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image, CAD or PDF</p>
                                             <div className="flex items-center gap-2">
-                                                {["PNG", "JPG", "DWG", "DXF", "PDF"].map(ext => (
+                                                {["PNG", "JPG", "JPEG", "WEBP"].map(ext => (
                                                     <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-background">
                                                         {ext}
                                                     </span>
                                                 ))}
                                             </div>
                                         </div>
-                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,.dwg,.dxf,application/pdf" onChange={handleFileUpload} />
+                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".png,.jpg,.jpeg,.webp,image/*" onChange={handleFileUpload} />
                                         <Button
                                             onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
                                             className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-12 rounded-[16px] text-[14px] shadow-lg shadow-[#f97316]/20 transition-all hover:-translate-y-0.5"
