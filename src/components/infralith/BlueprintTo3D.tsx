@@ -29,7 +29,7 @@ import {
     Moon,
     Library,
     FolderOpen,
-    Map,
+    Map as MapIcon,
     CloudUpload
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -960,7 +960,7 @@ function BlueprintWorkspace() {
                                 setIsTopView(!isTopView);
                             }}
                         >
-                            <Map className="h-4 w-4 mr-2" /> Top View
+                            <MapIcon className="h-4 w-4 mr-2" /> Top View
                         </Button>
                         <Button
                             variant="outline"
