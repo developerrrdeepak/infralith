@@ -27,9 +27,10 @@ import {
     Calculator,
     Sun,
     Moon,
-    CloudUpload,
     Library,
     FolderOpen,
+    Map,
+    CloudUpload
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -742,6 +743,12 @@ function WalkthroughController({ bounds }: { bounds?: any }) {
             const eul = new THREE.Euler(0, camera.rotation.y, 0);
             vel.applyEuler(eul);
             camera.position.add(vel);
+
+            // Boundary constraints
+            if (bounds) {
+                camera.position.x = Math.max(bounds.minX - 5, Math.min(bounds.maxX + 5, camera.position.x));
+                camera.position.z = Math.max(bounds.minZ - 5, Math.min(bounds.maxZ + 5, camera.position.z));
+            }
             camera.position.y = 1.7; // Lock player height
         }
     });
@@ -766,6 +773,7 @@ function BlueprintWorkspace() {
     const [isLoadingProjects, setIsLoadingProjects] = useState(false);
     const [timeOfDay, setTimeOfDay] = useState(14); // 2 PM default
     const [isWalkthrough, setIsWalkthrough] = useState(false);
+    const [isTopView, setIsTopView] = useState(false);
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
@@ -946,8 +954,20 @@ function BlueprintWorkspace() {
                         <Button
                             variant="outline"
                             size="sm"
+                            className={cn("h-9 backdrop-blur-md transition-colors", isTopView ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
+                            onClick={() => {
+                                setIsWalkthrough(false);
+                                setIsTopView(!isTopView);
+                            }}
+                        >
+                            <Map className="h-4 w-4 mr-2" /> Top View
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
                             className={cn("h-9 backdrop-blur-md transition-colors", isWalkthrough ? "bg-primary text-primary-foreground border-primary" : "bg-background/50 border-border")}
                             onClick={() => {
+                                setIsTopView(false);
                                 setIsWalkthrough(!isWalkthrough);
                                 if (!isWalkthrough) {
                                     toast({ title: "Walkthrough Active", description: "Click on the scene to look around. Use W, A, S, D to move. Press ESC to free your mouse." });
@@ -993,7 +1013,20 @@ function BlueprintWorkspace() {
                                     maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                 } : undefined} />
                             ) : (
-                                <OrbitControls makeDefault enableDamping dampingFactor={0.05} autoRotate={status === 'complete' && !isWalkthrough} autoRotateSpeed={0.35} maxPolarAngle={Math.PI / 2.1} />
+                                <OrbitControls
+                                    makeDefault
+                                    enableDamping
+                                    dampingFactor={0.05}
+                                    autoRotate={status === 'complete' && !isWalkthrough && !isTopView}
+                                    autoRotateSpeed={0.35}
+                                    maxPolarAngle={isTopView ? 0 : Math.PI / 2.1}
+                                    minPolarAngle={isTopView ? 0 : 0}
+                                    target={isTopView && elements ? [
+                                        (Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])) + Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]]))) / 2,
+                                        0,
+                                        (Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])) + Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]]))) / 2
+                                    ] : undefined}
+                                />
                             )}
 
                             {/* Environmental Lighting based on Time of Day */}

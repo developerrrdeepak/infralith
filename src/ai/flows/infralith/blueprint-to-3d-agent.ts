@@ -62,14 +62,13 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
        - For each enclosed space, construct a closed COUNTER-CLOCKWISE polygon of (x, y) points.
        - Calculate the enclosed area in square meters.
        - Assign room names from visible labels (e.g., "Bedroom", "Kitchen", "WC").
-       - DETECT FURNITURE: Look for rectangular, circular, or iconic furniture symbols (beds, sofas, dining tables, toilets, kitchen islands) inside the rooms.
-       - If you detect furniture, output it in the 'furnitures' array with approximate metric size (width/depth/height). Type must be a common term like "sofa", "bed", "toilet", "hvac", "plant". Output a highly detailed 'description' for the AI Asset Engine to generate it procedurally (e.g. "Detailed modern L-shaped sectional sofa with leather finish").
+       - DETECT FURNITURE: Look for ANY objects inside rooms (beds, sofas, tables, dining, toilets, kitchen islands, wardrobes, rugs, plants, lamps, TVs).
+       - Generate them densely in the 'furnitures' array with approximate metric size (width/depth/height). Type must be the specific item name. Output a completely UNIQUE and highly detailed 'description' for the Procedural Voxel Engine to generate it (e.g. "Minimalist deep blue velvet sofa with silver legs", or "Rustic oak wood round dining table with 4 beige chairs"). Create as many varied objects as you can infer from the floor plans. DO NOT limit yourself to a few assets.
 
-    LUXURY AESTHETIC PALETTE (apply intelligently):
-    - Exterior Walls: "#f8f1e7" (Pearl) | Interior Walls: "#fdfaf6" (Silk)
-    - Floors: Living="#fdfaf6", Bedroom="#e2d1c3", Kitchen="#efeeed", Bathroom="#d4e2e2"
-    - Doors: "#8b4513" (Deep Walnut) | Windows: "#2c3e50" (Midnight Metal)
-    - Roof: "#a0522d" (Terracotta)
+    LUXURY AESTHETIC PALETTE (CRITICAL: RANDOMIZE AND VARY THESE):
+    - Do NOT use the exact same colors every time. Create a cohesive luxury palette specific to THIS building's unique vibe.
+    - Pick random but beautiful, harmonious HEX colors for Exterior Walls, Interior Walls, Floors, Doors, Windows, and Roof.
+    - Ensure variation (e.g. some buildings are modern dark mode, some are light minimalist, some are warm terracotta).
 
     GEOMETRIC CONSTRAINTS (strictly enforce):
     - All coordinates in METERS.
@@ -155,10 +154,14 @@ export async function generateBuildingFromDescription(description: string): Prom
     - Step 5: For multi-floor: Verify Floor 1 aligns with Floor 0's load-bearing structure.
     - Step 6: Final audit — list any structural concerns in "conflicts".
 
-    LUXURY MATERIAL PALETTE:
-    - Exterior Walls: "#f8f1e7" (Pearl White) | Interior: "#fdfaf6" (Silk)
-    - Floors: Living="#fdfaf6", Bedroom="#e2d1c3", Kitchen="#efeeed", Bathroom="#d4e2e2"
-    - Doors: "#8b4513" (Deep Walnut) | Windows: "#2c3e50" (Midnight Metal) | Roof: "#a0522d"
+    FURNISHING (MANDATORY AND UNIQUE):
+    - Fully furnish every room using the 'furnitures' array. Include beds, wardrobes, TVs, kitchen islands, sofas, rugs, plants, dining tables, toilets, etc.
+    - Do not limit yourself to a few assets. Fill the space logically!
+    - Provide a completely UNIQUE 'description' for each item so the Procedural Voxel Engine builds distinct, amazing 3D assets (e.g., "Sleek matte black refrigerator with french doors", "Curved emerald green luxury sofa").
+
+    LUXURY MATERIAL PALETTE (CRITICAL: RANDOMIZE AND VARY THESE):
+    - Do NOT use a fixed set of colors. Invent a unique, breathtaking, and cohesive aesthetic color palette for THIS specific description.
+    - Output random but extremely beautiful HEX colors for exterior walls, interior walls, floors (varying by room), doors, windows, and roof.
 
     GEOMETRIC REQUIREMENTS:
     - Wall thickness: 0.23m (exterior) or 0.115m (interior). Height: 2.8m per floor.
