@@ -33,14 +33,14 @@ export async function predictCost(inputData: string) {
 
     const schema = z.object({
         total: z.number(),
-        currency: z.string().default('INR'),
+        currency: z.string(),
         breakdown: z.array(z.object({
             category: z.string(),
             amount: z.number(),
             percentage: z.number()
         })),
         duration: z.string(),
-        confidenceScore: z.number().min(0).max(1)
+        confidenceScore: z.number()
     });
 
     try {
