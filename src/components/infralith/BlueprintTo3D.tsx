@@ -1,3 +1,8 @@
+### ** File: `src/components/infralith/BlueprintTo3D.tsx` **
+
+    This file contains the complete user interface and 3D rendering logic.
+
+```typescript
 'use client';
 
 import React, { useState, useRef, Suspense, useCallback, useMemo } from 'react';
@@ -87,7 +92,7 @@ const ToolButton = ({ icon, label, active, onClick, expanded, shortcut, color, c
             !expanded && "justify-center",
             className
         )}
-        title={!expanded ? `${label} (${shortcut || ''})` : ""}
+        title={!expanded ? `${ label } (${ shortcut || '' })` : ""}
     >
         <div className={cn("transition-transform duration-200 group-hover:scale-110", color)}>
             {icon}
@@ -406,9 +411,9 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWal
                 const localX = dist - len / 2;
                 const wh = 1.2;
                 // High-fidelity description for AI Generation
-                const desc = `High-end enterprise architectural aluminum window with frame, mullions, and double glazing glass. Color: ${win.color || 'dark grey'}.`;
+                const desc = `High - end enterprise architectural aluminum window with frame, mullions, and double glazing glass.Color: ${ win.color || 'dark grey' }.`;
                 return (
-                    <group key={`win-glass-${win.id}`} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
+                    <group key={`win - glass - ${ win.id } `} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
                         <AIAssetRenderer description={desc} width={win.width} height={wh} depth={wall.thickness + 0.05} fallbackColor={win.color || "#87CEEB"} isWalkthrough={isWalkthrough} />
                     </group>
                 );
@@ -421,9 +426,9 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWal
                 const dist = (doorDx * dx + doorDz * dz) / len;
                 const localX = dist - len / 2;
                 // High-fidelity description for AI Generation
-                const desc = `Premium solid wooden entrance door with metallic modern handle, hinges, and detailed door frame. Color: ${door.color || 'walnut brown'} wood.`;
+                const desc = `Premium solid wooden entrance door with metallic modern handle, hinges, and detailed door frame.Color: ${ door.color || 'walnut brown' } wood.`;
                 return (
-                    <group key={`door-leaf-${door.id}`} position={[localX, door.height / 2 - wall.height / 2, 0]}>
+                    <group key={`door - leaf - ${ door.id } `} position={[localX, door.height / 2 - wall.height / 2, 0]}>
                         <AIAssetRenderer description={desc} width={door.width} height={door.height} depth={wall.thickness + 0.02} fallbackColor={door.color || "#8b4513"} isWalkthrough={isWalkthrough} />
                     </group>
                 );
@@ -480,7 +485,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                         const sizeZ = (bounds.maxZ - bounds.minZ) + 40;
 
                         return (
-                            <mesh key={`slab-${lvl}`} position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+                            <mesh key={`slab - ${ lvl } `} position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
                                 <planeGeometry args={[sizeX, sizeZ]} />
                                 <meshStandardMaterial color="#f0f0f0" roughness={0.9} transparent opacity={0.15} />
                             </mesh>
@@ -488,7 +493,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                     })}
 
                     {/* Room Floors */}
-                    {data.rooms.filter(r => !visibleElements || visibleElements.has(`room-${r.id}`)).map((room, i) => {
+                    {data.rooms.filter(r => !visibleElements || visibleElements.has(`room - ${ r.id } `)).map((room, i) => {
                         const shape = new THREE.Shape();
                         room.polygon.forEach((pt, idx) => {
                             if (idx === 0) shape.moveTo(pt[0], pt[1]);
@@ -500,7 +505,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                         const zPos = (room.floor_level || 0) * 2.8;
 
                         return (
-                            <group key={`room-${i}`}>
+                            <group key={`room - ${ i } `}>
                                 <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, zPos + 0.02, 0]} receiveShadow
                                     onClick={(e) => { e.stopPropagation(); onSelect?.({ type: 'room', data: room }); }}
                                     onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
@@ -518,9 +523,9 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                     })}
 
                     {/* Walls, Windows, and Doors (Integrated via CSG) */}
-                    {data.walls.filter(w => !visibleElements || visibleElements.has(`wall-${w.id}`)).map((wall, i) => (
+                    {data.walls.filter(w => !visibleElements || visibleElements.has(`wall - ${ w.id } `)).map((wall, i) => (
                         <WallSegment
-                            key={`wall-${i}`}
+                            key={`wall - ${ i } `}
                             wall={wall}
                             allWindows={data.windows}
                             allDoors={data.doors}
@@ -534,7 +539,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                     {data.furnitures?.map((furniture, i) => {
                         const zPos = (furniture.floor_level || 0) * 2.8;
                         return (
-                            <group key={`furniture-${i}`} position={[furniture.position[0], zPos + furniture.height / 2, furniture.position[1]]}>
+                            <group key={`furniture - ${ i } `} position={[furniture.position[0], zPos + furniture.height / 2, furniture.position[1]]}>
                                 <AIAssetRenderer
                                     description={furniture.description}
                                     width={furniture.width}
@@ -556,7 +561,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
 
             {/* Conflict markers */}
             {p >= 1 && data.conflicts?.map((conflict, i) => (
-                <ConflictMarker key={`conflict-${i}`} conflict={conflict} />
+                <ConflictMarker key={`conflict - ${ i } `} conflict={conflict} />
             ))}
         </group>
     );
@@ -717,17 +722,17 @@ function BlueprintWorkspace() {
     React.useEffect(() => {
         if (elements) {
             const allIds = [
-                ...(elements.rooms?.map(r => `room-${r.id}`) || []),
-                ...(elements.walls?.map(w => `wall-${w.id}`) || []),
-                ...(elements.doors?.map(d => `door-${d.id}`) || []),
-                ...(elements.windows?.map(w => `win-${w.id}`) || [])
+                ...(elements.rooms?.map(r => `room - ${ r.id } `) || []),
+                ...(elements.walls?.map(w => `wall - ${ w.id } `) || []),
+                ...(elements.doors?.map(d => `door - ${ d.id } `) || []),
+                ...(elements.windows?.map(w => `win - ${ w.id } `) || [])
             ];
             setVisibleElements(new Set(allIds));
         }
     }, [elements]);
 
     const toggleElementVisibility = (type: string, id: string | number) => {
-        const key = `${type}-${id}`;
+        const key = `${ type } -${ id } `;
         setVisibleElements(prev => {
             const next = new Set(prev);
             if (next.has(key)) next.delete(key);
@@ -795,7 +800,7 @@ function BlueprintWorkspace() {
     const resetState = useCallback(() => {
         setFile(null); setPreview(null); setDescription('');
         setStatus('idle'); setProgress(0); setElements(null);
-    }, []);
+    }, [setElements]);
 
     const animateProgress = (result: GeometricReconstruction) => {
         setElements(result);
@@ -808,7 +813,7 @@ function BlueprintWorkspace() {
                     setStatus('complete');
                     toast({
                         title: "Building Constructed",
-                        description: `${result.building_name || 'Building'}: ${result.walls.length} walls, ${result.rooms?.length || 0} rooms`,
+                        description: `${ result.building_name || 'Building' }: ${ result.walls.length } walls, ${ result.rooms?.length || 0 } rooms`,
                     });
                     return 1.0;
                 }
@@ -1075,8 +1080,8 @@ function BlueprintWorkspace() {
                                     ...(elements?.rooms?.map(r => r.floor_level || 0) || [])
                                 ])).sort().map(floor => (
                                     <InspectorGroup
-                                        key={`floor-${floor}`}
-                                        title={`Floor Level ${floor}`}
+                                        key={`floor - ${ floor } `}
+                                        title={`Floor Level ${ floor } `}
                                         isOpen={activeFloor === null || activeFloor === floor}
                                         onToggle={() => setActiveFloor(activeFloor === floor ? null : floor)}
                                     >
@@ -1084,12 +1089,12 @@ function BlueprintWorkspace() {
                                             {/* Rooms on this floor */}
                                             {elements?.rooms?.filter(r => (r.floor_level || 0) === floor).map(room => (
                                                 <InspectorItem
-                                                    key={`room-${room.id}`}
+                                                    key={`room - ${ room.id } `}
                                                     icon={<div className="h-2 w-2 rounded-full" style={{ backgroundColor: room.floor_color || '#e8d5b7' }} />}
                                                     label={room.name}
-                                                    sublabel={`${room.area?.toFixed(0)}m²`}
+                                                    sublabel={`${ room.area?.toFixed(0) } m²`}
                                                     active={selectedElement?.type === 'room' && selectedElement.data.id === room.id}
-                                                    visible={visibleElements.has(`room-${room.id}`)}
+                                                    visible={visibleElements.has(`room - ${ room.id } `)}
                                                     onSelect={() => setSelectedElement({ type: 'room', data: room })}
                                                     onToggleVisibility={() => toggleElementVisibility('room', room.id)}
                                                     onEdit={() => setSelectedElement({ type: 'room', data: room })}
@@ -1101,12 +1106,12 @@ function BlueprintWorkspace() {
                                             <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
                                                 <InspectorItem
                                                     label="Walls"
-                                                    sublabel={`${elements?.walls?.filter(w => (w.floor_level || 0) === floor).length} Units`}
+                                                    sublabel={`${ elements?.walls?.filter(w => (w.floor_level || 0) === floor).length } Units`}
                                                     icon={<Layers className="h-3 w-3 text-slate-400" />}
                                                 />
                                                 <InspectorItem
                                                     label="Doors"
-                                                    sublabel={`${elements?.doors?.filter(d => (d.floor_level || 0) === floor).length} Units`}
+                                                    sublabel={`${ elements?.doors?.filter(d => (d.floor_level || 0) === floor).length } Units`}
                                                     icon={<DoorOpen className="h-3 w-3 text-slate-400" />}
                                                 />
                                             </div>
@@ -1667,7 +1672,7 @@ function BlueprintWorkspace() {
                                         <motion.div
                                             className="h-full bg-primary rounded-full"
                                             initial={{ width: 0 }}
-                                            animate={{ width: `${progress * 100}%` }}
+                                            animate={{ width: `${ progress * 100 }% ` }}
                                         />
                                     </div>
                                     <p className="text-[9px] text-muted-foreground/60 italic text-center pt-1 truncate">
@@ -1697,6 +1702,17 @@ function BlueprintWorkspace() {
                                 </div>
 
                                 <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
+                                    {/* Debug Image from OpenCV */}
+                                    {elements.debug_image && (
+                                        <div className="space-y-2">
+                                            <h5 className="text-[8px] font-black uppercase text-muted-foreground tracking-widest px-1">CV Analysis</h5>
+                                            <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                                                <img src={elements.debug_image} alt="Vectorization Analysis" className="rounded-lg" />
+                                                <p className="text-[9px] text-center mt-1 text-muted-foreground/60 italic">OpenCV Detected Polygons</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    
                                     {/* Room Inventory */}
                                     {elements.rooms && elements.rooms.length > 0 && (
                                         <div className="space-y-2">
