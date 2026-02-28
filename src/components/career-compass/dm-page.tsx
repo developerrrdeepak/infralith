@@ -294,7 +294,7 @@ export default function DMPage() {
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
-                      placeholder="Search engineers or users..."
+                      placeholder="Search by name, or type an email to start a new chat..."
                       className="pl-9"
                       value={searchUser}
                       onChange={(e) => setSearchUser(e.target.value)}
@@ -302,26 +302,34 @@ export default function DMPage() {
                   </div>
                   <ScrollArea className="h-[300px] border rounded-md">
                     <div className="p-2 space-y-1">
-                      {filteredUsers.length === 0 ? (
+
+                      {/* Always show email-start button when search looks like a valid email */}
+                      {searchUser.includes('@') && searchUser.includes('.') && (
+                        <button
+                          onClick={async () => {
+                            const emailUser: any = {
+                              uid: searchUser.toLowerCase().trim(),
+                              email: searchUser.toLowerCase().trim(),
+                              name: searchUser.split('@')[0],
+                              avatar: '',
+                            };
+                            await startChatWithUser(emailUser);
+                          }}
+                          className="w-full flex items-center gap-3 p-3 rounded-lg bg-[#f59e0b]/10 border border-[#f59e0b]/30 hover:bg-[#f59e0b]/20 transition-all text-left mb-2"
+                        >
+                          <div className="h-8 w-8 rounded-full bg-[#f59e0b]/20 flex items-center justify-center shrink-0">
+                            <MessageCircle className="h-4 w-4 text-[#f59e0b]" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-foreground">{searchUser.trim()}</p>
+                            <p className="text-xs text-muted-foreground">Start new chat with this email</p>
+                          </div>
+                        </button>
+                      )}
+
+                      {filteredUsers.length === 0 && !searchUser.includes('@') ? (
                         <div className="text-center text-sm text-muted-foreground py-10">
-                          <p className="mb-2">No existing users found.</p>
-                          {searchUser.includes('@') && (
-                            <Button
-                              variant="outline"
-                              className="mt-4 border-[#f59e0b] text-[#f59e0b] hover:bg-[#f59e0b] hover:text-white font-bold transition-all"
-                              onClick={async () => {
-                                const dummyUser: any = {
-                                  uid: searchUser.toLowerCase(),
-                                  email: searchUser.toLowerCase(),
-                                  name: searchUser.split('@')[0],
-                                  avatar: '',
-                                };
-                                await startChatWithUser(dummyUser);
-                              }}
-                            >
-                              <MessageCircle className="h-4 w-4 mr-2" /> Start Chat with {searchUser}
-                            </Button>
-                          )}
+                          <p>No users found. Try typing an email address.</p>
                         </div>
                       ) : (
                         filteredUsers.map(u => (
