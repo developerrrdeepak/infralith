@@ -576,7 +576,8 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
     // Initialize camera position when entering walkthrough
     React.useEffect(() => {
         if (bounds) {
-            camera.position.set((bounds.minX + bounds.maxX) / 2, 1.7, bounds.maxZ + 5);
+            // Spawn just at the front edge of the house, facing it
+            camera.position.set((bounds.minX + bounds.maxX) / 2, 1.7, bounds.maxZ + 2);
             camera.rotation.set(0, 0, 0);
         }
     }, [bounds, camera]);
@@ -610,31 +611,13 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
 
     // A simple function to check collision with walls (2D line segments)
     const checkCollision = (position: THREE.Vector3, radius: number) => {
-        if (!walls) return false;
-        for (const wall of walls) {
-            // wall is a segment from { x: start[0], z: start[1] } to { x: end[0], z: end[1] }
-            const p = new THREE.Vector2(position.x, position.z);
-            const a = new THREE.Vector2(wall.start[0], wall.start[1]);
-            const b = new THREE.Vector2(wall.end[0], wall.end[1]);
-
-            const ab = new THREE.Vector2().subVectors(b, a);
-            const ap = new THREE.Vector2().subVectors(p, a);
-            let t = ap.dot(ab) / ab.lengthSq();
-            t = Math.max(0, Math.min(1, t)); // clamp
-
-            const closest = new THREE.Vector2().addVectors(a, ab.multiplyScalar(t));
-            const distance = p.distanceTo(closest);
-
-            // wall.thickness is around 0.2 to 0.4. Add half thickness to collision radius
-            if (distance < radius + (wall.thickness || 0.2) / 2) {
-                return true;
-            }
-        }
+        // Disabled rigid wall collision so the player can walk through doors.
+        // True CSG collision requires complex navmeshes. For now, free-roam is best!
         return false;
     };
 
     useFrame((state, delta) => {
-        const baseSpeed = 4.0;
+        const baseSpeed = 5.0; // Faster for FPS feel
         const sprintMultiplier = isSprinting ? 2.5 : 1.0;
         const speed = baseSpeed * sprintMultiplier * delta;
 
@@ -676,10 +659,10 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
                 }
             }
 
-            // Boundary constraints
+            // Boundary constraints (allow them to walk further out)
             if (bounds) {
-                camera.position.x = Math.max(bounds.minX - 5, Math.min(bounds.maxX + 5, camera.position.x));
-                camera.position.z = Math.max(bounds.minZ - 5, Math.min(bounds.maxZ + 5, camera.position.z));
+                camera.position.x = Math.max(bounds.minX - 15, Math.min(bounds.maxX + 15, camera.position.x));
+                camera.position.z = Math.max(bounds.minZ - 15, Math.min(bounds.maxZ + 15, camera.position.z));
             }
         } else {
             // Return to resting height smoothly
