@@ -103,6 +103,31 @@ const setStorageItem = (key: string, value: any) => {
 
 // --- USER DB SERVICE ---
 export const userDbService = {
+  lookupRemoteUser: async (email: string): Promise<UserProfileData | null> => {
+    const endpoint = process.env.NEXT_PUBLIC_USER_LOOKUP_URL;
+    if (!endpoint || typeof fetch === 'undefined') return null;
+    try {
+      const res = await fetch(`${endpoint}?email=${encodeURIComponent(normalizeEmail(email))}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data) return null;
+      return {
+        uid: data.uid || data.id,
+        name: data.name || data.fullName || '',
+        email: normalizeEmail(data.email || email),
+        avatar: data.avatar || data.image || null,
+        role: data.role || data.title,
+        profileCompleted: true,
+      } as UserProfileData;
+    } catch (error) {
+      console.warn('Remote user lookup failed, falling back to local storage', error);
+      return null;
+    }
+  },
+
   createUser: async (user: any) => {
     const users = getStorageItem('infralith_users') || {};
     users[user.id] = {
@@ -127,9 +152,13 @@ export const userDbService = {
   },
 
   getUserByEmail: async (email: string): Promise<UserProfileData | null> => {
+    const target = normalizeEmail(email);
+    // Try remote directory first (production) then fallback to local mock.
+    const remote = await userDbService.lookupRemoteUser(target);
+    if (remote) return remote;
+
     const users = getStorageItem('infralith_users') || {};
     const all: UserProfileData[] = Object.values(users);
-    const target = normalizeEmail(email);
     return all.find((u) => normalizeEmail(u.email || '') === target) || null;
   },
 
