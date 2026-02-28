@@ -289,7 +289,7 @@ const SkirtingBoard = ({ width, depth, yOffset = 0.05, height = 0.1 }: { width: 
 
 const globalAssetCache = new Map<string, AIAsset>();
 
-function AIAssetRenderer({ description, width, height, depth, fallbackColor }: { description: string, width: number, height: number, depth: number, fallbackColor: string }) {
+function AIAssetRenderer({ description, width, height, depth, fallbackColor, isWalkthrough }: { description: string, width: number, height: number, depth: number, fallbackColor: string, isWalkthrough?: boolean }) {
     const [asset, setAsset] = useState<AIAsset | null>(globalAssetCache.get(description) || null);
 
     React.useEffect(() => {
@@ -309,12 +309,14 @@ function AIAssetRenderer({ description, width, height, depth, fallbackColor }: {
                     <boxGeometry args={[width, height, depth]} />
                     <meshStandardMaterial color={fallbackColor} transparent opacity={0.3} wireframe />
                 </mesh>
-                <Html position={[0, height / 2.5, 0]} center>
-                    <div className="bg-black/80 text-primary-foreground text-[7px] font-black uppercase px-2 py-0.5 rounded-full flex gap-1 items-center">
-                        <Wand2 className="w-2 h-2 animate-pulse" />
-                        Generating
-                    </div>
-                </Html>
+                {isWalkthrough && (
+                    <Html position={[0, height / 2.5, 0]} center>
+                        <div className="bg-black/80 text-primary-foreground text-[7px] font-black uppercase px-2 py-0.5 rounded-full flex gap-1 items-center">
+                            <Wand2 className="w-2 h-2 animate-pulse" />
+                            Generating
+                        </div>
+                    </Html>
+                )}
             </group>
         );
     }
@@ -339,7 +341,7 @@ function AIAssetRenderer({ description, width, height, depth, fallbackColor }: {
 
 // -- Wall with CSG Openings --
 
-const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect }: any) => {
+const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWalkthrough }: any) => {
     const dx = wall.end[0] - wall.start[0];
     const dz = wall.end[1] - wall.start[1];
     const len = Math.sqrt(dx * dx + dz * dz);
@@ -407,7 +409,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect }: any
                 const desc = `High-end enterprise architectural aluminum window with frame, mullions, and double glazing glass. Color: ${win.color || 'dark grey'}.`;
                 return (
                     <group key={`win-glass-${win.id}`} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
-                        <AIAssetRenderer description={desc} width={win.width} height={wh} depth={wall.thickness + 0.05} fallbackColor={win.color || "#87CEEB"} />
+                        <AIAssetRenderer description={desc} width={win.width} height={wh} depth={wall.thickness + 0.05} fallbackColor={win.color || "#87CEEB"} isWalkthrough={isWalkthrough} />
                     </group>
                 );
             })}
@@ -422,7 +424,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect }: any
                 const desc = `Premium solid wooden entrance door with metallic modern handle, hinges, and detailed door frame. Color: ${door.color || 'walnut brown'} wood.`;
                 return (
                     <group key={`door-leaf-${door.id}`} position={[localX, door.height / 2 - wall.height / 2, 0]}>
-                        <AIAssetRenderer description={desc} width={door.width} height={door.height} depth={wall.thickness + 0.02} fallbackColor={door.color || "#8b4513"} />
+                        <AIAssetRenderer description={desc} width={door.width} height={door.height} depth={wall.thickness + 0.02} fallbackColor={door.color || "#8b4513"} isWalkthrough={isWalkthrough} />
                     </group>
                 );
             })}
@@ -430,7 +432,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect }: any
     );
 };
 
-function GeneratedStructure({ progress, data, visibleElements, onSelect }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void }) {
+function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkthrough }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void, isWalkthrough?: boolean }) {
     if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
     const p = progress;
@@ -524,6 +526,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect }: { pro
                             allDoors={data.doors}
                             defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
                             onSelect={onSelect}
+                            isWalkthrough={isWalkthrough}
                         />
                     ))}
 
@@ -538,6 +541,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect }: { pro
                                     height={furniture.height}
                                     depth={furniture.depth}
                                     fallbackColor={furniture.color || "#cccccc"}
+                                    isWalkthrough={isWalkthrough}
                                 />
                             </group>
                         );
@@ -1322,7 +1326,7 @@ function BlueprintWorkspace() {
                             })()}
 
                             <Suspense fallback={null}>
-                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} />
+                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
