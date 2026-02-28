@@ -38,6 +38,7 @@ import {
     Minimize2,
     ArrowUpRight,
     ChevronRight,
+    ChevronLeft,
     ChevronUp,
     FileCode,
     FileBox,
@@ -710,6 +711,7 @@ function BlueprintWorkspace() {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [activeTool, setActiveTool] = useState('select');
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
+    const [isInspectorVisible, setIsInspectorVisible] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
 
@@ -1677,14 +1679,27 @@ function BlueprintWorkspace() {
                             </motion.div>
                         )}
 
+                        {/* Complete Details Sidebar Hidden Button */}
+                        {status === 'complete' && elements && !isInspectorVisible && (
+                            <div className="flex justify-end pointer-events-auto">
+                                <Button
+                                    variant="outline"
+                                    className="h-8 bg-background/90 backdrop-blur-xl border-white/10 shadow-lg font-black text-[9px] uppercase tracking-widest text-muted-foreground hover:text-foreground hover:bg-white/10"
+                                    onClick={() => setIsInspectorVisible(true)}
+                                >
+                                    <ChevronLeft className="h-4 w-4 mr-1" /> Inspector
+                                </Button>
+                            </div>
+                        )}
+
                         {/* Complete Details Sidebar */}
-                        {status === 'complete' && elements && (
+                        {status === 'complete' && elements && isInspectorVisible && (
                             <motion.div
                                 initial={{ opacity: 0, x: 20 }}
                                 animate={{ opacity: 1, x: 0 }}
                                 className="flex-1 min-h-0 bg-background/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl pointer-events-auto flex flex-col overflow-hidden"
                             >
-                                <div className="p-4 border-b border-white/10 bg-white/5">
+                                <div className="p-4 border-b border-white/10 bg-white/5 flex items-center justify-between">
                                     <div className="flex items-center gap-3">
                                         <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30">
                                             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
@@ -1694,6 +1709,9 @@ function BlueprintWorkspace() {
                                             <p className="text-[11px] font-bold text-foreground truncate">{elements.building_name || "Custom Project"}</p>
                                         </div>
                                     </div>
+                                    <button onClick={() => setIsInspectorVisible(false)} className="text-muted-foreground hover:text-foreground shrink-0 p-1">
+                                        <ChevronRight className="h-4 w-4" />
+                                    </button>
                                 </div>
 
                                 <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
