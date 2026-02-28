@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
     Mic, MicOff, Video, VideoOff, PhoneOff,
-    Users, ShieldCheck, ScreenShare, Maximize, Loader2, Copy, CheckCheck
+    Users, ShieldCheck, ScreenShare, ScreenShareOff, Maximize, Loader2, Copy, CheckCheck
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
@@ -38,10 +38,12 @@ export default function MeetRoomPage() {
     const [cameraError, setCameraError] = useState(false);
     const [peers, setPeers] = useState<Peer[]>([]);
     const [copied, setCopied] = useState(false);
+    const [isSharing, setIsSharing] = useState(false);
 
     // ── Refs ──
     const myVideoRef = useRef<HTMLVideoElement>(null);
     const localStream = useRef<MediaStream | null>(null);
+    const screenStream = useRef<MediaStream | null>(null);
     const peersRef = useRef<Map<string, Peer>>(new Map());
     const myPeerId = useRef(`peer-${Math.random().toString(36).slice(2, 9)}`);
     const sseRef = useRef<EventSource | null>(null);
@@ -217,6 +219,69 @@ export default function MeetRoomPage() {
         localStream.current?.getVideoTracks().forEach(t => { t.enabled = !isVideoOff; });
     }, [isVideoOff]);
 
+    // ── Screen share toggle ──
+    const toggleScreenShare = useCallback(async () => {
+        if (isSharing) {
+            // Stop screen share and restore camera
+            screenStream.current?.getTracks().forEach(t => t.stop());
+            screenStream.current = null;
+            setIsSharing(false);
+
+            // Put camera video track back into all peer connections
+            const cameraTrack = localStream.current?.getVideoTracks()[0];
+            if (cameraTrack) {
+                peersRef.current.forEach(({ pc }) => {
+                    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+                    sender?.replaceTrack(cameraTrack);
+                });
+            }
+            // Restore local preview
+            if (myVideoRef.current && localStream.current) {
+                myVideoRef.current.srcObject = localStream.current;
+            }
+        } else {
+            try {
+                const display = await (navigator.mediaDevices as any).getDisplayMedia({
+                    video: { cursor: 'always' },
+                    audio: false,
+                });
+                screenStream.current = display;
+                setIsSharing(true);
+
+                const screenTrack = display.getVideoTracks()[0];
+
+                // Replace video track in every peer connection
+                peersRef.current.forEach(({ pc }) => {
+                    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+                    sender?.replaceTrack(screenTrack);
+                });
+
+                // Show screen in local preview
+                if (myVideoRef.current) {
+                    myVideoRef.current.srcObject = display;
+                }
+
+                // When user clicks the browser "Stop Sharing" button
+                screenTrack.addEventListener('ended', () => {
+                    toggleScreenShare();
+                });
+            } catch (err: any) {
+                if (err.name !== 'NotAllowedError') {
+                    toast({ title: 'Screen Share Failed', description: err.message, variant: 'destructive' });
+                }
+            }
+        }
+    }, [isSharing]);
+
+    // ── Fullscreen toggle ──
+    const toggleFullscreen = useCallback(() => {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(() => { });
+        } else {
+            document.exitFullscreen().catch(() => { });
+        }
+    }, []);
+
     // ── Leave ──
     const handleLeave = () => {
         localStream.current?.getTracks().forEach(t => t.stop());
@@ -357,8 +422,15 @@ export default function MeetRoomPage() {
 
                 <div className="w-[1px] h-6 bg-white/10 mx-1 hidden sm:block" />
 
-                <CtrlBtn active onClick={() => { }} icon={<ScreenShare className="h-5 w-5" />} label="Share Screen" className="hidden sm:flex" />
-                <CtrlBtn active onClick={() => { }} icon={<Maximize className="h-5 w-5" />} label="Fullscreen" className="hidden sm:flex" />
+                <CtrlBtn
+                    active={!isSharing}
+                    danger={isSharing}
+                    onClick={toggleScreenShare}
+                    icon={isSharing ? <ScreenShareOff className="h-5 w-5" /> : <ScreenShare className="h-5 w-5" />}
+                    label={isSharing ? 'Stop Share' : 'Share Screen'}
+                    className="hidden sm:flex"
+                />
+                <CtrlBtn active onClick={toggleFullscreen} icon={<Maximize className="h-5 w-5" />} label="Fullscreen" className="hidden sm:flex" />
 
                 <Button
                     onClick={handleLeave}
