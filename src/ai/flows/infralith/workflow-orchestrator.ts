@@ -5,6 +5,7 @@ import { parseBlueprint } from './blueprint-parser';
 import { checkCompliance } from './compliance-check';
 import { analyzeRisk } from './risk-analysis';
 import { predictCost } from './cost-prediction';
+import { runDevOpsAgent } from './devops-agent'; // <-- IMPORTED THE ACTION AGENT
 import { generateAzureObject } from '@/ai/azure-ai';
 
 /** Current orchestrator version — bump on every prompt or logic change */
@@ -67,12 +68,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     // 5. Trigger Agentic Action (DevOps GitHub Integration)
     // This is where the AI actually "Does" something in the real world
-    const devOpsInsight: DevOpsInsight = {
-        agentId: 'DevOps-Integrator',
-        status: 'Optimized',
-        message: 'DevOps agent is disabled in this environment.',
-        actionRequired: false
-    };
+    const devOpsInsight = await runDevOpsAgent(partialResult as WorkflowResult);
 
     // 6. Synthesis Layer: Combine Insights
     const insights: DevOpsInsight[] = [
