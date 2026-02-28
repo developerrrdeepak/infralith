@@ -16,8 +16,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 
-const normalizeEmail = (email: string) => email.trim().toLowerCase();
-
 export default function DMPage() {
   const { user } = useAppContext();
   const { toast } = useToast();
