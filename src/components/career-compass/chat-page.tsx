@@ -1,16 +1,61 @@
 'use client';
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { MessagesSquare, SendIcon, Loader2, Paperclip, X, FileText } from "lucide-react";
+import { MessagesSquare, SendIcon, Loader2, Paperclip, X, FileText, Bot } from "lucide-react";
 import ChatHistoryPanel from "./chat-history-panel";
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { chatWithInfralith } from "@/ai/flows/infralith/chat-agent";
 import ReactMarkdown from 'react-markdown';
 
+// Typewriter hook that animates text character by character
+function useTypewriter(text: string, enabled: boolean, speed = 8) {
+  const [displayed, setDisplayed] = useState('');
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !text) {
+      setDisplayed(text);
+      setDone(true);
+      return;
+    }
+    setDisplayed('');
+    setDone(false);
+    let i = 0;
+    // Use a fast interval to stream chunks of characters at once
+    const interval = setInterval(() => {
+      const chunkSize = Math.max(1, Math.round(text.length / 80));
+      i += chunkSize;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) {
+        setDisplayed(text);
+        setDone(true);
+        clearInterval(interval);
+      }
+    }, speed);
+    return () => clearInterval(interval);
+  }, [text, enabled]);
+
+  return { displayed, done };
+}
+
+// Component that renders a single AI message with typewriter effect
+function AIMessage({ content, animate }: { content: string; animate: boolean }) {
+  const { displayed, done } = useTypewriter(content, animate, 8);
+
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none font-medium text-inherit relative">
+      <ReactMarkdown>{displayed}</ReactMarkdown>
+      {!done && (
+        <span className="inline-block w-[2px] h-[1em] bg-primary/70 ml-0.5 align-middle animate-pulse rounded-sm" />
+      )}
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<{ role: 'user' | 'infralith', content: string }[]>([]);
+  const [messages, setMessages] = useState<{ role: 'user' | 'infralith'; content: string; animate?: boolean }[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
@@ -44,7 +89,8 @@ export default function ChatPage() {
     const context = messages.map(m => ({ role: m.role, content: m.content }));
     const response = await chatWithInfralith(context, prompt, fileName, fileContent);
 
-    setMessages(prev => [...prev, { role: 'infralith', content: response }]);
+    // Mark the newest AI message as animate: true so it gets the typewriter effect
+    setMessages(prev => [...prev, { role: 'infralith', content: response, animate: true }]);
     setLoading(false);
   };
 
@@ -81,22 +127,44 @@ export default function ChatPage() {
               </div>
             ) : (
               messages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`p-3 rounded-2xl max-w-[80%] shadow-sm ${m.role === 'user' ? 'bg-primary text-slate-900 font-bold rounded-tr-none' : 'bg-slate-50 dark:bg-muted/50 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-slate-100 rounded-tl-none'}`}>
+                <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {/* AI Avatar */}
+                  {m.role === 'infralith' && (
+                    <div className="shrink-0 h-8 w-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shadow-sm mb-1">
+                      <Bot className="h-4 w-4 text-primary" />
+                    </div>
+                  )}
+
+                  <div className={`p-3.5 rounded-2xl max-w-[80%] shadow-sm transition-all
+                    ${m.role === 'user'
+                      ? 'bg-primary text-slate-900 font-bold rounded-tr-none'
+                      : 'bg-slate-50 dark:bg-muted/50 border border-slate-200 dark:border-white/10 text-slate-800 dark:text-slate-100 rounded-tl-none animate-in fade-in slide-in-from-bottom-2 duration-300'
+                    }`}
+                  >
                     {m.role === 'infralith' ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none font-medium text-inherit">
-                        <ReactMarkdown>{m.content}</ReactMarkdown>
-                      </div>
+                      <AIMessage content={m.content} animate={m.animate === true} />
                     ) : m.content}
                   </div>
                 </div>
               ))
             )}
+
+            {/* Thinking indicator */}
             {loading && (
-              <div className="flex justify-start">
-                <div className="p-3 bg-slate-50 dark:bg-muted/50 border border-slate-200 dark:border-white/10 rounded-2xl rounded-tl-none flex items-center gap-2 shadow-sm">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-tighter">Infralith Agent thinking...</span>
+              <div className="flex items-end gap-2 justify-start">
+                <div className="shrink-0 h-8 w-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shadow-sm mb-1">
+                  <Bot className="h-4 w-4 text-primary animate-pulse" />
+                </div>
+                <div className="p-3.5 bg-slate-50 dark:bg-muted/50 border border-slate-200 dark:border-white/10 rounded-2xl rounded-tl-none shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  <div className="flex items-center gap-2">
+                    {/* Animated dots */}
+                    <span className="flex gap-1 items-center">
+                      <span className="h-2 w-2 rounded-full bg-primary/60 animate-bounce [animation-delay:0ms]" />
+                      <span className="h-2 w-2 rounded-full bg-primary/60 animate-bounce [animation-delay:150ms]" />
+                      <span className="h-2 w-2 rounded-full bg-primary/60 animate-bounce [animation-delay:300ms]" />
+                    </span>
+                    <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-tighter">Infralith Agent thinking...</span>
+                  </div>
                 </div>
               </div>
             )}
