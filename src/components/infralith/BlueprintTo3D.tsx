@@ -1042,15 +1042,40 @@ function BlueprintWorkspace() {
                     </div>
 
                     {/* --- RIGHT NAVIGATION PANEL (Project / Room Inspector) --- */}
-                    <div className="absolute right-6 top-1/2 -translate-y-1/2 w-[320px] bg-white/95 rounded-2xl border border-slate-200 shadow-2xl z-[110] flex flex-col pointer-events-auto h-[80vh] overflow-hidden">
+                    {!isInspectorVisible && isFullscreen && (
+                        <motion.button
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            onClick={() => setIsInspectorVisible(true)}
+                            className="absolute right-0 top-1/2 -translate-y-1/2 bg-white/95 p-3 rounded-l-xl shadow-[rgba(0,0,0,0.2)_-5px_0_15px] border border-r-0 border-slate-200 z-[111] hover:bg-white transition-all group pointer-events-auto"
+                        >
+                            <ChevronLeft className="h-6 w-6 text-slate-400 group-hover:text-[#f8a14d] transition-colors" />
+                        </motion.button>
+                    )}
+
+                    <motion.div
+                        initial={false}
+                        animate={{
+                            x: isInspectorVisible ? 0 : 350,
+                            opacity: isInspectorVisible ? 1 : 0,
+                            pointerEvents: isInspectorVisible ? "auto" : "none"
+                        }}
+                        transition={{ duration: 0.3, ease: 'easeOut' }}
+                        className="absolute right-6 top-1/2 -translate-y-1/2 w-[320px] bg-white/95 rounded-2xl border border-slate-200 shadow-2xl z-[110] flex flex-col h-[80vh] overflow-hidden"
+                    >
                         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
                             <h2 className="text-[11px] font-black uppercase tracking-widest text-slate-800 flex items-center gap-2">
                                 <Box className="h-4 w-4 text-[#f8a14d]" />
                                 Project Inspector
                             </h2>
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-lg hover:bg-slate-100" onClick={() => setIsFullscreen(false)}>
-                                <Minimize2 className="h-3.5 w-3.5" />
-                            </Button>
+                            <div className="flex items-center gap-1">
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-800" onClick={() => setIsInspectorVisible(false)}>
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-800" onClick={() => setIsFullscreen(false)} title="Exit Fullscreen">
+                                    <Minimize2 className="h-3.5 w-3.5" />
+                                </Button>
+                            </div>
                         </div>
 
                         {/* Status Header */}
@@ -1127,7 +1152,7 @@ function BlueprintWorkspace() {
                                 Export BIM
                             </Button>
                         </div>
-                    </div>
+                    </motion.div>
 
                     {/* Context Panel - Wall Profile */}
                     {
@@ -1170,29 +1195,6 @@ function BlueprintWorkspace() {
                         )
                     }
 
-                    {/* Bottom Toolbar - Time Selection */}
-                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[540px] z-[110] pointer-events-auto">
-                        <div className="bg-[#0f1429]/95 backdrop-blur-3xl border border-white/5 p-5 rounded-[28px] shadow-[0_30px_60px_rgba(0,0,0,0.4)] flex items-center gap-6">
-                            <Moon className="h-5 w-5 text-white/40 shrink-0" />
-                            <div className="flex-1 flex flex-col gap-2">
-                                <input
-                                    type="range"
-                                    min="0" max="24" step="0.5"
-                                    value={timeOfDay}
-                                    onChange={(e) => setTimeOfDay(parseFloat(e.target.value))}
-                                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[#f8a14d]"
-                                />
-                                <div className="flex justify-between px-1 text-[10px] font-black uppercase tracking-widest text-white/30 italic">
-                                    <span className={timeOfDay < 4 ? "text-white" : ""}>12am</span>
-                                    <span className={timeOfDay >= 4 && timeOfDay < 10 ? "text-white" : ""}>6am</span>
-                                    <span className={timeOfDay >= 10 && timeOfDay < 14 ? "text-[#f8a14d]" : ""}>12pm</span>
-                                    <span className={timeOfDay >= 14 && timeOfDay < 20 ? "text-white" : ""}>6pm</span>
-                                    <span className={timeOfDay >= 20 ? "text-white" : ""}>12am</span>
-                                </div>
-                            </div>
-                            <Sun className="h-6 w-6 text-[#f8a14d] shrink-0 drop-shadow-[0_0_8px_rgba(248,161,77,0.5)]" />
-                        </div>
-                    </div>
                 </>
             )}
 
