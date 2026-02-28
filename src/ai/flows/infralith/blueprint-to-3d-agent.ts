@@ -64,6 +64,16 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
       }
     });
 
+    pythonProcess.on('error', (err: any) => {
+      if (err.code === 'ENOENT') {
+        console.warn("[Vectorization] Python executable not found in path. Falling back to AI Vision only.");
+        reject(new Error("Python not installed or in PATH."));
+      } else {
+        console.error("[Vectorization] Python spawn error:", err);
+        reject(err);
+      }
+    });
+
     // Pipe the large base64 string to the Python script's standard input
     pythonProcess.stdin.write(base64Image);
     pythonProcess.stdin.end();
