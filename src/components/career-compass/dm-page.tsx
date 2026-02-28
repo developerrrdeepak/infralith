@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
 import { useAppContext } from '@/contexts/app-context';
-import { dmService, userDbService, inviteService, ChatSummary, ChatMessage, UserProfileData } from '@/lib/services';
+import { dmService, userDbService, inviteService, ChatSummary, ChatMessage, UserProfileData, normalizeEmail } from '@/lib/services';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -36,9 +36,10 @@ export default function DMPage() {
   const [isGroupDialogActive, setIsGroupDialogActive] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedEngineers, setSelectedEngineers] = useState<string[]>([]);
-  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found' | 'not_found' | 'invited'>('idle');
+  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found_member' | 'found_not_member' | 'not_found' | 'invited'>('idle');
   const [emailLookupUser, setEmailLookupUser] = useState<UserProfileData | null>(null);
   const latestLookupId = useRef(0);
+  const lookupDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canCreateGroups = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
 
@@ -209,7 +210,7 @@ export default function DMPage() {
   };
 
   // Called whenever the search input changes — auto-lookup if valid email
-  const handleSearchChange = async (value: string) => {
+  const handleSearchChange = (value: string) => {
     setSearchUser(value);
     const normalized = normalizeEmail(value);
     const isEmail = normalized.includes('@') && normalized.includes('.');
@@ -218,54 +219,65 @@ export default function DMPage() {
       setEmailLookupUser(null);
       return;
     }
-    const requestId = ++latestLookupId.current;
-    setEmailLookupResult('loading');
 
-    const lookup = async () => {
-      const found = await userDbService.getUserByEmail(normalized);
-      const isSelf = found && found.uid === user?.uid;
-      const exists = !!found && !isSelf;
-      // In this mock workspace, any existing user is a member; structure kept for future multi-workspace support.
-      const workspaceMember = exists;
-      const alreadyInvited = user ? inviteService.hasInvited(user.uid, normalized) : false;
-      return { exists, workspaceMember, found, alreadyInvited, isSelf };
-    };
+    if (lookupDebounce.current) clearTimeout(lookupDebounce.current);
 
-    const { exists, workspaceMember, found, alreadyInvited, isSelf } = await lookup();
-    if (requestId !== latestLookupId.current) return; // stale response guard
+    lookupDebounce.current = setTimeout(async () => {
+      const requestId = ++latestLookupId.current;
+      setEmailLookupResult('loading');
 
-    if (isSelf) {
-      setEmailLookupResult('idle');
-      setEmailLookupUser(null);
-      return;
-    }
+      try {
+        const found = await userDbService.getUserByEmail(normalized);
+        const isSelf = found && found.uid === user?.uid;
+        const exists = !!found && !isSelf;
+        // Placeholder: real workspace membership check would go here.
+        const workspaceMember = exists;
+        const alreadyInvited = user ? inviteService.hasInvited(user.uid, normalized) : false;
 
-    if (exists) {
-      setEmailLookupUser(found as UserProfileData);
-      // Even if not in workspace (future), show distinct state; for now found == member.
-      setEmailLookupResult(workspaceMember ? 'found' : 'not_found');
-      return;
-    }
+        if (requestId !== latestLookupId.current) return; // stale response guard
 
-    setEmailLookupUser(null);
-    setEmailLookupResult(alreadyInvited ? 'invited' : 'not_found');
+        if (isSelf) {
+          setEmailLookupResult('idle');
+          setEmailLookupUser(null);
+          return;
+        }
+
+        if (exists) {
+          setEmailLookupUser(found as UserProfileData);
+          setEmailLookupResult(workspaceMember ? 'found_member' : 'found_not_member');
+          return;
+        }
+
+        setEmailLookupUser(null);
+        setEmailLookupResult(alreadyInvited ? 'invited' : 'not_found');
+      } catch (error) {
+        if (requestId !== latestLookupId.current) return;
+        console.error('Lookup failed', error);
+        setEmailLookupResult('idle');
+      }
+    }, 350);
   };
 
   const handleSendInvite = () => {
     if (!user) return;
-    inviteService.sendInvite({
-      senderUid: user.uid,
-      senderName: user.name,
-      senderEmail: user.email || '',
-      recipientEmail: normalizeEmail(searchUser),
-      sentAt: Date.now(),
-      status: 'sent',
-    });
-    setEmailLookupResult('invited');
-    toast({
-      title: '📧 Invitation Sent',
-      description: `An invite to join Infralith has been sent to ${searchUser.trim()}.`,
-    });
+    try {
+      inviteService.sendInvite({
+        senderUid: user.uid,
+        senderName: user.name,
+        senderEmail: normalizeEmail(user.email || ''),
+        recipientEmail: normalizeEmail(searchUser),
+        sentAt: Date.now(),
+        status: 'sent',
+      });
+      setEmailLookupResult('invited');
+      toast({
+        title: '📧 Invitation Sent',
+        description: `An invite to join Infralith has been sent to ${searchUser.trim()}.`,
+      });
+    } catch (error) {
+      console.error('Invite failed', error);
+      toast({ variant: 'destructive', title: 'Invite failed', description: 'Could not send the invitation.' });
+    }
   };
 
   const startChatWithUser = async (targetUser: UserProfileData) => {
@@ -371,19 +383,26 @@ export default function DMPage() {
 
                   {/* Email lookup result banner */}
                   {searchUser.includes('@') && searchUser.includes('.') && (
-                    <div className={`rounded-xl border p-4 flex items-start gap-3 text-sm transition-all ${emailLookupResult === 'found' ? 'bg-emerald-500/5 border-emerald-500/20' :
-                        emailLookupResult === 'not_found' ? 'bg-orange-500/5 border-orange-500/20' :
-                          emailLookupResult === 'invited' ? 'bg-blue-500/5 border-blue-500/20' :
-                            'bg-muted/40 border-border'
-                      }`}>
+                    <div className={`rounded-xl border p-4 flex items-start gap-3 text-sm transition-all ${
+                      emailLookupResult === 'found_member'
+                        ? 'bg-emerald-500/5 border-emerald-500/20'
+                        : emailLookupResult === 'found_not_member'
+                          ? 'bg-amber-500/5 border-amber-500/20'
+                          : emailLookupResult === 'not_found'
+                            ? 'bg-orange-500/5 border-orange-500/20'
+                            : emailLookupResult === 'invited'
+                              ? 'bg-blue-500/5 border-blue-500/20'
+                              : 'bg-muted/40 border-border'
+                    }`}>
                       {emailLookupResult === 'loading' && <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin shrink-0" />}
-                      {emailLookupResult === 'found' && <UserCheck className="h-5 w-5 text-emerald-500 shrink-0" />}
+                      {emailLookupResult === 'found_member' && <UserCheck className="h-5 w-5 text-emerald-500 shrink-0" />}
+                      {emailLookupResult === 'found_not_member' && <UserPlus className="h-5 w-5 text-amber-500 shrink-0" />}
                       {emailLookupResult === 'not_found' && <UserPlus className="h-5 w-5 text-orange-500 shrink-0" />}
                       {emailLookupResult === 'invited' && <Mail className="h-5 w-5 text-blue-500 shrink-0" />}
 
                       <div className="flex-1">
                         {emailLookupResult === 'loading' && <p className="text-muted-foreground">Checking registry...</p>}
-                        {emailLookupResult === 'found' && emailLookupUser && (
+                        {emailLookupResult === 'found_member' && emailLookupUser && (
                           <>
                             <p className="font-bold text-emerald-700 dark:text-emerald-400">User found on Infralith portal</p>
                             <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} · {emailLookupUser.email}</p>
@@ -392,6 +411,18 @@ export default function DMPage() {
                               className="mt-3 w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg py-2 text-sm font-bold transition-colors"
                             >
                               <MessageCircle className="h-4 w-4" /> Start Conversation
+                            </button>
+                          </>
+                        )}
+                        {emailLookupResult === 'found_not_member' && emailLookupUser && (
+                          <>
+                            <p className="font-bold text-amber-700 dark:text-amber-400">On Infralith, not in this workspace</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} · {emailLookupUser.email}</p>
+                            <button
+                              onClick={handleSendInvite}
+                              className="mt-3 w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg py-2 text-sm font-bold transition-colors"
+                            >
+                              <UserPlus className="h-4 w-4" /> Invite to workspace
                             </button>
                           </>
                         )}

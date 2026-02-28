@@ -1,6 +1,8 @@
 import { LS_KEYS } from './constants';
 import { WorkflowResult } from '@/ai/flows/infralith/types';
 
+export const normalizeEmail = (email: string) => (email || '').trim().toLowerCase();
+
 export type UserProfileData = {
   uid: string;
   name: string;
@@ -105,7 +107,7 @@ export const userDbService = {
     const users = getStorageItem('infralith_users') || {};
     users[user.id] = {
       uid: user.id,
-      email: user.email,
+      email: normalizeEmail(user.email),
       name: user.name,
       avatar: user.image,
       createdAt: new Date().toISOString(),
@@ -127,7 +129,8 @@ export const userDbService = {
   getUserByEmail: async (email: string): Promise<UserProfileData | null> => {
     const users = getStorageItem('infralith_users') || {};
     const all: UserProfileData[] = Object.values(users);
-    return all.find((u) => (u.email || '').toLowerCase() === email.toLowerCase()) || null;
+    const target = normalizeEmail(email);
+    return all.find((u) => normalizeEmail(u.email || '') === target) || null;
   },
 
   updateUser: async (uid: string, data: Partial<UserProfileData>) => {
@@ -154,7 +157,8 @@ export const inviteService = {
   sendInvite: (invite: Omit<InviteRecord, 'id'>) => {
     const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
     const id = `inv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    invites[id] = { ...invite, id };
+    const normalizedEmail = normalizeEmail(invite.recipientEmail);
+    invites[id] = { ...invite, id, recipientEmail: normalizedEmail };
     setStorageItem('infralith_invites', invites);
     return id;
   },
@@ -166,8 +170,9 @@ export const inviteService = {
 
   hasInvited: (senderUid: string, recipientEmail: string): boolean => {
     const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
+    const normalizedEmail = normalizeEmail(recipientEmail);
     return Object.values(invites).some(
-      (i) => i.senderUid === senderUid && i.recipientEmail.toLowerCase() === recipientEmail.toLowerCase()
+      (i) => i.senderUid === senderUid && normalizeEmail(i.recipientEmail) === normalizedEmail
     );
   },
 
