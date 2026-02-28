@@ -124,6 +124,12 @@ export const userDbService = {
     return Object.values(users);
   },
 
+  getUserByEmail: async (email: string): Promise<UserProfileData | null> => {
+    const users = getStorageItem('infralith_users') || {};
+    const all: UserProfileData[] = Object.values(users);
+    return all.find((u) => (u.email || '').toLowerCase() === email.toLowerCase()) || null;
+  },
+
   updateUser: async (uid: string, data: Partial<UserProfileData>) => {
     const users = getStorageItem('infralith_users') || {};
     if (users[uid]) {
@@ -131,6 +137,45 @@ export const userDbService = {
       setStorageItem('infralith_users', users);
     }
   }
+};
+
+// --- INVITE SERVICE ---
+export type InviteRecord = {
+  id: string;
+  senderUid: string;
+  senderName: string;
+  senderEmail: string;
+  recipientEmail: string;
+  sentAt: number;
+  status: 'pending' | 'sent';
+};
+
+export const inviteService = {
+  sendInvite: (invite: Omit<InviteRecord, 'id'>) => {
+    const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
+    const id = `inv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    invites[id] = { ...invite, id };
+    setStorageItem('infralith_invites', invites);
+    return id;
+  },
+
+  getInvitesSentBy: (senderUid: string): InviteRecord[] => {
+    const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
+    return Object.values(invites).filter((i) => i.senderUid === senderUid);
+  },
+
+  hasInvited: (senderUid: string, recipientEmail: string): boolean => {
+    const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
+    return Object.values(invites).some(
+      (i) => i.senderUid === senderUid && i.recipientEmail.toLowerCase() === recipientEmail.toLowerCase()
+    );
+  },
+
+  deleteInvite: (id: string) => {
+    const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
+    delete invites[id];
+    setStorageItem('infralith_invites', invites);
+  },
 };
 
 // --- AUTH SERVICE (Mocked for Enterprise context) ---

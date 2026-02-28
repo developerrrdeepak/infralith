@@ -1,12 +1,12 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
 import { useAppContext } from '@/contexts/app-context';
-import { dmService, userDbService, ChatSummary, ChatMessage, UserProfileData } from '@/lib/services';
+import { dmService, userDbService, inviteService, ChatSummary, ChatMessage, UserProfileData } from '@/lib/services';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send, MessageCircle, AlertCircle, Check, Trash2, X, Plus, Image as ImageIcon, ShieldCheck, Search, Users, Video } from 'lucide-react';
+import { Send, MessageCircle, AlertCircle, Check, Trash2, X, Plus, Image as ImageIcon, ShieldCheck, Search, Users, Video, Mail, UserCheck, UserPlus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -34,6 +34,8 @@ export default function DMPage() {
   const [isGroupDialogActive, setIsGroupDialogActive] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedEngineers, setSelectedEngineers] = useState<string[]>([]);
+  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found' | 'not_found' | 'invited'>('idle');
+  const [emailLookupUser, setEmailLookupUser] = useState<UserProfileData | null>(null);
 
   const canCreateGroups = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
 
@@ -196,8 +198,52 @@ export default function DMPage() {
 
   const openNewChatDialog = async () => {
     const users = await userDbService.getAllUsers();
-    setAllUsers(users.filter(u => u.uid !== user?.uid)); // Filter out current user
+    setAllUsers(users.filter(u => u.uid !== user?.uid));
+    setSearchUser('');
+    setEmailLookupResult('idle');
+    setEmailLookupUser(null);
     setIsNewChatOpen(true);
+  };
+
+  // Called whenever the search input changes — auto-lookup if valid email
+  const handleSearchChange = async (value: string) => {
+    setSearchUser(value);
+    const isEmail = value.includes('@') && value.includes('.');
+    if (!isEmail) {
+      setEmailLookupResult('idle');
+      setEmailLookupUser(null);
+      return;
+    }
+    setEmailLookupResult('loading');
+    const found = await userDbService.getUserByEmail(value.trim());
+    if (found && found.uid !== user?.uid) {
+      setEmailLookupUser(found);
+      setEmailLookupResult('found');
+    } else if (found && found.uid === user?.uid) {
+      setEmailLookupResult('idle'); // own email, skip
+      setEmailLookupUser(null);
+    } else {
+      setEmailLookupUser(null);
+      const alreadyInvited = user ? inviteService.hasInvited(user.uid, value.trim()) : false;
+      setEmailLookupResult(alreadyInvited ? 'invited' : 'not_found');
+    }
+  };
+
+  const handleSendInvite = () => {
+    if (!user) return;
+    inviteService.sendInvite({
+      senderUid: user.uid,
+      senderName: user.name,
+      senderEmail: user.email || '',
+      recipientEmail: searchUser.trim(),
+      sentAt: Date.now(),
+      status: 'sent',
+    });
+    setEmailLookupResult('invited');
+    toast({
+      title: '📧 Invitation Sent',
+      description: `An invite to join Infralith has been sent to ${searchUser.trim()}.`,
+    });
   };
 
   const startChatWithUser = async (targetUser: UserProfileData) => {
@@ -293,43 +339,71 @@ export default function DMPage() {
                 <div className="space-y-4 pt-4">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search by name, or type an email to start a new chat..."
-                      className="pl-9"
+                    <input
+                      className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      placeholder="Search by name, or type an email address..."
                       value={searchUser}
-                      onChange={(e) => setSearchUser(e.target.value)}
+                      onChange={(e) => handleSearchChange(e.target.value)}
                     />
                   </div>
-                  <ScrollArea className="h-[300px] border rounded-md">
+
+                  {/* Email lookup result banner */}
+                  {searchUser.includes('@') && searchUser.includes('.') && (
+                    <div className={`rounded-xl border p-4 flex items-start gap-3 text-sm transition-all ${emailLookupResult === 'found' ? 'bg-emerald-500/5 border-emerald-500/20' :
+                        emailLookupResult === 'not_found' ? 'bg-orange-500/5 border-orange-500/20' :
+                          emailLookupResult === 'invited' ? 'bg-blue-500/5 border-blue-500/20' :
+                            'bg-muted/40 border-border'
+                      }`}>
+                      {emailLookupResult === 'loading' && <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin shrink-0" />}
+                      {emailLookupResult === 'found' && <UserCheck className="h-5 w-5 text-emerald-500 shrink-0" />}
+                      {emailLookupResult === 'not_found' && <UserPlus className="h-5 w-5 text-orange-500 shrink-0" />}
+                      {emailLookupResult === 'invited' && <Mail className="h-5 w-5 text-blue-500 shrink-0" />}
+
+                      <div className="flex-1">
+                        {emailLookupResult === 'loading' && <p className="text-muted-foreground">Checking registry...</p>}
+                        {emailLookupResult === 'found' && emailLookupUser && (
+                          <>
+                            <p className="font-bold text-emerald-700 dark:text-emerald-400">User found on Infralith portal</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} · {emailLookupUser.email}</p>
+                            <button
+                              onClick={() => startChatWithUser(emailLookupUser)}
+                              className="mt-3 w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg py-2 text-sm font-bold transition-colors"
+                            >
+                              <MessageCircle className="h-4 w-4" /> Start Conversation
+                            </button>
+                          </>
+                        )}
+                        {emailLookupResult === 'not_found' && (
+                          <>
+                            <p className="font-bold text-orange-700 dark:text-orange-400">Not registered on Infralith</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              This email is not in the portal. Send them an app invite to collaborate.
+                            </p>
+                            <button
+                              onClick={handleSendInvite}
+                              className="mt-3 w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg py-2 text-sm font-bold transition-colors"
+                            >
+                              <UserPlus className="h-4 w-4" /> Send Infralith Invite
+                            </button>
+                          </>
+                        )}
+                        {emailLookupResult === 'invited' && (
+                          <>
+                            <p className="font-bold text-blue-700 dark:text-blue-400">Invitation already sent</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              An invite to {searchUser.trim()} is pending acceptance. You'll be notified when they join.
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <ScrollArea className="h-[260px] border rounded-md">
                     <div className="p-2 space-y-1">
-
-                      {/* Always show email-start button when search looks like a valid email */}
-                      {searchUser.includes('@') && searchUser.includes('.') && (
-                        <button
-                          onClick={async () => {
-                            const emailUser: any = {
-                              uid: searchUser.toLowerCase().trim(),
-                              email: searchUser.toLowerCase().trim(),
-                              name: searchUser.split('@')[0],
-                              avatar: '',
-                            };
-                            await startChatWithUser(emailUser);
-                          }}
-                          className="w-full flex items-center gap-3 p-3 rounded-lg bg-[#f59e0b]/10 border border-[#f59e0b]/30 hover:bg-[#f59e0b]/20 transition-all text-left mb-2"
-                        >
-                          <div className="h-8 w-8 rounded-full bg-[#f59e0b]/20 flex items-center justify-center shrink-0">
-                            <MessageCircle className="h-4 w-4 text-[#f59e0b]" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-foreground">{searchUser.trim()}</p>
-                            <p className="text-xs text-muted-foreground">Start new chat with this email</p>
-                          </div>
-                        </button>
-                      )}
-
                       {filteredUsers.length === 0 && !searchUser.includes('@') ? (
                         <div className="text-center text-sm text-muted-foreground py-10">
-                          <p>No users found. Try typing an email address.</p>
+                          <p>No teammates found. Try typing an email address.</p>
                         </div>
                       ) : (
                         filteredUsers.map(u => (
@@ -346,6 +420,7 @@ export default function DMPage() {
                               <p className="text-sm font-medium">{u.name}</p>
                               <p className="text-xs text-muted-foreground truncate">{u.email}</p>
                             </div>
+                            <UserCheck className="h-4 w-4 text-emerald-500 shrink-0" />
                           </button>
                         ))
                       )}
