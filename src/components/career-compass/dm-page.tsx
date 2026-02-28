@@ -423,7 +423,7 @@ export default function DMPage() {
                     selectedChat.otherUserAvatar,
                     user.name,
                     user.avatar || '',
-                    "🎥 Please join my secure video meeting: https://meet.infralith.com/room-" + Math.floor(Math.random() * 10000),
+                    "🎥 Please join my secure video meeting: https://meet.jit.si/infralith-room-" + Math.floor(Math.random() * 1000000),
                     null
                   );
                   toast({ title: "Meeting Started", description: "Secure video meeting link sent." });
@@ -468,7 +468,19 @@ export default function DMPage() {
                         {msg.imageUrl && (
                           <img src={msg.imageUrl} alt="Shared file" className="max-w-full sm:max-w-[250px] object-cover rounded-[10px] mb-2 mt-1 border border-black/5" />
                         )}
-                        {msg.text && <span>{msg.text}</span>}
+                        {msg.text && (
+                          <span className="break-words whitespace-pre-wrap">
+                            {msg.text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+                              /(https?:\/\/[^\s]+)/g.test(part) ? (
+                                <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline inline-flex items-center gap-1 font-bold">
+                                  {part}
+                                </a>
+                              ) : (
+                                <span key={i}>{part}</span>
+                              )
+                            )}
+                          </span>
+                        )}
 
                         <div className="text-[9px] text-slate-400 text-right mt-1 w-full relative h-[14px]">
                           <span className={cn("absolute right-0", isMe ? "" : "right-auto left-0")}>
