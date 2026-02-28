@@ -1,8 +1,3 @@
-### ** File: `src/ai/flows/infralith/blueprint-to-3d-agent.ts` **
-
-  This file contains the backend server action that is called by the frontend component.
-
-```typescript
 'use server';
 
 import {
@@ -52,15 +47,15 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
 
     pythonProcess.on('close', (code) => {
       if (code !== 0) {
-        console.error(`[Vectorization] Python script error: ${ errorOutput } `);
-        reject(new Error(`Python script exited with code ${ code }: ${ errorOutput } `));
+        console.error(`[Vectorization] Python script error: ${errorOutput} `);
+        reject(new Error(`Python script exited with code ${code}: ${errorOutput} `));
       } else {
         try {
           const result = JSON.parse(output);
           if (result.error) {
             reject(new Error(result.error));
           }
-          console.log(`[Vectorization] Success: Found ${ result.line_count } structural polygons.`);
+          console.log(`[Vectorization] Success: Found ${result.line_count} structural polygons.`);
           resolve(result);
         } catch (e) {
           console.error("[Vectorization] Failed to parse Python script output:", output);
@@ -92,7 +87,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     vectorizationData = vectorizationResult.lines;
     debugImage = vectorizationResult.debug_image;
   } catch (e: any) {
-    console.warn(`[Infralith Vision Engine] Vectorization pre - processing failed: ${ e.message }. Falling back to pure vision analysis.`);
+    console.warn(`[Infralith Vision Engine] Vectorization pre - processing failed: ${e.message}. Falling back to pure vision analysis.`);
   }
 
   // STAGE 2: Send image and vector hints to the AI Vision model
@@ -106,7 +101,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     ADDITIONAL CONTEXT(FROM PRE - PROCESSING):
     I have run a computer vision(OpenCV) pre - processing script to detect potential wall polygons.Use this vector data as a STRONG HINT for tracing walls.It may not be perfect, but it identifies the primary structural outlines.
     OPENCV VECTORS:
-    ${ vectorizationData ? JSON.stringify(vectorizationData, null, 2) : "Not available." }
+    ${vectorizationData ? JSON.stringify(vectorizationData, null, 2) : "Not available."}
 
     CORE VISION ANALYSIS PROTOCOL:
 1. EXACT VISUAL WALL TRACING: Scan the image systematically.Identify every dark continuous line segment as a wall.
@@ -276,7 +271,7 @@ export async function generateBuildingFromDescription(description: string): Prom
  * This guarantees the models are completely unique and not predefined templates.
  */
 export async function generateRealTimeAsset(description: string): Promise<AIAsset> {
-  console.log(`[Procedural Voxel Engine] Generating asset: ${ description } `);
+  console.log(`[Procedural Voxel Engine] Generating asset: ${description} `);
 
   const prompt = `
     You are an expert technical 3D voxel modeler.Generate a precise, detailed procedural 3D asset for: "${description}".
