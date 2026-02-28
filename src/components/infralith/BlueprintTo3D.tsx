@@ -744,15 +744,50 @@ function BlueprintWorkspace() {
         }
     }, [status, elements]);
 
+    const handleDeleteElement = useCallback(() => {
+        if (selectedElement && elements) {
+            const nextElements = { ...elements };
+            if (selectedElement.type === 'wall') {
+                nextElements.walls = nextElements.walls?.filter(w => w.id !== selectedElement.data.id) || [];
+            } else if (selectedElement.type === 'room') {
+                nextElements.rooms = nextElements.rooms?.filter(r => r.id !== selectedElement.data.id) || [];
+            }
+            setElements(nextElements);
+            setSelectedElement(null);
+            toast({ title: 'Deleted', description: `${selectedElement.type === 'wall' ? 'Wall' : 'Room'} removed.` });
+        } else {
+            toast({ title: 'Nothing Selected', description: 'Select a wall or room first to delete it.', variant: 'destructive' });
+        }
+    }, [selectedElement, elements, setElements, setSelectedElement, toast]);
+
     React.useEffect(() => {
-        const handleEsc = (e: KeyboardEvent) => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
             if (e.key === 'Escape') {
                 setIsFullscreen(false);
+                setSelectedElement(null);
+            } else if (e.key === 'Delete' || e.key === 'Backspace') {
+                handleDeleteElement();
+            } else if (e.key.toLowerCase() === 'v') {
+                setActiveTool('select');
+            } else if (e.key.toLowerCase() === 'm') {
+                setActiveTool('move');
+                toast({ title: 'Move', description: 'Select element and drag to move (Coming Soon in v2)' });
+            } else if (e.key.toLowerCase() === 's') {
+                setActiveTool('scale');
+                toast({ title: 'Scale', description: 'Select element corners to scale (Coming Soon in v2)' });
+            } else if (e.key.toLowerCase() === 'p') {
+                setIsWalkthrough(prev => !prev);
+            } else if (e.key.toLowerCase() === 'l') {
+                setTimeOfDay(prev => prev === 14 ? 22 : 14);
+            } else if (e.key.toLowerCase() === 'c') {
+                setIsTopView(prev => !prev);
             }
         };
-        window.addEventListener('keydown', handleEsc);
-        return () => window.removeEventListener('keydown', handleEsc);
-    }, []);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleDeleteElement]);
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
@@ -920,7 +955,6 @@ function BlueprintWorkspace() {
                             <div className="flex flex-col">
                                 <h1 className="text-3xl font-black tracking-tighter text-[#f8a14d] flex items-center gap-2">
                                     <Box className="h-8 w-8" />
-                                    3D Building Generator
                                 </h1>
                             </div>
 
@@ -977,7 +1011,7 @@ function BlueprintWorkspace() {
                                 icon={<Move className="h-4 w-4" />}
                                 label="Move"
                                 active={activeTool === 'move'}
-                                onClick={() => setActiveTool('move')}
+                                onClick={() => { setActiveTool('move'); toast({ title: 'Move', description: 'Select element and drag to move (Coming Soon)' }); }}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="M"
                             />
@@ -985,7 +1019,7 @@ function BlueprintWorkspace() {
                                 icon={<Scaling className="h-4 w-4" />}
                                 label="Scale"
                                 active={activeTool === 'scale'}
-                                onClick={() => setActiveTool('scale')}
+                                onClick={() => { setActiveTool('scale'); toast({ title: 'Scale', description: 'Select element corners to scale (Coming Soon)' }); }}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="S"
                             />
@@ -993,7 +1027,7 @@ function BlueprintWorkspace() {
                                 icon={<Trash2 className="h-4 w-4" />}
                                 label="Delete"
                                 active={activeTool === 'delete'}
-                                onClick={() => setActiveTool('delete')}
+                                onClick={() => { setActiveTool('delete'); handleDeleteElement(); }}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="DEL"
                                 color="text-red-400"
@@ -1014,16 +1048,16 @@ function BlueprintWorkspace() {
                                 shortcut="P"
                             />
                             <ToolButton
-                                icon={<Lightbulb className="h-4 w-4" />}
-                                label="Lighting"
-                                active={activeTool === 'lighting'}
-                                onClick={() => setTimeOfDay(12)}
+                                icon={timeOfDay === 14 ? <Lightbulb className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                                label={timeOfDay === 14 ? "Day Mode" : "Night Mode"}
+                                active={timeOfDay === 22}
+                                onClick={() => setTimeOfDay(prev => prev === 14 ? 22 : 14)}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="L"
                             />
                             <ToolButton
                                 icon={<Camera className="h-4 w-4" />}
-                                label="Camera"
+                                label="Top Camera"
                                 active={isTopView}
                                 onClick={() => setIsTopView(!isTopView)}
                                 expanded={isLeftPanelExpanded}
