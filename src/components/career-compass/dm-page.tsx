@@ -16,6 +16,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
 export default function DMPage() {
   const { user } = useAppContext();
   const { toast } = useToast();
@@ -36,6 +38,7 @@ export default function DMPage() {
   const [selectedEngineers, setSelectedEngineers] = useState<string[]>([]);
   const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found' | 'not_found' | 'invited'>('idle');
   const [emailLookupUser, setEmailLookupUser] = useState<UserProfileData | null>(null);
+  const latestLookupId = useRef(0);
 
   const canCreateGroups = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
 
@@ -208,25 +211,44 @@ export default function DMPage() {
   // Called whenever the search input changes — auto-lookup if valid email
   const handleSearchChange = async (value: string) => {
     setSearchUser(value);
-    const isEmail = value.includes('@') && value.includes('.');
+    const normalized = normalizeEmail(value);
+    const isEmail = normalized.includes('@') && normalized.includes('.');
     if (!isEmail) {
       setEmailLookupResult('idle');
       setEmailLookupUser(null);
       return;
     }
+    const requestId = ++latestLookupId.current;
     setEmailLookupResult('loading');
-    const found = await userDbService.getUserByEmail(value.trim());
-    if (found && found.uid !== user?.uid) {
-      setEmailLookupUser(found);
-      setEmailLookupResult('found');
-    } else if (found && found.uid === user?.uid) {
-      setEmailLookupResult('idle'); // own email, skip
+
+    const lookup = async () => {
+      const found = await userDbService.getUserByEmail(normalized);
+      const isSelf = found && found.uid === user?.uid;
+      const exists = !!found && !isSelf;
+      // In this mock workspace, any existing user is a member; structure kept for future multi-workspace support.
+      const workspaceMember = exists;
+      const alreadyInvited = user ? inviteService.hasInvited(user.uid, normalized) : false;
+      return { exists, workspaceMember, found, alreadyInvited, isSelf };
+    };
+
+    const { exists, workspaceMember, found, alreadyInvited, isSelf } = await lookup();
+    if (requestId !== latestLookupId.current) return; // stale response guard
+
+    if (isSelf) {
+      setEmailLookupResult('idle');
       setEmailLookupUser(null);
-    } else {
-      setEmailLookupUser(null);
-      const alreadyInvited = user ? inviteService.hasInvited(user.uid, value.trim()) : false;
-      setEmailLookupResult(alreadyInvited ? 'invited' : 'not_found');
+      return;
     }
+
+    if (exists) {
+      setEmailLookupUser(found as UserProfileData);
+      // Even if not in workspace (future), show distinct state; for now found == member.
+      setEmailLookupResult(workspaceMember ? 'found' : 'not_found');
+      return;
+    }
+
+    setEmailLookupUser(null);
+    setEmailLookupResult(alreadyInvited ? 'invited' : 'not_found');
   };
 
   const handleSendInvite = () => {
@@ -235,7 +257,7 @@ export default function DMPage() {
       senderUid: user.uid,
       senderName: user.name,
       senderEmail: user.email || '',
-      recipientEmail: searchUser.trim(),
+      recipientEmail: normalizeEmail(searchUser),
       sentAt: Date.now(),
       status: 'sent',
     });
