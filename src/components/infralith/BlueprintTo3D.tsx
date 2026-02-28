@@ -9,7 +9,9 @@ import {
     Html,
     Edges,
     MeshDistortMaterial,
-    PointerLockControls
+    PointerLockControls,
+    Sky,
+    Stars
 } from '@react-three/drei';
 import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postprocessing';
 import { Geometry, Base, Subtraction } from '@react-three/csg';
@@ -1342,6 +1344,20 @@ function BlueprintWorkspace() {
                                         <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
                                             shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
                                         <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
+
+                                        {/* Dynamic Sky */}
+                                        {!isNight && (
+                                            <Sky distance={450000} sunPosition={[sunX, sunY, sunZ]} inclination={0} azimuth={0.25} rayleigh={1.5} turbidity={0.5} />
+                                        )}
+                                        {isNight && (
+                                            <>
+                                                {/* Deep night sky color background */}
+                                                <color attach="background" args={['#050812']} />
+                                                <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+                                            </>
+                                        )}
+                                        {/* Daytime background if no sky (fallback, or when transitioning) */}
+                                        {!isNight && <color attach="background" args={['#d1eaff']} />}
                                     </>
                                 );
                             })()}
