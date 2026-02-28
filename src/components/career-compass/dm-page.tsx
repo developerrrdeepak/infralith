@@ -303,7 +303,26 @@ export default function DMPage() {
                   <ScrollArea className="h-[300px] border rounded-md">
                     <div className="p-2 space-y-1">
                       {filteredUsers.length === 0 ? (
-                        <div className="text-center text-sm text-muted-foreground py-10">No users found.</div>
+                        <div className="text-center text-sm text-muted-foreground py-10">
+                          <p className="mb-2">No existing users found.</p>
+                          {searchUser.includes('@') && (
+                            <Button
+                              variant="outline"
+                              className="mt-4 border-[#f59e0b] text-[#f59e0b] hover:bg-[#f59e0b] hover:text-white font-bold transition-all"
+                              onClick={async () => {
+                                const dummyUser: any = {
+                                  uid: searchUser.toLowerCase(),
+                                  email: searchUser.toLowerCase(),
+                                  name: searchUser.split('@')[0],
+                                  avatar: '',
+                                };
+                                await startChatWithUser(dummyUser);
+                              }}
+                            >
+                              <MessageCircle className="h-4 w-4 mr-2" /> Start Chat with {searchUser}
+                            </Button>
+                          )}
+                        </div>
                       ) : (
                         filteredUsers.map(u => (
                           <button
@@ -416,6 +435,7 @@ export default function DMPage() {
               {canCreateGroups && (
                 <Button className="bg-[#1d4ed8] hover:bg-[#1e40af] text-white shadow-md shadow-blue-500/20 h-10 px-5 rounded-full font-bold transition-all gap-2" onClick={() => {
                   if (!user || !selectedChat) return;
+                  const meetLink = `${window.location.origin}/meet/room-${Math.floor(Math.random() * 1000000)}`;
                   dmService.sendMessage(
                     user.uid,
                     selectedChat.otherUserId,
@@ -423,7 +443,7 @@ export default function DMPage() {
                     selectedChat.otherUserAvatar,
                     user.name,
                     user.avatar || '',
-                    "🎥 Please join my secure video meeting: https://meet.jit.si/infralith-room-" + Math.floor(Math.random() * 1000000),
+                    `🎥 Please join my secure video meeting: ${meetLink}`,
                     null
                   );
                   toast({ title: "Meeting Started", description: "Secure video meeting link sent." });
