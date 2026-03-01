@@ -11,7 +11,8 @@ import {
     MeshDistortMaterial,
     PointerLockControls,
     Sky,
-    Stars
+    Stars,
+    useGLTF
 } from '@react-three/drei';
 import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postprocessing';
 import { Geometry, Base, Subtraction } from '@react-three/csg';
@@ -79,6 +80,75 @@ import {
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
 import { estimateConstructionCost, CostEstimate } from '@/lib/cost-estimator';
+
+// -- Optional custom human model (GLB) for walkthrough --
+// Put your model at /public/models/human.glb (or override via NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL).
+const CUSTOM_HUMAN_GLB_URL: string | null = process.env.NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL || "/models/human.glb";
+const CUSTOM_HUMAN_GLB_SCALE = 1.0;
+const CUSTOM_HUMAN_GLB_Y_OFFSET = 0;
+
+// Normalizes model labels like "a person is walking" into Human rendering.
+const HUMAN_LABEL_ALIASES = new Set([
+    "human",
+    "person",
+    "a person is walking",
+    "a person is waking",
+    "person is walking",
+    "person is waking",
+    "person walking",
+    "person waking",
+    "walking person",
+    "waking person",
+    "walking human",
+    "waking human",
+    "human walking",
+    "human waking"
+]);
+
+const normalizeHumanLabel = (value?: string | null) =>
+    (value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+function isHumanLabel(value?: string | null) {
+    const normalized = normalizeHumanLabel(value);
+    if (!normalized) return false;
+    if (HUMAN_LABEL_ALIASES.has(normalized)) return true;
+    return normalized.includes("person") && (normalized.includes("walking") || normalized.includes("waking"));
+}
+
+function useResolvedHumanModelUrl(url: string | null) {
+    const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+
+    React.useEffect(() => {
+        if (!url) {
+            setResolvedUrl(null);
+            return;
+        }
+
+        let active = true;
+        const controller = new AbortController();
+
+        fetch(url, { method: "HEAD", signal: controller.signal })
+            .then((res) => {
+                if (!active) return;
+                setResolvedUrl(res.ok ? url : null);
+            })
+            .catch(() => {
+                if (!active) return;
+                setResolvedUrl(null);
+            });
+
+        return () => {
+            active = false;
+            controller.abort();
+        };
+    }, [url]);
+
+    return resolvedUrl;
+}
 
 // -- UI Helper Components for Professional CAD Interface --
 
@@ -436,7 +506,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWal
     );
 };
 
-function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkthrough }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void, isWalkthrough?: boolean }) {
+function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkthrough, humanModelUrl }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void, isWalkthrough?: boolean, humanModelUrl?: string | null }) {
     if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
     const p = progress;
@@ -537,16 +607,41 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                     {/* Procedurally Generated Furniture / Decor */}
                     {data.furnitures?.map((furniture, i) => {
                         const zPos = (furniture.floor_level || 0) * 2.8;
+                        const isHumanFurniture = isHumanLabel(furniture.type) || isHumanLabel(furniture.description);
+                        const humanScale = Math.max(0.65, Math.min(1.8, (furniture.height || 1.7) / 1.7));
                         return (
-                            <group key={`furniture - ${i} `} position={[furniture.position[0], zPos + furniture.height / 2, furniture.position[1]]}>
-                                <AIAssetRenderer
-                                    description={furniture.description}
-                                    width={furniture.width}
-                                    height={furniture.height}
-                                    depth={furniture.depth}
-                                    fallbackColor={furniture.color || "#cccccc"}
-                                    isWalkthrough={isWalkthrough}
-                                />
+                            <group
+                                key={`furniture - ${i} `}
+                                position={[
+                                    furniture.position[0],
+                                    isHumanFurniture ? zPos : zPos + furniture.height / 2,
+                                    furniture.position[1]
+                                ]}
+                            >
+                                {isHumanFurniture ? (
+                                    <group scale={[humanScale, humanScale, humanScale]}>
+                                        {humanModelUrl ? (
+                                            <Suspense fallback={<FallbackFreefireAvatar />}>
+                                                <GLBHumanCharacter
+                                                    url={humanModelUrl}
+                                                    scale={CUSTOM_HUMAN_GLB_SCALE}
+                                                    yOffset={CUSTOM_HUMAN_GLB_Y_OFFSET}
+                                                />
+                                            </Suspense>
+                                        ) : (
+                                            <FallbackFreefireAvatar />
+                                        )}
+                                    </group>
+                                ) : (
+                                    <AIAssetRenderer
+                                        description={furniture.description}
+                                        width={furniture.width}
+                                        height={furniture.height}
+                                        depth={furniture.depth}
+                                        fallbackColor={furniture.color || "#cccccc"}
+                                        isWalkthrough={isWalkthrough}
+                                    />
+                                )}
                             </group>
                         );
                     })}
@@ -676,7 +771,67 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
     return <PointerLockControls />;
 }
 
-function FreefireWalkthroughController({ bounds }: { bounds?: any }) {
+function FallbackFreefireAvatar() {
+    return (
+        <>
+            {/* Legs */}
+            <mesh position={[-0.14, 0.38, 0]} castShadow>
+                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
+                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+            </mesh>
+            <mesh position={[0.14, 0.38, 0]} castShadow>
+                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
+                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+            </mesh>
+
+            {/* Torso */}
+            <mesh position={[0, 1.02, 0]} castShadow>
+                <capsuleGeometry args={[0.23, 0.58, 8, 14]} />
+                <meshStandardMaterial color="#16a34a" roughness={0.6} metalness={0.05} />
+            </mesh>
+
+            {/* Arms */}
+            <mesh position={[-0.33, 1.02, 0]} castShadow>
+                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
+                <meshStandardMaterial color="#16a34a" roughness={0.65} />
+            </mesh>
+            <mesh position={[0.33, 1.02, 0]} castShadow>
+                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
+                <meshStandardMaterial color="#16a34a" roughness={0.65} />
+            </mesh>
+
+            {/* Head */}
+            <mesh position={[0, 1.58, 0]} castShadow>
+                <sphereGeometry args={[0.16, 20, 20]} />
+                <meshStandardMaterial color="#f3c7a3" roughness={0.7} />
+            </mesh>
+
+            {/* Helmet */}
+            <mesh position={[0, 1.67, 0.01]} castShadow>
+                <sphereGeometry args={[0.17, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
+                <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.3} />
+            </mesh>
+        </>
+    );
+}
+
+function GLBHumanCharacter({ url, scale, yOffset }: { url: string; scale: number; yOffset: number }) {
+    const { scene } = useGLTF(url);
+    const model = useMemo(() => {
+        const clone = scene.clone(true);
+        clone.traverse((node: any) => {
+            if (node?.isMesh) {
+                node.castShadow = true;
+                node.receiveShadow = true;
+            }
+        });
+        return clone;
+    }, [scene]);
+
+    return <primitive object={model} scale={[scale, scale, scale]} position={[0, yOffset, 0]} />;
+}
+
+function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any; humanModelUrl?: string | null }) {
     const { camera } = useThree();
     const controlsRef = useRef<any>(null);
     const playerRef = useRef<THREE.Group>(null);
@@ -778,43 +933,17 @@ function FreefireWalkthroughController({ bounds }: { bounds?: any }) {
             />
 
             <group ref={playerRef}>
-                {/* Legs */}
-                <mesh position={[-0.14, 0.38, 0]} castShadow>
-                    <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
-                    <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
-                </mesh>
-                <mesh position={[0.14, 0.38, 0]} castShadow>
-                    <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
-                    <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
-                </mesh>
-
-                {/* Torso */}
-                <mesh position={[0, 1.02, 0]} castShadow>
-                    <capsuleGeometry args={[0.23, 0.58, 8, 14]} />
-                    <meshStandardMaterial color="#16a34a" roughness={0.6} metalness={0.05} />
-                </mesh>
-
-                {/* Arms */}
-                <mesh position={[-0.33, 1.02, 0]} castShadow>
-                    <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
-                    <meshStandardMaterial color="#16a34a" roughness={0.65} />
-                </mesh>
-                <mesh position={[0.33, 1.02, 0]} castShadow>
-                    <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
-                    <meshStandardMaterial color="#16a34a" roughness={0.65} />
-                </mesh>
-
-                {/* Head */}
-                <mesh position={[0, 1.58, 0]} castShadow>
-                    <sphereGeometry args={[0.16, 20, 20]} />
-                    <meshStandardMaterial color="#f3c7a3" roughness={0.7} />
-                </mesh>
-
-                {/* Helmet */}
-                <mesh position={[0, 1.67, 0.01]} castShadow>
-                    <sphereGeometry args={[0.17, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
-                    <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.3} />
-                </mesh>
+                {humanModelUrl ? (
+                    <Suspense fallback={<FallbackFreefireAvatar />}>
+                        <GLBHumanCharacter
+                            url={humanModelUrl}
+                            scale={CUSTOM_HUMAN_GLB_SCALE}
+                            yOffset={CUSTOM_HUMAN_GLB_Y_OFFSET}
+                        />
+                    </Suspense>
+                ) : (
+                    <FallbackFreefireAvatar />
+                )}
             </group>
         </>
     );
@@ -844,6 +973,7 @@ function BlueprintWorkspace() {
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
+    const resolvedHumanModelUrl = useResolvedHumanModelUrl(CUSTOM_HUMAN_GLB_URL);
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
 
     // Initialize visibility
@@ -1489,6 +1619,7 @@ function BlueprintWorkspace() {
                                             minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                             maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                         } : undefined}
+                                        humanModelUrl={resolvedHumanModelUrl}
                                     />
                                 ) : (
                                     <WalkthroughController
@@ -1554,7 +1685,7 @@ function BlueprintWorkspace() {
                             })()}
 
                             <Suspense fallback={null}>
-                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} />
+                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} humanModelUrl={resolvedHumanModelUrl} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
