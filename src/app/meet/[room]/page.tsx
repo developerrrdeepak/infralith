@@ -6,7 +6,7 @@ import { useSession } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import {
     Mic, MicOff, Video, VideoOff, PhoneOff,
-    Users, ShieldCheck, ScreenShare, ScreenShareOff, Maximize, Loader2, Copy, CheckCheck
+    Users, ShieldCheck, ScreenShare, ScreenShareOff, Maximize, Loader2, Copy, CheckCheck, Check, X
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
@@ -27,6 +27,11 @@ type Peer = {
     videoRef?: React.RefObject<HTMLVideoElement>;
 };
 
+type JoinRequest = {
+    peerId: string;
+    name?: string;
+};
+
 export default function MeetRoomPage() {
     const params = useParams();
     const router = useRouter();
@@ -42,6 +47,10 @@ export default function MeetRoomPage() {
     const [peers, setPeers] = useState<Peer[]>([]);
     const [copied, setCopied] = useState(false);
     const [isSharing, setIsSharing] = useState(false);
+    const [isHost, setIsHost] = useState(false);
+    const [isJoinPending, setIsJoinPending] = useState(false);
+    const [joinRejected, setJoinRejected] = useState<string | null>(null);
+    const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
 
     // ── Refs ──
     const myVideoRef = useRef<HTMLVideoElement>(null);
@@ -99,51 +108,87 @@ export default function MeetRoomPage() {
     // ── Handle incoming SSE events ──
     const handleSignal = useCallback(async (event: MessageEvent) => {
         const data = JSON.parse(event.data);
+        const eventType = String(data.type || '');
 
-        if (data.type === 'joined') {
-            // We joined — initiate call with every existing peer
+        if (eventType === 'join-request-pending') {
+            setIsJoinPending(true);
             setIsConnecting(false);
-            for (const existingId of (data.peers as string[])) {
+            return;
+        }
+
+        if (eventType === 'join-rejected') {
+            setJoinRejected(data.payload?.reason || 'Host denied your room request.');
+            setIsJoinPending(false);
+            setIsConnecting(false);
+            return;
+        }
+
+        if (eventType === 'join-request') {
+            const request: JoinRequest = {
+                peerId: data.peerId,
+                name: data.payload?.name,
+            };
+            setJoinRequests(prev => prev.some(item => item.peerId === request.peerId) ? prev : [...prev, request]);
+            return;
+        }
+
+        if (eventType === 'join-request-cancelled') {
+            setJoinRequests(prev => prev.filter(item => item.peerId !== data.peerId));
+            return;
+        }
+
+        if (eventType === 'host-updated') {
+            setIsHost(data.peerId === peerId);
+            return;
+        }
+
+        if (eventType === 'joined') {
+            setIsConnecting(false);
+            setIsJoinPending(false);
+            setJoinRejected(null);
+            setIsHost(Boolean(data.payload?.isHost));
+
+            const existingPeers = Array.isArray(data.peers) ? (data.peers as string[]) : [];
+            for (const existingId of existingPeers) {
                 const pc = createPeerConnection(existingId);
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
                 signal(existingId, 'offer', offer);
             }
-            if (data.peers.length === 0) setIsConnecting(false);
+            return;
         }
 
-        if (data.type === 'peer-joined') {
-            // Someone new joined — they'll send us an offer shortly, just wait
-        }
-
-        if (data.type === 'offer') {
-            let peer = peersRef.current.get(data.from);
+        if (eventType === 'offer') {
+            const peer = peersRef.current.get(data.from);
             const pc = peer?.pc ?? createPeerConnection(data.from);
             await pc.setRemoteDescription(new RTCSessionDescription(data.payload));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             signal(data.from, 'answer', answer);
+            return;
         }
 
-        if (data.type === 'answer') {
+        if (eventType === 'answer') {
             const peer = peersRef.current.get(data.from);
             if (peer) await peer.pc.setRemoteDescription(new RTCSessionDescription(data.payload));
+            return;
         }
 
-        if (data.type === 'ice-candidate') {
+        if (eventType === 'ice-candidate') {
             const peer = peersRef.current.get(data.from);
             if (peer && data.payload) {
                 try { await peer.pc.addIceCandidate(new RTCIceCandidate(data.payload)); } catch { }
             }
+            return;
         }
 
-        if (data.type === 'peer-left') {
+        if (eventType === 'peer-left') {
             const peer = peersRef.current.get(data.peerId);
             peer?.pc.close();
             peersRef.current.delete(data.peerId);
             setPeers(prev => prev.filter(p => p.peerId !== data.peerId));
         }
-    }, [createPeerConnection, signal]);
+    }, [createPeerConnection, peerId, signal]);
 
     // ── Initialize camera, then connect SSE signaling ──
     useEffect(() => {
@@ -187,6 +232,34 @@ export default function MeetRoomPage() {
             peersRef.current.forEach(p => p.pc.close());
         };
     }, [handleSignal, peerId, roomId, router, status]);
+
+    const handleJoinDecision = useCallback(async (targetPeerId: string, approve: boolean) => {
+        if (!isHost) return;
+        try {
+            const res = await fetch('/api/meet/signal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roomId,
+                    to: targetPeerId,
+                    type: approve ? 'approve-join' : 'reject-join',
+                }),
+            });
+
+            if (!res.ok) {
+                throw new Error(`Signal moderation failed with status ${res.status}`);
+            }
+
+            setJoinRequests(prev => prev.filter(item => item.peerId !== targetPeerId));
+            toast({
+                title: approve ? 'Participant admitted' : 'Join request declined',
+                description: `${targetPeerId} ${approve ? 'can now enter the room.' : 'was blocked from entering.'}`,
+            });
+        } catch (error) {
+            console.error('[Meet] Failed to moderate join request:', error);
+            toast({ title: 'Action failed', description: 'Could not process join request.', variant: 'destructive' });
+        }
+    }, [isHost, roomId]);
 
     // ── Attach local stream when video element mounts ──
     const attachLocalVideo = useCallback((el: HTMLVideoElement | null) => {
@@ -309,7 +382,7 @@ export default function MeetRoomPage() {
 
     // ── Render ──
     return (
-        <div className="h-screen w-full bg-[#0a0f1c] flex flex-col overflow-hidden text-slate-100 font-sans">
+        <div className="relative h-screen w-full bg-[#0a0f1c] flex flex-col overflow-hidden text-slate-100 font-sans">
 
             {/* Top Bar */}
             <div className="h-16 border-b border-white/5 bg-[#0d1425] flex items-center justify-between px-5 shrink-0 z-20">
@@ -329,7 +402,14 @@ export default function MeetRoomPage() {
                     {/* Participant count */}
                     <span className="inline-flex items-center gap-1.5 bg-white/5 rounded-lg px-3 py-1.5 text-[11px] font-bold border border-white/10">
                         <Users className="h-3.5 w-3.5 text-slate-400" />
-                        {peers.length + 1} in room
+                        {isJoinPending ? 'Awaiting approval' : `${peers.length + 1} in room`}
+                    </span>
+
+                    <span className={cn(
+                        "inline-flex items-center rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider border",
+                        isHost ? "bg-blue-500/10 text-blue-300 border-blue-400/30" : "bg-white/5 text-slate-300 border-white/10"
+                    )}>
+                        {isHost ? 'Host' : 'Participant'}
                     </span>
 
                     {/* Live badge */}
@@ -349,9 +429,72 @@ export default function MeetRoomPage() {
                 </div>
             </div>
 
+            {isHost && joinRequests.length > 0 && (
+                <div className="absolute top-20 right-4 z-30 w-[320px] rounded-2xl border border-white/10 bg-[#0d1425]/95 backdrop-blur-xl p-3 shadow-2xl">
+                    <p className="mb-2 text-xs font-bold uppercase tracking-widest text-white/80">
+                        Join Requests ({joinRequests.length})
+                    </p>
+                    <div className="space-y-2 max-h-52 overflow-auto pr-1">
+                        {joinRequests.map((request) => (
+                            <div key={request.peerId} className="flex items-center justify-between gap-2 rounded-lg bg-white/5 border border-white/10 px-2.5 py-2">
+                                <div className="min-w-0">
+                                    <p className="text-xs font-bold text-white truncate">{request.name || request.peerId}</p>
+                                    <p className="text-[10px] text-slate-400 truncate">{request.peerId}</p>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={() => handleJoinDecision(request.peerId, true)}
+                                        className="h-7 w-7 rounded-md bg-emerald-600 hover:bg-emerald-500 flex items-center justify-center"
+                                        title="Approve"
+                                    >
+                                        <Check className="h-4 w-4 text-white" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleJoinDecision(request.peerId, false)}
+                                        className="h-7 w-7 rounded-md bg-red-600 hover:bg-red-500 flex items-center justify-center"
+                                        title="Reject"
+                                    >
+                                        <X className="h-4 w-4 text-white" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Video Grid */}
             <div className="flex-1 relative bg-[#0a0f1c] flex items-center justify-center p-4 overflow-hidden">
-                {isConnecting ? (
+                {joinRejected ? (
+                    <div className="flex flex-col items-center gap-4 text-center max-w-md">
+                        <div className="h-16 w-16 rounded-full bg-red-600/20 border border-red-500/30 flex items-center justify-center">
+                            <X className="h-8 w-8 text-red-400" />
+                        </div>
+                        <div>
+                            <p className="text-lg font-bold text-white">Entry request rejected</p>
+                            <p className="text-sm text-slate-400 mt-1">{joinRejected}</p>
+                        </div>
+                        <Button onClick={handleLeave} className="bg-red-600 hover:bg-red-700 text-white">
+                            Leave Room
+                        </Button>
+                    </div>
+                ) : isJoinPending ? (
+                    <div className="flex flex-col items-center gap-5 text-center">
+                        <div className="relative">
+                            <div className="h-20 w-20 rounded-full border border-amber-500/20 animate-pulse absolute inset-0" />
+                            <div className="h-20 w-20 rounded-full bg-amber-600/10 flex items-center justify-center border border-amber-500/20 relative">
+                                <Loader2 className="h-8 w-8 text-amber-400 animate-spin" />
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-base font-bold text-white">Waiting for host approval</p>
+                            <p className="text-xs text-slate-400 mt-1">The host must accept your request before you enter this room.</p>
+                        </div>
+                        <Button variant="outline" onClick={handleLeave} className="border-white/20 bg-white/5 text-white hover:bg-white/10">
+                            Cancel Request
+                        </Button>
+                    </div>
+                ) : isConnecting ? (
                     <div className="flex flex-col items-center gap-5 text-center">
                         <div className="relative">
                             <div className="h-20 w-20 rounded-full border border-blue-500/20 animate-ping absolute inset-0" />
@@ -360,7 +503,7 @@ export default function MeetRoomPage() {
                             </div>
                         </div>
                         <div>
-                            <p className="text-base font-bold text-white">Joining room…</p>
+                            <p className="text-base font-bold text-white">Joining room...</p>
                             <p className="text-xs text-slate-400 mt-1">Requesting camera & setting up connection</p>
                         </div>
                     </div>
@@ -388,15 +531,15 @@ export default function MeetRoomPage() {
                                 />
                             )}
                             <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
-                                <span className="text-xs font-bold">You (Host)</span>
+                                <span className="text-xs font-bold">You ({isHost ? 'Host' : 'Participant'})</span>
                                 {isMuted && <MicOff className="h-3 w-3 text-red-400" />}
                             </div>
 
-                            {/* No peers — show invite prompt */}
+                            {/* No peers - show invite prompt */}
                             {peers.length === 0 && (
                                 <div className="absolute inset-0 flex items-end justify-center pb-16 pointer-events-none">
                                     <div className="bg-black/60 backdrop-blur-md px-6 py-3 rounded-2xl border border-white/10 text-center">
-                                        <p className="text-white font-bold text-sm">Waiting for others to join…</p>
+                                        <p className="text-white font-bold text-sm">Waiting for others to join...</p>
                                         <p className="text-slate-400 text-xs mt-1">Click <strong>Invite</strong> to share your room link</p>
                                     </div>
                                 </div>
