@@ -104,10 +104,9 @@ const setStorageItem = (key: string, value: any) => {
 // --- USER DB SERVICE ---
 export const userDbService = {
   lookupRemoteUser: async (email: string): Promise<UserProfileData | null> => {
-    const endpoint = process.env.NEXT_PUBLIC_USER_LOOKUP_URL;
-    if (!endpoint || typeof fetch === 'undefined') return null;
+    if (typeof fetch === 'undefined') return null;
     try {
-      const res = await fetch(`${endpoint}?email=${encodeURIComponent(normalizeEmail(email))}`, {
+      const res = await fetch(`/api/user-lookup?email=${encodeURIComponent(normalizeEmail(email))}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -156,6 +155,8 @@ export const userDbService = {
     // Try remote directory first (production) then fallback to local mock.
     const remote = await userDbService.lookupRemoteUser(target);
     if (remote) return remote;
+
+    if (process.env.NODE_ENV === 'production') return null;
 
     const users = getStorageItem('infralith_users') || {};
     const all: UserProfileData[] = Object.values(users);

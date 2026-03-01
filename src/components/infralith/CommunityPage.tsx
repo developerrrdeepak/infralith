@@ -71,7 +71,7 @@ const MOCK_POSTS: Post[] = [
       role: 'Enterprise Firm',
       verified: true,
     },
-    content: "Just finalized the structural analysis for the new Delta Towers in downtown Seattle using Infralith's AI! Identified a critical load-bearing weakness that saved us over $2.4M in potential retrofit costs. The compliance agent is a game-changer! 🏗️🚀",
+    content: 'Closed the structural analysis for Delta Towers and caught a shear wall weakness early. Saved ~$2.4M in retrofit risk using the compliance agent.',
     image: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=800',
     timestamp: '2 hours ago',
     likes: 342,
@@ -88,7 +88,7 @@ const MOCK_POSTS: Post[] = [
       role: 'Lead Site Engineer',
       verified: true,
     },
-    content: 'Successfully orchestrated the concrete pour for Phase 3 today. The risk aggregator showed a 98% safety confidence score. Shoutout to the team for the hard work! 👷‍♀️✅',
+    content: 'Wrapped Phase 3 concrete pour. Risk aggregator stayed at 98% safety confidence throughout the window. Great coordination from the field team.',
     timestamp: '5 hours ago',
     likes: 128,
     hasLiked: false,
@@ -104,7 +104,7 @@ const MOCK_POSTS: Post[] = [
       role: 'Global Contractor',
       verified: true,
     },
-    content: "We're expanding our drone fleet for automated site surveying! The integration with the new blueprint APIs means real-time structural comparisons. We'll be posting the telemetry data to the community forum next week.",
+    content: 'Expanding the drone fleet for automated site surveying. New blueprint API integration is giving us real-time structural deltas—telemetry report coming next week.',
     image: 'https://images.unsplash.com/photo-1508614589041-895b88991e3e?auto=format&fit=crop&q=80&w=800',
     timestamp: '1 day ago',
     likes: 567,
@@ -121,7 +121,7 @@ const MOCK_POSTS: Post[] = [
       role: 'Seeking Structural Insight',
       verified: false,
     },
-    content: '🚨 BOUNTY POST: Encountering recurring compliance failures (Code 4A-Seismic) on staggered truss systems above 40 floors. The AI agent flags the shear wall connections as inadequate. Looking for an engineered workaround or alternate connection detailing that satisfies ISO 19902. $5,000 bounty for verified solution. 🚨',
+    content: 'BOUNTY: Repeated 4A-Seismic compliance failures on staggered truss systems above 40 floors. AI flags shear wall connections as inadequate. Need alternative detailing that meets ISO 19902. $5,000 for a verified solution.',
     timestamp: '15 mins ago',
     likes: 12,
     hasLiked: false,
@@ -208,7 +208,7 @@ export default function CommunityPage() {
       }
     };
     loadPosts();
-  }, [user?.uid]);
+  }, [user?.uid, toast]);
 
   const toggleLike = async (postId: string) => {
     if (!user?.uid) {
@@ -281,8 +281,8 @@ export default function CommunityPage() {
       setNewPostContent('');
       setNewPostImage('');
       toast({
-        title: 'Post Published',
-        description: 'Your update has been shared with the Infralith community.',
+        title: 'Post published',
+        description: 'Your update has been shared with the community.',
       });
     } catch (error) {
       console.error('Failed to publish post', error);
@@ -405,9 +405,9 @@ export default function CommunityPage() {
           <div className="h-10 w-10 rounded-xl bg-primary/20 flex items-center justify-center">
             <Trophy className="h-6 w-6 text-primary" />
           </div>
-          <h1 className="text-3xl font-black tracking-tight uppercase">Engineering Community</h1>
+          <h1 className="text-3xl font-black tracking-tight">Global Community</h1>
         </div>
-        <p className="text-muted-foreground font-mono text-sm tracking-widest">GLOBAL NETWORK: [ 14,204 ACTIVE ORGS ]</p>
+        <p className="text-muted-foreground font-mono text-sm tracking-widest">Real-world engineering updates, shared safely.</p>
       </div>
 
       <Card className="premium-glass p-1 shadow-lg">
@@ -418,7 +418,7 @@ export default function CommunityPage() {
           </Avatar>
           <div className="flex-1 space-y-3">
             <Input
-              placeholder="Share a project success story or update with the network..."
+              placeholder="Share a project update with the community..."
               className="bg-slate-50 dark:bg-black/60 border-slate-200 dark:border-white/10 text-slate-900 dark:text-white text-sm py-6 rounded-xl focus-visible:ring-primary/50 shadow-inner transition-colors"
               value={newPostContent}
               onChange={(e) => setNewPostContent(e.target.value)}
@@ -437,7 +437,7 @@ export default function CommunityPage() {
             />
             <div className="flex items-center justify-between">
               <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-primary transition-colors">
-                <ImageIcon className="h-4 w-4 mr-2" /> Optional image URL
+                <ImageIcon className="h-4 w-4 mr-2" /> Add image link
               </Button>
               <Button
                 size="sm"
@@ -445,7 +445,7 @@ export default function CommunityPage() {
                 onClick={handlePostSubmit}
                 disabled={isPublishing || !newPostContent.trim()}
               >
-                {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Publish Post'}
+                {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Publish'}
               </Button>
             </div>
           </div>
@@ -485,8 +485,8 @@ export default function CommunityPage() {
 
                 <div className="flex items-center gap-2">
                   {post.isBounty && (
-                    <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-500 border-orange-500/30 flex items-center gap-1 animate-pulse">
-                      <Flame className="h-3 w-3" /> ${post.bountyAmount?.toLocaleString()} BOUNTY
+                    <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-500 border-orange-500/30 flex items-center gap-1">
+                      <Flame className="h-3 w-3" /> ${post.bountyAmount?.toLocaleString()} Bounty
                     </Badge>
                   )}
                   {(user?.name || user?.email || 'Anonymous Engineer') !== post.author.name && !post.isBounty && (
