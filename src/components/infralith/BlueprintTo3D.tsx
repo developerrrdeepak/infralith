@@ -119,37 +119,6 @@ function isHumanLabel(value?: string | null) {
     return normalized.includes("person") && (normalized.includes("walking") || normalized.includes("waking"));
 }
 
-function useResolvedHumanModelUrl(url: string | null) {
-    const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
-
-    React.useEffect(() => {
-        if (!url) {
-            setResolvedUrl(null);
-            return;
-        }
-
-        let active = true;
-        const controller = new AbortController();
-
-        fetch(url, { method: "HEAD", signal: controller.signal })
-            .then((res) => {
-                if (!active) return;
-                setResolvedUrl(res.ok ? url : null);
-            })
-            .catch(() => {
-                if (!active) return;
-                setResolvedUrl(null);
-            });
-
-        return () => {
-            active = false;
-            controller.abort();
-        };
-    }, [url]);
-
-    return resolvedUrl;
-}
-
 // -- UI Helper Components for Professional CAD Interface --
 
 const ToolButton = ({ icon, label, active, onClick, expanded, shortcut, color, className }: any) => (
@@ -619,19 +588,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                                 ]}
                             >
                                 {isHumanFurniture ? (
-                                    <group scale={[humanScale, humanScale, humanScale]}>
-                                        {humanModelUrl ? (
-                                            <Suspense fallback={<FallbackFreefireAvatar />}>
-                                                <GLBHumanCharacter
-                                                    url={humanModelUrl}
-                                                    scale={CUSTOM_HUMAN_GLB_SCALE}
-                                                    yOffset={CUSTOM_HUMAN_GLB_Y_OFFSET}
-                                                />
-                                            </Suspense>
-                                        ) : (
-                                            <FallbackFreefireAvatar />
-                                        )}
-                                    </group>
+                                    <HumanCharacter humanModelUrl={humanModelUrl} scale={humanScale} />
                                 ) : (
                                     <AIAssetRenderer
                                         description={furniture.description}
@@ -831,6 +788,46 @@ function GLBHumanCharacter({ url, scale, yOffset }: { url: string; scale: number
     return <primitive object={model} scale={[scale, scale, scale]} position={[0, yOffset, 0]} />;
 }
 
+class GLBLoadBoundary extends React.Component<
+    { fallback: React.ReactNode; children: React.ReactNode },
+    { hasError: boolean }
+> {
+    state = { hasError: false };
+
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error: unknown) {
+        console.warn("[Human GLB] Failed to load model, using fallback avatar.", error);
+    }
+
+    render() {
+        if (this.state.hasError) return this.props.fallback;
+        return this.props.children;
+    }
+}
+
+function HumanCharacter({ humanModelUrl, scale = 1 }: { humanModelUrl?: string | null; scale?: number }) {
+    return (
+        <group scale={[scale, scale, scale]}>
+            {humanModelUrl ? (
+                <GLBLoadBoundary key={humanModelUrl} fallback={<FallbackFreefireAvatar />}>
+                    <Suspense fallback={<FallbackFreefireAvatar />}>
+                        <GLBHumanCharacter
+                            url={humanModelUrl}
+                            scale={CUSTOM_HUMAN_GLB_SCALE}
+                            yOffset={CUSTOM_HUMAN_GLB_Y_OFFSET}
+                        />
+                    </Suspense>
+                </GLBLoadBoundary>
+            ) : (
+                <FallbackFreefireAvatar />
+            )}
+        </group>
+    );
+}
+
 function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any; humanModelUrl?: string | null }) {
     const { camera } = useThree();
     const controlsRef = useRef<any>(null);
@@ -933,17 +930,7 @@ function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
             />
 
             <group ref={playerRef}>
-                {humanModelUrl ? (
-                    <Suspense fallback={<FallbackFreefireAvatar />}>
-                        <GLBHumanCharacter
-                            url={humanModelUrl}
-                            scale={CUSTOM_HUMAN_GLB_SCALE}
-                            yOffset={CUSTOM_HUMAN_GLB_Y_OFFSET}
-                        />
-                    </Suspense>
-                ) : (
-                    <FallbackFreefireAvatar />
-                )}
+                <HumanCharacter humanModelUrl={humanModelUrl} />
             </group>
         </>
     );
@@ -973,7 +960,6 @@ function BlueprintWorkspace() {
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
-    const resolvedHumanModelUrl = useResolvedHumanModelUrl(CUSTOM_HUMAN_GLB_URL);
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
 
     // Initialize visibility
@@ -1619,7 +1605,7 @@ function BlueprintWorkspace() {
                                             minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                             maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                         } : undefined}
-                                        humanModelUrl={resolvedHumanModelUrl}
+                                        humanModelUrl={CUSTOM_HUMAN_GLB_URL}
                                     />
                                 ) : (
                                     <WalkthroughController
@@ -1685,7 +1671,7 @@ function BlueprintWorkspace() {
                             })()}
 
                             <Suspense fallback={null}>
-                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} humanModelUrl={resolvedHumanModelUrl} />
+                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} humanModelUrl={CUSTOM_HUMAN_GLB_URL} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
