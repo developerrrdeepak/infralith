@@ -5,7 +5,9 @@ import { DocumentAnalysisClient, AzureKeyCredential } from "@azure/ai-form-recog
 
 // Azure OpenAI Configuration
 const azureKey = process.env.AZURE_OPENAI_KEY || "";
-const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || "model-router";
+const routerDeploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || "model-router";
+const topDeploymentName = process.env.AZURE_OPENAI_TOP_DEPLOYMENT || process.env.AZURE_OPENAI_TOP_MODEL_DEPLOYMENT || "gpt-5";
+const preferTopModel = (process.env.AZURE_OPENAI_PREFER_TOP_MODEL || "true").toLowerCase() !== "false";
 const azureResourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwuryls-eastus2";
 
 // Azure Document Intelligence Configuration
@@ -20,11 +22,73 @@ const azureFixed = createAzure({
     apiVersion: '2024-08-01-preview',
 });
 
+const summarizeGeometry = (payload: any) => ({
+    walls: Array.isArray(payload?.walls) ? payload.walls.length : 0,
+    rooms: Array.isArray(payload?.rooms) ? payload.rooms.length : 0,
+    doors: Array.isArray(payload?.doors) ? payload.doors.length : 0,
+    windows: Array.isArray(payload?.windows) ? payload.windows.length : 0,
+    conflicts: Array.isArray(payload?.conflicts) ? payload.conflicts.length : 0,
+    hasRoof: !!payload?.roof,
+    buildingName: payload?.building_name || 'N/A',
+});
+
+const LAYOUT_POLYGON_LIMIT = 180;
+const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
+const DIMENSION_TEXT_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
+const DEPLOYMENT_ERROR_PATTERN = /(deployment|model|404|not found|does not exist|unknown deployment|resource not found)/i;
+
+const toFlatPolygon = (polygon: any): number[] => {
+    if (!Array.isArray(polygon)) return [];
+    if (polygon.length > 0 && typeof polygon[0] === 'number') {
+        return polygon.map((value: number) => Number(value.toFixed(3)));
+    }
+
+    const flattened: number[] = [];
+    for (const point of polygon) {
+        const x = typeof point?.x === 'number' ? point.x : null;
+        const y = typeof point?.y === 'number' ? point.y : null;
+        if (x == null || y == null) continue;
+        flattened.push(Number(x.toFixed(3)), Number(y.toFixed(3)));
+    }
+    return flattened;
+};
+
+export interface BlueprintLayoutHints {
+    pageCount: number;
+    pages: Array<{
+        pageNumber: number;
+        width: number;
+        height: number;
+        unit: string;
+        lineCount: number;
+        wordCount: number;
+    }>;
+    linePolygons: number[][];
+    dimensionAnchors: Array<{
+        text: string;
+        polygon: number[];
+    }>;
+}
+
 /** Helper to get the model with correct deployment name and settings */
-export const getAzureModel = (isVision = false) => {
+export const getAzureModel = (isVision = false, deploymentOverride?: string) => {
     // For production stability, we explicitly define the model to avoid SDK version appending
     // Must use .chat() because the default goes to the unsupported /responses endpoint
-    return azureFixed.chat(deploymentName);
+    return azureFixed.chat(deploymentOverride || routerDeploymentName);
+};
+
+const getDeploymentOrder = () => {
+    const ordered = preferTopModel
+        ? [topDeploymentName, routerDeploymentName]
+        : [routerDeploymentName];
+    return Array.from(new Set(ordered.filter(Boolean)));
+};
+
+const isDeploymentLookupError = (error: unknown) => {
+    const message = typeof error === "string"
+        ? error
+        : (error as any)?.message || String(error);
+    return DEPLOYMENT_ERROR_PATTERN.test(message);
 };
 
 /**
@@ -106,37 +170,138 @@ export const getDocumentClient = () => {
     return new DocumentAnalysisClient(docIntelEndpoint, new AzureKeyCredential(docIntelKey));
 };
 
+export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Promise<BlueprintLayoutHints | null> {
+    const client = getDocumentClient();
+    if (!client) {
+        console.warn("[Azure Document Intelligence] Layout analysis skipped: credentials missing.");
+        return null;
+    }
+
+    try {
+        const startedAt = Date.now();
+        let cleanedBase64 = base64Image;
+        if (base64Image.includes('data:image')) {
+            cleanedBase64 = base64Image.split('base64,')[1];
+        }
+
+        console.log(`[Azure Document Intelligence] Step 1/3 preparing prebuilt-layout request. imageChars=${cleanedBase64.length}`);
+        const imageBuffer = Buffer.from(cleanedBase64, "base64");
+        const poller = await client.beginAnalyzeDocument("prebuilt-layout", imageBuffer);
+        console.log("[Azure Document Intelligence] Step 2/3 request submitted, waiting for analysis.");
+        const result: any = await poller.pollUntilDone();
+
+        if (!result?.pages?.length) {
+            console.warn("[Azure Document Intelligence] No pages detected in layout result.");
+            return null;
+        }
+
+        const linePolygons: number[][] = [];
+        const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
+        const pages = result.pages.map((page: any) => {
+            const lines = Array.isArray(page?.lines) ? page.lines : [];
+            const words = Array.isArray(page?.words) ? page.words : [];
+
+            for (const line of lines) {
+                if (linePolygons.length < LAYOUT_POLYGON_LIMIT) {
+                    const polygon = toFlatPolygon(line?.polygon);
+                    if (polygon.length >= 6) linePolygons.push(polygon);
+                }
+
+                const text = typeof line?.content === "string" ? line.content.trim() : "";
+                if (text && DIMENSION_TEXT_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
+                    const polygon = toFlatPolygon(line?.polygon);
+                    if (polygon.length >= 6) {
+                        dimensionAnchors.push({ text, polygon });
+                    }
+                }
+            }
+
+            return {
+                pageNumber: page?.pageNumber || 0,
+                width: typeof page?.width === "number" ? page.width : 0,
+                height: typeof page?.height === "number" ? page.height : 0,
+                unit: page?.unit || "pixel",
+                lineCount: lines.length,
+                wordCount: words.length,
+            };
+        });
+
+        const durationMs = Date.now() - startedAt;
+        console.log(`[Azure Document Intelligence] Step 3/3 layout analysis complete in ${durationMs}ms. pages=${pages.length}, polygons=${linePolygons.length}, dimensionAnchors=${dimensionAnchors.length}`);
+
+        return {
+            pageCount: pages.length,
+            pages,
+            linePolygons,
+            dimensionAnchors,
+        };
+    } catch (e: any) {
+        console.warn(`[Azure Document Intelligence] Layout analysis failed: ${e?.message || e}`);
+        return null;
+    }
+}
+
 export async function generateAzureVisionObject<T>(prompt: string, base64Image: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
     if (!azureKey) {
         throw new Error("Azure OpenAI credentials (AZURE_OPENAI_KEY) are not configured. Vision synthesis requires a production key.");
     }
 
+    const deploymentOrder = getDeploymentOrder();
+    const startedAt = Date.now();
+
     try {
-        console.log(`[Azure Vision via AI SDK] Routing request...`);
+        console.log(`[AI] Deployment preference order: ${deploymentOrder.join(" -> ")}`);
+        console.log(`[Azure Vision via AI SDK] Step 1/4 preparing request.`);
 
         let cleanedBase64 = base64Image;
         if (base64Image.includes('data:image')) {
             cleanedBase64 = base64Image.split('base64,')[1];
         }
 
-        const result = await generateObject({
-            model: getAzureModel(true),
-            schema: dynamicSchema || GeometricReconstructionSchema,
-            temperature: 0.1, // Reduced to prevent unclosed JSON from hallucinated extreme details
-            system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project.",
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: prompt },
-                        { type: "image", image: cleanedBase64 }
-                    ]
-                }
-            ]
-        });
+        console.log(`[Azure Vision via AI SDK] Request metadata: imageChars=${cleanedBase64.length}, hasCustomSchema=${!!dynamicSchema}`);
+        console.log(`[Azure Vision via AI SDK] Step 2/4 sending vision request to Azure.`);
 
-        console.log(`[Azure Vision via AI SDK] Success`);
-        return result.object as unknown as T;
+        let lastError: unknown = null;
+        for (let i = 0; i < deploymentOrder.length; i++) {
+            const deployment = deploymentOrder[i];
+            const isRouter = deployment === routerDeploymentName;
+            if (isRouter) {
+                console.log(`[AI] Using Azure Model Router: ${deployment}`);
+            } else {
+                console.log(`[AI] Using preferred top deployment: ${deployment}`);
+            }
+
+            try {
+                const result = await generateObject({
+                    model: getAzureModel(true, deployment),
+                    schema: dynamicSchema || GeometricReconstructionSchema,
+                    temperature: 0.1, // Reduced to prevent unclosed JSON from hallucinated extreme details
+                    system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project.",
+                    messages: [
+                        {
+                            role: "user",
+                            content: [
+                                { type: "text", text: prompt },
+                                { type: "image", image: cleanedBase64 }
+                            ]
+                        }
+                    ]
+                });
+
+                const durationMs = Date.now() - startedAt;
+                console.log(`[Azure Vision via AI SDK] Step 3/4 response received in ${durationMs}ms.`);
+                console.log(`[Azure Vision via AI SDK] Structured result summary:`, summarizeGeometry(result.object));
+                console.log(`[Azure Vision via AI SDK] Step 4/4 returning structured object.`);
+                return result.object as unknown as T;
+            } catch (error: any) {
+                lastError = error;
+                const canRetry = i < deploymentOrder.length - 1 && isDeploymentLookupError(error);
+                if (!canRetry) throw error;
+                console.warn(`[Azure Vision via AI SDK] Deployment "${deployment}" failed (${error?.message || error}). Retrying next deployment.`);
+            }
+        }
+
+        throw lastError || new Error("Azure Vision request failed for all deployments.");
     } catch (e: any) {
         console.error(`[Azure Vision via AI SDK] Failed: ${e?.message || e}`);
         throw e;
@@ -151,19 +316,47 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
         throw new Error("Azure OpenAI credentials (AZURE_OPENAI_KEY) are not configured. Text-to-BIM generation requires a production key.");
     }
 
+    const deploymentOrder = getDeploymentOrder();
+    const startedAt = Date.now();
+
     try {
-        console.log(`[Azure AI SDK] Routing text-to-object request...`);
+        console.log(`[AI] Deployment preference order: ${deploymentOrder.join(" -> ")}`);
+        console.log(`[Azure AI SDK] Step 1/3 preparing text-to-object request.`);
+        console.log(`[Azure AI SDK] Request metadata: promptChars=${prompt.length}, hasCustomSchema=${!!dynamicSchema}`);
 
-        const result = await generateObject({
-            model: getAzureModel(false),
-            schema: dynamicSchema || GeometricReconstructionSchema,
-            temperature: 0.2, // Lower variety for strict structured output without hallucinated massive structures
-            system: "You are an expert Engineering Intelligence Agent. Generate a precise JSON analysis or reconstruction based on the input context.",
-            prompt: prompt
-        });
+        let lastError: unknown = null;
+        for (let i = 0; i < deploymentOrder.length; i++) {
+            const deployment = deploymentOrder[i];
+            const isRouter = deployment === routerDeploymentName;
+            if (isRouter) {
+                console.log(`[AI] Using Azure Model Router: ${deployment}`);
+            } else {
+                console.log(`[AI] Using preferred top deployment: ${deployment}`);
+            }
 
-        console.log(`[Azure AI SDK] Success`);
-        return result.object as unknown as T;
+            try {
+                const result = await generateObject({
+                    model: getAzureModel(false, deployment),
+                    schema: dynamicSchema || GeometricReconstructionSchema,
+                    temperature: 0.2, // Lower variety for strict structured output without hallucinated massive structures
+                    system: "You are an expert Engineering Intelligence Agent. Generate a precise JSON analysis or reconstruction based on the input context.",
+                    prompt: prompt
+                });
+
+                const durationMs = Date.now() - startedAt;
+                console.log(`[Azure AI SDK] Step 2/3 response received in ${durationMs}ms.`);
+                console.log(`[Azure AI SDK] Structured result summary:`, summarizeGeometry(result.object));
+                console.log(`[Azure AI SDK] Step 3/3 returning structured object.`);
+                return result.object as unknown as T;
+            } catch (error: any) {
+                lastError = error;
+                const canRetry = i < deploymentOrder.length - 1 && isDeploymentLookupError(error);
+                if (!canRetry) throw error;
+                console.warn(`[Azure AI SDK] Deployment "${deployment}" failed (${error?.message || error}). Retrying next deployment.`);
+            }
+        }
+
+        throw lastError || new Error("Azure text request failed for all deployments.");
     } catch (e: any) {
         console.error(`[Azure AI SDK] Failed: ${e?.message || e}`);
         throw e;

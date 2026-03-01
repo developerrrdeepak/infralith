@@ -3,6 +3,8 @@
 import {
   generateAzureVisionObject,
   generateAzureObject,
+  analyzeBlueprintLayoutFromBase64,
+  type BlueprintLayoutHints,
 } from "@/ai/azure-ai";
 import {
   GeometricReconstruction,
@@ -24,6 +26,220 @@ const AIAssetSchema = z.object({
   }))
 });
 
+const summarizeReconstruction = (payload: GeometricReconstruction) => ({
+  walls: payload?.walls?.length || 0,
+  rooms: payload?.rooms?.length || 0,
+  doors: payload?.doors?.length || 0,
+  windows: payload?.windows?.length || 0,
+  furnitures: payload?.furnitures?.length || 0,
+  conflicts: payload?.conflicts?.length || 0,
+  hasRoof: !!payload?.roof,
+  buildingName: payload?.building_name || 'N/A',
+});
+
+const summarizeLayoutHints = (payload: BlueprintLayoutHints | null) => ({
+  pages: payload?.pageCount || 0,
+  linePolygons: payload?.linePolygons?.length || 0,
+  dimensionAnchors: payload?.dimensionAnchors?.length || 0,
+});
+
+const buildVectorizationHints = (raw: any) => {
+  if (!raw) return null;
+  const polygons = Array.isArray(raw.lines) ? raw.lines.slice(0, 220) : [];
+  const segments = Array.isArray(raw.segments) ? raw.segments.slice(0, 320) : [];
+  return {
+    image_size: {
+      width: typeof raw.width === 'number' ? raw.width : 0,
+      height: typeof raw.height === 'number' ? raw.height : 0,
+    },
+    counts: {
+      polygon_count: polygons.length,
+      segment_count: segments.length,
+    },
+    polygons,
+    segments,
+    threshold_mode: raw.threshold_mode || 'unknown',
+  };
+};
+
+const summarizeVectorizationHints = (payload: any) => ({
+  polygonCount: payload?.counts?.polygon_count || 0,
+  segmentCount: payload?.counts?.segment_count || 0,
+  thresholdMode: payload?.threshold_mode || 'unknown',
+  width: payload?.image_size?.width || 0,
+  height: payload?.image_size?.height || 0,
+});
+
+const shouldRetryForUnderfit = (result: GeometricReconstruction, vectorHints: any, layoutHints: BlueprintLayoutHints | null) => {
+  const wallCount = result?.walls?.length || 0;
+  const roomCount = result?.rooms?.length || 0;
+  const vectorSegments = vectorHints?.counts?.segment_count || 0;
+  const vectorPolygons = vectorHints?.counts?.polygon_count || 0;
+  const layoutLines = layoutHints?.linePolygons?.length || 0;
+  const signalStrength = Math.max(vectorSegments, vectorPolygons, layoutLines);
+
+  // If references show complex blueprint but output is too simple, force one stricter retry.
+  if (signalStrength >= 40 && wallCount <= 8) return true;
+  if (signalStrength >= 60 && roomCount <= 2) return true;
+  return false;
+};
+
+const parseDimensionMeters = (text: string): number | null => {
+  const valueMatch = text.match(/(\d+(\.\d+)?)/);
+  if (!valueMatch) return null;
+  const value = Number(valueMatch[1]);
+  if (!Number.isFinite(value)) return null;
+  const unit = text.toLowerCase();
+  if (unit.includes('mm')) return value / 1000;
+  if (unit.includes('cm')) return value / 100;
+  if (unit.includes('ft') || unit.includes('feet') || unit.includes("'")) return value * 0.3048;
+  if (unit.includes('"') || unit.includes('in') || unit.includes('inch')) return value * 0.0254;
+  return value; // treat as meters when no explicit unit
+};
+
+const polygonArea = (points: [number, number][]) => {
+  if (!points?.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[(i + 1) % points.length];
+    sum += (x1 * y2) - (x2 * y1);
+  }
+  return sum / 2;
+};
+
+const convertPixelsToMeters = (x: number, y: number, minX: number, minY: number, scale: number): [number, number] => {
+  const mx = (x - minX) * scale;
+  // Flip Y so blueprint top-down image maps to 3D +Z direction consistently.
+  const mz = (y - minY) * scale;
+  return [Number(mx.toFixed(3)), Number(mz.toFixed(3))];
+};
+
+const buildVectorFallbackReconstruction = (vectorHints: any, layoutHints: BlueprintLayoutHints | null): GeometricReconstruction | null => {
+  const segments = Array.isArray(vectorHints?.segments) ? vectorHints.segments : [];
+  const polygons = Array.isArray(vectorHints?.polygons) ? vectorHints.polygons : [];
+  if (segments.length === 0 && polygons.length === 0) return null;
+
+  const allPoints: Array<[number, number]> = [];
+  for (const seg of segments) {
+    if (!Array.isArray(seg) || seg.length < 4) continue;
+    allPoints.push([Number(seg[0]), Number(seg[1])], [Number(seg[2]), Number(seg[3])]);
+  }
+  for (const poly of polygons) {
+    if (!Array.isArray(poly)) continue;
+    for (const pt of poly) {
+      if (Array.isArray(pt) && pt.length >= 2) {
+        allPoints.push([Number(pt[0]), Number(pt[1])]);
+      }
+    }
+  }
+  if (allPoints.length === 0) return null;
+
+  const xs = allPoints.map((p) => p[0]);
+  const ys = allPoints.map((p) => p[1]);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const widthPx = Math.max(1, maxX - minX);
+  const heightPx = Math.max(1, maxY - minY);
+  const maxDimPx = Math.max(widthPx, heightPx);
+
+  // Default normalization keeps footprint in a realistic 25m envelope.
+  let metersPerPixel = 25 / maxDimPx;
+  const firstAnchor = layoutHints?.dimensionAnchors?.[0];
+  if (firstAnchor?.text && Array.isArray(firstAnchor.polygon) && firstAnchor.polygon.length >= 6) {
+    const anchorMeters = parseDimensionMeters(firstAnchor.text);
+    const poly = firstAnchor.polygon;
+    const ax1 = Number(poly[0]);
+    const ay1 = Number(poly[1]);
+    const ax2 = Number(poly[2]);
+    const ay2 = Number(poly[3]);
+    const anchorPx = Math.hypot(ax2 - ax1, ay2 - ay1);
+    if (anchorMeters && anchorPx > 5) {
+      const candidateScale = anchorMeters / anchorPx;
+      if (Number.isFinite(candidateScale) && candidateScale > 0.001 && candidateScale < 2) {
+        metersPerPixel = candidateScale;
+      }
+    }
+  }
+
+  const walls: GeometricReconstruction['walls'] = [];
+  let wallId = 1;
+  for (const seg of segments) {
+    if (!Array.isArray(seg) || seg.length < 4) continue;
+    const [x1, y1, x2, y2] = seg;
+    const [sx, sz] = convertPixelsToMeters(Number(x1), Number(y1), minX, minY, metersPerPixel);
+    const [ex, ez] = convertPixelsToMeters(Number(x2), Number(y2), minX, minY, metersPerPixel);
+    const length = Math.hypot(ex - sx, ez - sz);
+    if (length < 0.35) continue;
+
+    const nearBoundary =
+      Math.abs(Number(x1) - minX) < 8 || Math.abs(Number(x1) - maxX) < 8 ||
+      Math.abs(Number(y1) - minY) < 8 || Math.abs(Number(y1) - maxY) < 8 ||
+      Math.abs(Number(x2) - minX) < 8 || Math.abs(Number(x2) - maxX) < 8 ||
+      Math.abs(Number(y2) - minY) < 8 || Math.abs(Number(y2) - maxY) < 8;
+
+    walls.push({
+      id: `vw-${wallId++}`,
+      start: [sx, sz],
+      end: [ex, ez],
+      thickness: nearBoundary ? 0.23 : 0.115,
+      height: 2.8,
+      color: nearBoundary ? '#f5e6d3' : '#faf7f2',
+      is_exterior: nearBoundary,
+      floor_level: 0,
+    });
+    if (walls.length >= 280) break;
+  }
+
+  const rooms: GeometricReconstruction['rooms'] = [];
+  let roomId = 1;
+  for (const poly of polygons) {
+    if (!Array.isArray(poly) || poly.length < 3) continue;
+    const metricPoints: [number, number][] = poly
+      .filter((pt: any) => Array.isArray(pt) && pt.length >= 2)
+      .map((pt: any) => convertPixelsToMeters(Number(pt[0]), Number(pt[1]), minX, minY, metersPerPixel));
+    if (metricPoints.length < 3) continue;
+    let areaSigned = polygonArea(metricPoints);
+    let ordered = metricPoints;
+    if (areaSigned < 0) {
+      ordered = [...metricPoints].reverse();
+      areaSigned = -areaSigned;
+    }
+    if (areaSigned < 2 || areaSigned > 900) continue;
+
+    rooms.push({
+      id: `vr-${roomId++}`,
+      name: `Room ${roomId - 1}`,
+      polygon: ordered,
+      area: Number(areaSigned.toFixed(2)),
+      floor_color: '#e8d5b7',
+      floor_level: 0,
+    });
+    if (rooms.length >= 120) break;
+  }
+
+  if (walls.length === 0) return null;
+
+  return {
+    building_name: 'Vector-Reconstructed Blueprint',
+    exterior_color: '#f5e6d3',
+    walls,
+    doors: [],
+    windows: [],
+    rooms,
+    conflicts: [
+      {
+        type: 'code',
+        severity: 'medium',
+        description: 'Vector fallback reconstruction used due underfit AI response; verify openings manually.',
+        location: [0, 0],
+      },
+    ],
+  };
+};
+
 /**
  * Executes the Python-based OpenCV script to perform initial vectorization.
  * This pre-processes the image to find structural polygons before sending to the AI.
@@ -32,6 +248,9 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
   return new Promise((resolve, reject) => {
     // Correctly locate the script within the Next.js server environment
     const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
+    const startedAt = Date.now();
+    console.log(`[Vectorization] Step 1/4 launching Python script: ${scriptPath}`);
+    console.log(`[Vectorization] Input image payload chars=${base64Image.length}`);
     const pythonProcess = spawn('python', [scriptPath]);
 
     let output = '';
@@ -55,7 +274,8 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
           if (result.error) {
             reject(new Error(result.error));
           }
-          console.log(`[Vectorization] Success: Found ${result.line_count} structural polygons.`);
+          const durationMs = Date.now() - startedAt;
+          console.log(`[Vectorization] Step 4/4 success in ${durationMs}ms. line_count=${result.line_count || 0}, segment_count=${result.segment_count || 0}`);
           resolve(result);
         } catch (e) {
           console.error("[Vectorization] Failed to parse Python script output:", output);
@@ -75,8 +295,10 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
     });
 
     // Pipe the large base64 string to the Python script's standard input
+    console.log("[Vectorization] Step 2/4 streaming image payload to Python process.");
     pythonProcess.stdin.write(base64Image);
     pythonProcess.stdin.end();
+    console.log("[Vectorization] Step 3/4 waiting for vectorization response.");
   });
 }
 
@@ -87,17 +309,39 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
  * Uses a hybrid approach: OpenCV for vectorization and Azure GPT-4o Vision for semantic understanding.
  */
 export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricReconstruction> {
+  const startedAt = Date.now();
+  console.log(`[Infralith Vision Engine] Step 0/9 request received. payloadChars=${imageUrl.length}`);
   console.log("[Infralith Vision Engine] Routing blueprint to Azure OpenAI Vision...");
 
   // STAGE 1: Pre-process with OpenCV vectorization to get structural hints
-  let vectorizationData = null;
+  let vectorizationHints = null;
   let debugImage = null;
-  try {
-    const vectorizationResult = await runVectorizationScript(imageUrl);
-    vectorizationData = vectorizationResult.lines;
-    debugImage = vectorizationResult.debug_image;
-  } catch (e: any) {
-    console.warn(`[Infralith Vision Engine] Vectorization pre - processing failed: ${e.message}. Falling back to pure vision analysis.`);
+  let layoutHints: BlueprintLayoutHints | null = null;
+
+  console.log("[Infralith Vision Engine] Step 1/9 running structural pre-processing (OpenCV + Azure prebuilt-layout).");
+  const [vectorizationAttempt, layoutAttempt] = await Promise.allSettled([
+    runVectorizationScript(imageUrl),
+    analyzeBlueprintLayoutFromBase64(imageUrl),
+  ]);
+
+  if (vectorizationAttempt.status === "fulfilled") {
+    vectorizationHints = buildVectorizationHints(vectorizationAttempt.value);
+    debugImage = vectorizationAttempt.value.debug_image;
+    console.log("[Infralith Vision Engine] Vectorization output:", {
+      ...summarizeVectorizationHints(vectorizationHints),
+      hasDebugImage: !!debugImage,
+    });
+  } else {
+    const e: any = vectorizationAttempt.reason;
+    console.warn(`[Infralith Vision Engine] Vectorization pre - processing failed: ${e?.message || e}. Falling back to pure vision analysis.`);
+  }
+
+  if (layoutAttempt.status === "fulfilled") {
+    layoutHints = layoutAttempt.value;
+    console.log("[Infralith Vision Engine] Layout hint output:", summarizeLayoutHints(layoutHints));
+  } else {
+    const e: any = layoutAttempt.reason;
+    console.warn(`[Infralith Vision Engine] Layout hint extraction failed: ${e?.message || e}.`);
   }
 
   // STAGE 2: Send image and vector hints to the AI Vision model
@@ -109,9 +353,17 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     ABSOLUTELY DO NOT INVENT A "DEFAULT" OR "GENERIC" BUILDING.You MUST perfectly trace and replicate the actual geometric footprint, rooms, walls, and layout visible in the provided image.If the image is complex or unclear, do your absolute best to map ONLY what is visibly there.NEVER fall back to a generic square or pre - made house layout.
 
     ADDITIONAL CONTEXT(FROM PRE - PROCESSING):
-    I have run a computer vision(OpenCV) pre - processing script to detect potential wall polygons.Use this vector data as a STRONG HINT for tracing walls.It may not be perfect, but it identifies the primary structural outlines.
-    OPENCV VECTORS:
-    ${vectorizationData ? JSON.stringify(vectorizationData, null, 2) : "Not available."}
+    I have run a computer vision(OpenCV) pre - processing pipeline that extracts:
+    - wall polygons
+    - straight wall segments
+    Use this as a STRONG GEOMETRIC HINT for tracing walls and preserving exact footprint.
+    OPENCV VECTOR HINTS:
+    ${vectorizationHints ? JSON.stringify(vectorizationHints, null, 2) : "Not available."}
+
+    AZURE DOCUMENT LAYOUT HINTS (PREBUILT-LAYOUT):
+    I also extracted OCR line polygons and dimension anchors using Azure Document Intelligence prebuilt-layout. Use these as an additional constraint for wall tracing and scale calibration.
+    LAYOUT HINTS:
+    ${layoutHints ? JSON.stringify(layoutHints, null, 2) : "Not available."}
 
     CORE VISION ANALYSIS PROTOCOL:
 1. EXACT VISUAL WALL TRACING: Scan the image systematically.Identify every dark continuous line segment as a wall.
@@ -181,19 +433,62 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   `;
 
   try {
-    const result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
+    console.log("[Infralith Vision Engine] Step 2/9 sending blueprint + hybrid hints to Azure Vision.");
+    let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
+    console.log("[Infralith Vision Engine] Step 3/9 AI reconstruction received.", summarizeReconstruction(result));
+
+    if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints)) {
+      const strictPrompt = `${prompt}
+
+CRITICAL QUALITY CORRECTION (MANDATORY):
+Your previous reconstruction appears underfit for this blueprint complexity.
+You MUST increase geometric fidelity and match the extracted hints.
+
+HARD CONSTRAINTS FOR THIS RETRY:
+- Do not return a simple rectangular default.
+- Trace significantly more wall segments where hints show structural complexity.
+- If the plan indicates multiple enclosed spaces, output corresponding room polygons.
+- Respect line and segment geometry from OPENCV VECTOR HINTS and OCR anchors from LAYOUT HINTS.
+`;
+      console.warn("[Infralith Vision Engine] Step 4/9 underfit detected. Retrying once with stricter anti-generic constraints.");
+      result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
+      console.log("[Infralith Vision Engine] Retry reconstruction summary:", summarizeReconstruction(result));
+    }
+
+    if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints) && vectorizationHints) {
+      const vectorFallback = buildVectorFallbackReconstruction(vectorizationHints, layoutHints);
+      if (vectorFallback) {
+        console.warn("[Infralith Vision Engine] Step 5/9 applying deterministic vector fallback reconstruction.");
+        result = vectorFallback;
+        console.log("[Infralith Vision Engine] Vector fallback summary:", summarizeReconstruction(result));
+      }
+    }
+
     if (!result || !result.walls || result.walls.length === 0) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
 
     // Apply strict deterministic architectural building code checks
+    console.log("[Infralith Vision Engine] Step 6/9 applying deterministic building-code validation.");
     const validatedResult = applyBuildingCodes(result);
+    console.log("[Infralith Vision Engine] Step 7/9 validation complete.", summarizeReconstruction(validatedResult));
 
-    return {
+    const finalPayload: GeometricReconstruction = {
       ...validatedResult,
       debug_image: debugImage, // Pass along the debug image from the vectorization step
-      is_vision_only: !vectorizationData // Flag if vectorization failed and we fell back
+      is_vision_only: !vectorizationHints // Flag if vectorization failed and we fell back
     };
+
+    console.log("[Infralith Vision Engine] Step 8/9 final payload assembled.", {
+      is_vision_only: finalPayload.is_vision_only,
+      hasDebugImage: !!finalPayload.debug_image,
+      vectorHints: summarizeVectorizationHints(vectorizationHints),
+      layoutHints: summarizeLayoutHints(layoutHints),
+    });
+
+    const durationMs = Date.now() - startedAt;
+    console.log(`[Infralith Vision Engine] Step 9/9 returning reconstruction in ${durationMs}ms. is_vision_only=${finalPayload.is_vision_only}`);
+    return finalPayload;
   } catch (e) {
     console.error("[Infralith Vision Engine] Azure Vision Pipeline Error:", e);
     throw e;
@@ -205,7 +500,8 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
  * Uses Azure OpenAI to generate complete parametric geometry with luxury finishes.
  */
 export async function generateBuildingFromDescription(description: string): Promise<GeometricReconstruction> {
-  console.log("[Infralith Architect Engine] Generating parametric building from description...");
+  const startedAt = Date.now();
+  console.log(`[Infralith Architect Engine] Generating parametric building from description. promptSeedChars=${description.length}`);
 
   const prompt = `
     You are the Infralith Architect AI—the world's most advanced parametric architectural modeling engine.
@@ -268,6 +564,8 @@ export async function generateBuildingFromDescription(description: string): Prom
     if (!result || !result.walls || result.walls.length === 0) {
       throw new Error("Architectural Generation Failed: The AI was unable to synthesize a valid structure from the given description.");
     }
+    const durationMs = Date.now() - startedAt;
+    console.log(`[Infralith Architect Engine] Structured generation completed in ${durationMs}ms.`, summarizeReconstruction(result));
     return result;
   } catch (e) {
     console.error("[Infralith Architect Engine] Text-to-3D Pipeline Error:", e);

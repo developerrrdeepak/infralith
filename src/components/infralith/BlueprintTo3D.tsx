@@ -80,6 +80,7 @@ import {
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
 import { estimateConstructionCost, CostEstimate } from '@/lib/cost-estimator';
+import BabylonBlueprintViewer from '@/components/infralith/BabylonBlueprintViewer';
 
 // -- Optional custom human model (GLB) for walkthrough --
 // Put your model at /public/models/human.glb (or override via NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL).
@@ -961,6 +962,26 @@ function BlueprintWorkspace() {
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
+    const flowRunIdRef = useRef<string | null>(null);
+
+    const summarizeReconstruction = (result: GeometricReconstruction | null | undefined) => ({
+        walls: result?.walls?.length || 0,
+        rooms: result?.rooms?.length || 0,
+        doors: result?.doors?.length || 0,
+        windows: result?.windows?.length || 0,
+        conflicts: result?.conflicts?.length || 0,
+        hasRoof: !!result?.roof,
+        buildingName: result?.building_name || 'N/A',
+    });
+
+    const logBlueprintFlow = (step: string, details?: Record<string, unknown>) => {
+        const runId = flowRunIdRef.current || 'no-run';
+        if (details) {
+            console.log(`[Blueprint Flow][${runId}] ${step}`, details);
+            return;
+        }
+        console.log(`[Blueprint Flow][${runId}] ${step}`);
+    };
 
     // Initialize visibility
     React.useEffect(() => {
@@ -1074,10 +1095,18 @@ function BlueprintWorkspace() {
     };
 
     const fileToBase64 = (f: File): Promise<string> => new Promise((res, rej) => {
+        logBlueprintFlow('Step 3/9 converting file to base64.', { name: f.name, size: f.size });
         const r = new FileReader();
         r.readAsDataURL(f);
-        r.onload = () => res(r.result as string);
-        r.onerror = e => rej(e);
+        r.onload = () => {
+            const output = r.result as string;
+            logBlueprintFlow('Step 4/9 base64 conversion complete.', { base64Chars: output.length });
+            res(output);
+        };
+        r.onerror = e => {
+            console.error('[Blueprint Flow] Base64 conversion failed.', e);
+            rej(e);
+        };
     });
 
     const resetState = useCallback(() => {
@@ -1086,6 +1115,7 @@ function BlueprintWorkspace() {
     }, [setElements]);
 
     const animateProgress = (result: GeometricReconstruction) => {
+        logBlueprintFlow('Step 8/9 applying generated JSON into BIM state.', summarizeReconstruction(result));
         setElements(result);
         setStatus('generating');
         const t = setInterval(() => {
@@ -1094,6 +1124,7 @@ function BlueprintWorkspace() {
                 if (next >= 1.0) {
                     clearInterval(t);
                     setStatus('complete');
+                    logBlueprintFlow('Step 9/9 generation complete and scene ready.', { progress: 1, status: 'complete' });
                     toast({
                         title: "Building Constructed",
                         description: `${result.building_name || 'Building'}: ${result.walls.length} walls, ${result.rooms?.length || 0} rooms`,
@@ -1106,32 +1137,49 @@ function BlueprintWorkspace() {
     };
 
     const startFileGeneration = async (f: File) => {
+        flowRunIdRef.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        logBlueprintFlow('Step 1/9 blueprint file accepted.', {
+            name: f.name,
+            type: f.type || 'unknown',
+            sizeBytes: f.size,
+        });
         setFile(f); setStatus('preprocessing'); setProgress(0);
 
-        try { setPreview(URL.createObjectURL(f)); } catch { }
+        try {
+            const previewUrl = URL.createObjectURL(f);
+            setPreview(previewUrl);
+            logBlueprintFlow('Step 2/9 preview URL created.');
+        } catch (previewError) {
+            console.warn('[Blueprint Flow] Preview creation failed.', previewError);
+        }
 
         let cur = 0;
         const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
             const isCAD = f.name.toLowerCase().endsWith('.dwg') || f.name.toLowerCase().endsWith('.dxf');
             let result;
+            logBlueprintFlow('Step 5/9 selecting processing pipeline.', { isCAD });
 
             if (isCAD) {
                 toast({ title: "CAD Model Detected", description: "Parsing via Advanced Babylon engine to enhance model accuracy from raw vector endpoints...", duration: 5000 });
                 // We use the descriptive generator as a highly-accurate structured fallback since we can't rasterize DWG purely client-side without an external service or heavy WASM binary right now. 
                 setTimeout(() => setStatus('analyzing'), 1500);
                 await new Promise(r => setTimeout(r, 2000));
+                logBlueprintFlow('Step 6/9 executing CAD fallback generation.');
                 result = await generateBuildingFromDescription("A highly accurate, multi-room commercial layout with very precise parametric walls and clearly defined doors and windows, matching a complex DWG CAD vector format");
             } else {
                 const b64 = await fileToBase64(f);
                 setTimeout(() => setStatus('analyzing'), 1500);
+                logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', { base64Chars: b64.length });
                 result = await processBlueprintTo3D(b64);
             }
 
             clearInterval(iv);
+            logBlueprintFlow('Step 7/9 structured geometry received from AI pipeline.', summarizeReconstruction(result));
             animateProgress(result);
-        } catch {
+        } catch (error) {
             clearInterval(iv); setStatus('idle'); setFile(null); setPreview(null);
+            console.error('[Blueprint Flow] Generation failed.', error);
             toast({ title: "Construction Failed", description: "The vision engine could not understand this image layout. Please try a clearer blueprint.", variant: 'destructive' });
         }
     };
@@ -1589,15 +1637,21 @@ function BlueprintWorkspace() {
                     <div className="w-full h-full relative" style={{
                         background: isFullscreen ? 'linear-gradient(180deg, #f8f5f0 0%, #e8e2d6 100%)' : 'linear-gradient(180deg, #f0ece4 0%, #e8e2d6 50%, #ddd7c9 100%)'
                     }}>
-                        <Canvas
-                            key={isFullscreen ? 'canvas-fullscreen' : 'canvas-standard'}
-                            dpr={[1, 2]}
-                            camera={{ position: [18, 14, 18], fov: isFullscreen ? 28 : 32 }}
-                            gl={{ antialias: true, alpha: true }}
-                            style={{ background: 'transparent' }}
-                        >
-                            {isWalkthrough ? (
-                                showWalkthroughHuman ? (
+                        {!isWalkthrough ? (
+                            <BabylonBlueprintViewer
+                                data={elements}
+                                progress={progress}
+                                isTopView={isTopView}
+                            />
+                        ) : (
+                            <Canvas
+                                key={isFullscreen ? 'canvas-fullscreen' : 'canvas-standard'}
+                                dpr={[1, 2]}
+                                camera={{ position: [18, 14, 18], fov: isFullscreen ? 28 : 32 }}
+                                gl={{ antialias: true, alpha: true }}
+                                style={{ background: 'transparent' }}
+                            >
+                                {showWalkthroughHuman ? (
                                     <FreefireWalkthroughController
                                         bounds={elements ? {
                                             minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
@@ -1617,82 +1671,62 @@ function BlueprintWorkspace() {
                                         } : undefined}
                                         walls={elements?.walls}
                                     />
-                                )
-                            ) : (
-                                <OrbitControls
-                                    makeDefault
-                                    enableDamping
-                                    dampingFactor={0.05}
-                                    autoRotate={status === 'complete' && !isWalkthrough && !isTopView}
-                                    autoRotateSpeed={0.35}
-                                    maxPolarAngle={isTopView ? 0 : Math.PI / 2.1}
-                                    minPolarAngle={isTopView ? 0 : 0}
-                                    target={isTopView && elements ? [
-                                        (Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])) + Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]]))) / 2,
-                                        0,
-                                        (Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])) + Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]]))) / 2
-                                    ] : undefined}
-                                />
-                            )}
+                                )}
 
-                            {/* Environmental Lighting based on Time of Day */}
-                            {(() => {
-                                // Clamp 6am to 6pm for daylight
-                                const isNight = timeOfDay < 6 || timeOfDay > 18;
-                                const sunAngle = ((timeOfDay - 6) / 12) * Math.PI; // 0 at 6am, PI at 6pm
-                                const sunX = Math.cos(sunAngle) * -30;
-                                const sunY = Math.max(Math.sin(sunAngle) * 30, -5);
-                                const sunZ = 15;
-                                const intensity = isNight ? 0 : Math.sin(sunAngle) * 2.5;
+                                {/* Environmental Lighting based on Time of Day */}
+                                {(() => {
+                                    const isNight = timeOfDay < 6 || timeOfDay > 18;
+                                    const sunAngle = ((timeOfDay - 6) / 12) * Math.PI;
+                                    const sunX = Math.cos(sunAngle) * -30;
+                                    const sunY = Math.max(Math.sin(sunAngle) * 30, -5);
+                                    const sunZ = 15;
+                                    const intensity = isNight ? 0 : Math.sin(sunAngle) * 2.5;
 
-                                return (
-                                    <>
-                                        <ambientLight intensity={isNight ? 0.2 : 0.6} color={isNight ? "#4a5a70" : "#ffffff"} />
-                                        <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={[2048, 2048]} />
-                                        <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
-                                            shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
-                                        <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
+                                    return (
+                                        <>
+                                            <ambientLight intensity={isNight ? 0.2 : 0.6} color={isNight ? "#4a5a70" : "#ffffff"} />
+                                            <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={[2048, 2048]} />
+                                            <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
+                                                shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
+                                            <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
+                                            {!isNight && (
+                                                <Sky distance={450000} sunPosition={[sunX, sunY, sunZ]} inclination={0} azimuth={0.25} rayleigh={1.5} turbidity={0.5} />
+                                            )}
+                                            {isNight && (
+                                                <>
+                                                    <color attach="background" args={['#050812']} />
+                                                    <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+                                                </>
+                                            )}
+                                            {!isNight && <color attach="background" args={['#d1eaff']} />}
+                                        </>
+                                    );
+                                })()}
 
-                                        {/* Dynamic Sky */}
-                                        {!isNight && (
-                                            <Sky distance={450000} sunPosition={[sunX, sunY, sunZ]} inclination={0} azimuth={0.25} rayleigh={1.5} turbidity={0.5} />
-                                        )}
-                                        {isNight && (
-                                            <>
-                                                {/* Deep night sky color background */}
-                                                <color attach="background" args={['#050812']} />
-                                                <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-                                            </>
-                                        )}
-                                        {/* Daytime background if no sky (fallback, or when transitioning) */}
-                                        {!isNight && <color attach="background" args={['#d1eaff']} />}
-                                    </>
-                                );
-                            })()}
+                                <Suspense fallback={null}>
+                                    <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} humanModelUrl={CUSTOM_HUMAN_GLB_URL} />
+                                    <Environment preset="apartment" />
+                                    <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
-                            <Suspense fallback={null}>
-                                <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} humanModelUrl={CUSTOM_HUMAN_GLB_URL} />
-                                <Environment preset="apartment" />
-                                <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
-
-                                <EffectComposer>
-                                    <SSAO
-                                        intensity={20}
-                                        radius={0.4}
-                                        luminanceInfluence={0.5}
-                                        color={new THREE.Color("black")}
-                                    />
-                                    <Bloom
-                                        luminanceThreshold={1.2}
-                                        mipmapBlur
-                                        intensity={0.4}
-                                        radius={0.4}
-                                    />
-                                    <Noise opacity={0.03} />
-                                    <Vignette eskil={false} offset={0.1} darkness={1.1} />
-                                </EffectComposer>
-                            </Suspense>
-                        </Canvas>
+                                    <EffectComposer>
+                                        <SSAO
+                                            intensity={20}
+                                            radius={0.4}
+                                            luminanceInfluence={0.5}
+                                            color={new THREE.Color("black")}
+                                        />
+                                        <Bloom
+                                            luminanceThreshold={1.2}
+                                            mipmapBlur
+                                            intensity={0.4}
+                                            radius={0.4}
+                                        />
+                                        <Noise opacity={0.03} />
+                                        <Vignette eskil={false} offset={0.1} darkness={1.1} />
+                                    </EffectComposer>
+                                </Suspense>
+                            </Canvas>
+                        )}
 
                         {/* PUBG-style Walkthrough UI */}
                         {isWalkthrough && status !== 'idle' && (
