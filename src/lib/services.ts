@@ -61,6 +61,8 @@ export type Post = {
   authorName: string;
   authorAvatar: string;
   authorHandle: string;
+  authorRole?: string;
+  verified?: boolean;
   content: string;
   image?: string | null;
   timestamp: number;
@@ -68,6 +70,9 @@ export type Post = {
   likeCount: number;
   commentCount: number;
   shares: number;
+  tags?: string[];
+  isBounty?: boolean;
+  bountyAmount?: number;
 };
 
 // --- DM TYPES ---
@@ -305,57 +310,134 @@ export const infralithService = {
 };
 
 // --- COMMUNITY POST SERVICE ---
+type CreatePostOptions = {
+  tags?: string[];
+  isBounty?: boolean;
+  bountyAmount?: number;
+  authorRole?: string;
+  verified?: boolean;
+};
+
+type SeedPostInput = Partial<Post> & Pick<Post, 'id' | 'authorId' | 'authorName' | 'content'>;
+
 export const postService = {
-  createPost: async (userId: string, authorName: string, authorAvatar: string, email: string, content: string, image: string | null) => {
-    const posts = getStorageItem('infralith_posts') || [];
-    const newPost = {
+  createPost: async (
+    userId: string,
+    authorName: string,
+    authorAvatar: string,
+    email: string,
+    content: string,
+    image: string | null,
+    options?: CreatePostOptions
+  ) => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const fallbackHandle = authorName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || `user${Date.now()}`;
+    const emailHandle = normalizeEmail(email).split('@')[0];
+    const newPost: Post = {
       id: `post_${Date.now()}`,
       authorId: userId,
       authorName,
-      authorHandle: email.split('@')[0],
+      authorHandle: emailHandle || fallbackHandle,
       authorAvatar: authorAvatar || '',
+      authorRole: options?.authorRole || 'Engineer',
+      verified: options?.verified ?? false,
       content,
       image,
       timestamp: Date.now(),
       likeCount: 0,
       commentCount: 0,
       shares: 0,
-      likes: {}
+      likes: {},
+      tags: options?.tags && options.tags.length > 0 ? options.tags : ['#CommunityUpdate'],
+      isBounty: !!options?.isBounty,
+      bountyAmount: options?.isBounty ? options?.bountyAmount : undefined,
     };
     posts.unshift(newPost);
     setStorageItem('infralith_posts', posts);
     return newPost.id;
   },
 
+  seedPosts: async (seedPosts: SeedPostInput[]) => {
+    const existingPosts: Post[] = getStorageItem('infralith_posts') || [];
+    if (existingPosts.length > 0) return existingPosts;
+
+    const seeded: Post[] = seedPosts
+      .map((seed, index) => {
+        const normalizedName = (seed.authorName || 'Community Member').trim();
+        const normalizedHandle =
+          seed.authorHandle ||
+          normalizedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) ||
+          `seed${index + 1}`;
+        const isBounty = !!seed.isBounty;
+        return {
+          id: seed.id || `seed_post_${index + 1}`,
+          authorId: seed.authorId || `seed_author_${index + 1}`,
+          authorName: normalizedName,
+          authorHandle: normalizedHandle,
+          authorAvatar: seed.authorAvatar || '',
+          authorRole: seed.authorRole || 'Engineer',
+          verified: seed.verified ?? true,
+          content: seed.content || '',
+          image: seed.image || null,
+          timestamp: typeof seed.timestamp === 'number' ? seed.timestamp : Date.now() - index * 60_000,
+          likes: seed.likes || {},
+          likeCount: typeof seed.likeCount === 'number' ? seed.likeCount : 0,
+          commentCount: typeof seed.commentCount === 'number' ? seed.commentCount : 0,
+          shares: typeof seed.shares === 'number' ? seed.shares : 0,
+          tags: Array.isArray(seed.tags) && seed.tags.length > 0 ? seed.tags : ['#CommunityUpdate'],
+          isBounty,
+          bountyAmount: isBounty ? seed.bountyAmount : undefined,
+        };
+      })
+      .sort((a, b) => b.timestamp - a.timestamp);
+
+    setStorageItem('infralith_posts', seeded);
+    return seeded;
+  },
+
   deletePost: async (postId: string) => {
-    const posts = getStorageItem('infralith_posts') || [];
-    const filtered = posts.filter((p: any) => p.id !== postId);
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const filtered = posts.filter((p) => p.id !== postId);
     setStorageItem('infralith_posts', filtered);
-  },
-
-  getAllPosts: async () => {
-    return getStorageItem('infralith_posts') || [];
-  },
-
-  toggleLike: async (postId: string, userId: string) => {
-    const posts = getStorageItem('infralith_posts') || [];
-    const post = posts.find((p: any) => p.id === postId);
-    if (post) {
-      post.likes = post.likes || {};
-      if (post.likes[userId]) {
-        delete post.likes[userId];
-        post.likeCount = Math.max(0, post.likeCount - 1);
-      } else {
-        post.likes[userId] = true;
-        post.likeCount += 1;
-      }
-      setStorageItem('infralith_posts', posts);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(`comments_${postId}`);
     }
   },
 
+  getAllPosts: async () => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    return posts.sort((a, b) => b.timestamp - a.timestamp);
+  },
+
+  toggleLike: async (postId: string, userId: string) => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    post.likes = post.likes || {};
+    post.likeCount = typeof post.likeCount === 'number' ? post.likeCount : 0;
+    if (post.likes[userId]) {
+      delete post.likes[userId];
+      post.likeCount = Math.max(0, post.likeCount - 1);
+    } else {
+      post.likes[userId] = true;
+      post.likeCount += 1;
+    }
+    setStorageItem('infralith_posts', posts);
+  },
+
+  incrementShare: async (postId: string) => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return 0;
+    post.shares = typeof post.shares === 'number' ? post.shares + 1 : 1;
+    setStorageItem('infralith_posts', posts);
+    return post.shares;
+  },
+
   addComment: async (postId: string, userId: string, authorName: string, authorAvatar: string, text: string) => {
-    const comments = getStorageItem(`comments_${postId}`) || [];
-    const newComment = {
+    const comments: Comment[] = getStorageItem(`comments_${postId}`) || [];
+    const newComment: Comment = {
       id: `comment_${Date.now()}`,
       authorId: userId,
       authorName,
@@ -367,17 +449,17 @@ export const postService = {
     setStorageItem(`comments_${postId}`, comments);
 
     // Update post count
-    const posts = getStorageItem('infralith_posts') || [];
-    const post = posts.find((p: any) => p.id === postId);
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const post = posts.find((p) => p.id === postId);
     if (post) {
-      post.commentCount += 1;
+      post.commentCount = (post.commentCount || 0) + 1;
       setStorageItem('infralith_posts', posts);
     }
     return newComment.id;
   },
 
   getComments: async (postId: string) => {
-    return getStorageItem(`comments_${postId}`) || [];
+    return (getStorageItem(`comments_${postId}`) || []) as Comment[];
   }
 };
 
