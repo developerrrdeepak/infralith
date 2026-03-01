@@ -7,6 +7,7 @@ const RATE_LIMIT_MAX = 10;
 const rateStore = new Map<string, { count: number; windowStart: number }>();
 
 const backendUrl = process.env.USER_LOOKUP_URL; // server-side only
+const FETCH_TIMEOUT_MS = Number(process.env.USER_LOOKUP_TIMEOUT_MS || 5000);
 
 async function rateLimit(ip: string): Promise<boolean> {
   const now = Date.now();
@@ -39,12 +40,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Lookup unavailable' }, { status: 503 });
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
     const res = await fetch(`${backendUrl}?email=${encodeURIComponent(email)}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (res.status === 404) {
       return NextResponse.json(null, { status: 200 });
@@ -54,15 +60,22 @@ export async function GET(req: NextRequest) {
     }
 
     const data = await res.json();
+    const normalizedEmail = normalizeEmail(data.email || email);
+
     return NextResponse.json({
       uid: data.uid || data.id,
       name: data.name || data.fullName || '',
-      email: normalizeEmail(data.email || email),
+      email: normalizedEmail,
       avatar: data.avatar || data.image || null,
       role: data.role || data.title,
     });
-  } catch (error) {
-    console.error('User lookup proxy error', error);
-    return NextResponse.json({ error: 'Lookup failed' }, { status: 500 });
+  } catch (error: any) {
+    clearTimeout(timeout);
+    const code = error?.code || (error?.name === 'AbortError' ? 'ETIMEOUT' : 'EUNKNOWN');
+    console.error('User lookup proxy error', { code, message: String(error) });
+
+    // Surface a service-unavailable response so callers can gracefully fallback
+    const status = code === 'ETIMEOUT' ? 504 : 503;
+    return NextResponse.json({ error: 'Lookup unavailable', code }, { status });
   }
 }
