@@ -1,6 +1,33 @@
 'use server';
 
 import { analyzeBlueprintDocument, generateAzureObject } from '@/ai/azure-ai';
+import { z } from 'zod';
+
+const blueprintParseSchema = z.object({
+    projectScope: z.string().optional(),
+    projectName: z.string().optional(),
+    totalFloors: z.union([z.number(), z.string()]).optional(),
+    floors: z.union([z.number(), z.string()]).optional(),
+    height: z.union([z.number(), z.string()]).optional(),
+    totalArea: z.union([z.number(), z.string()]).optional(),
+    area: z.union([z.number(), z.string()]).optional(),
+    seismicZone: z.string().optional(),
+    zone: z.string().optional(),
+    materials: z.array(
+        z.object({
+            item: z.string().optional(),
+            name: z.string().optional(),
+            material: z.string().optional(),
+            quantity: z.union([z.number(), z.string()]).optional(),
+            amount: z.union([z.number(), z.string()]).optional(),
+            unit: z.string().optional(),
+            measurement: z.string().optional(),
+            spec: z.string().optional(),
+            specification: z.string().optional(),
+            standard: z.string().optional(),
+        })
+    ).optional(),
+});
 
 /**
  * Blueprint Parsing Agent — uses Azure Document Intelligence and GPT-4o
@@ -27,12 +54,16 @@ export async function parseBlueprint(file: string | File) {
     `;
 
     try {
-        const result = await generateAzureObject<any>(prompt);
+        const result = await generateAzureObject<z.infer<typeof blueprintParseSchema>>(prompt, blueprintParseSchema);
+        const toNumber = (value: unknown, fallback = 0) => {
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? numeric : fallback;
+        };
         return {
             projectScope: result?.projectScope || result?.projectName || "Construction Project",
-            totalFloors: result?.totalFloors || result?.floors || 0,
-            height: result?.height || 0,
-            totalArea: result?.totalArea || result?.area || 0,
+            totalFloors: toNumber(result?.totalFloors ?? result?.floors, 0),
+            height: toNumber(result?.height, 0),
+            totalArea: toNumber(result?.totalArea ?? result?.area, 0),
             seismicZone: result?.seismicZone || result?.zone || "Undefined",
             materials: (result?.materials || []).map((m: any) => ({
                 item: m?.item || m?.name || m?.material || 'Unknown Material',

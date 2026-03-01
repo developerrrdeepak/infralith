@@ -19,7 +19,24 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
     interface JWT {
         role?: string;
+        id?: string;
     }
+}
+
+const isProduction = process.env.NODE_ENV === "production";
+const localAuthSecret = (process.env.INFRALITH_DEV_AUTH_SECRET || "").trim();
+const secureCookiePrefix = isProduction ? "__Secure-" : "";
+const allowedDevEmails = new Set(
+    (process.env.INFRALITH_DEV_ALLOWED_EMAILS || "")
+        .split(",")
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean)
+);
+
+function roleFromEmail(email: string): string {
+    if (email.startsWith("admin@") || email.includes(".admin@")) return "Admin";
+    if (email.startsWith("supervisor@") || email.includes(".supervisor@")) return "Supervisor";
+    return "Engineer";
 }
 
 export const authOptions: NextAuthOptions = {
@@ -37,7 +54,7 @@ export const authOptions: NextAuthOptions = {
                 // Debug log to confirm identity is reaching this point (visible in Log Stream)
                 console.log("[Auth] Profile mapping for:", profile.email || profile.preferred_username);
 
-                const roles = profile.roles || [];
+                const roles = Array.isArray(profile.roles) ? profile.roles : [];
                 let role = "Guest";
 
                 // Map Azure AD roles to application roles using env variables or direct matches
@@ -57,7 +74,7 @@ export const authOptions: NextAuthOptions = {
                 return {
                     id: profile.sub,
                     name: profile.name,
-                    email: profile.email,
+                    email: profile.email || profile.preferred_username,
                     image: null,
                     role: role,
                 };
@@ -67,19 +84,27 @@ export const authOptions: NextAuthOptions = {
             name: "Dummy Login",
             credentials: {
                 email: { label: "Email", type: "text" },
-                role: { label: "Role", type: "text" }
+                password: { label: "Password", type: "password" },
             },
             async authorize(credentials) {
-                if (credentials?.email) {
-                    return {
-                        id: "dummy-user-id-" + Math.random().toString(36).substr(2, 9),
-                        name: credentials.email.split('@')[0].replace(/[^a-zA-Z]/g, ' '),
-                        email: credentials.email,
-                        role: credentials.role || "Admin",
-                    };
+                if (isProduction) {
+                    return null;
                 }
-                return null;
-            }
+
+                const email = (credentials?.email || "").trim().toLowerCase();
+                const password = String(credentials?.password || "");
+
+                if (!email || !password) return null;
+                if (!localAuthSecret || password !== localAuthSecret) return null;
+                if (allowedDevEmails.size > 0 && !allowedDevEmails.has(email)) return null;
+
+                return {
+                    id: `dev-${email.replace(/[^a-z0-9]+/g, "-")}`,
+                    name: email.split("@")[0].replace(/[^a-zA-Z]/g, " ").trim() || "Developer",
+                    email,
+                    role: roleFromEmail(email),
+                };
+            },
         })
     ],
     callbacks: {
@@ -105,21 +130,21 @@ export const authOptions: NextAuthOptions = {
     secret: process.env.NEXTAUTH_SECRET,
     cookies: {
         sessionToken: {
-            name: `__Secure-next-auth.session-token`,
+            name: `${secureCookiePrefix}next-auth.session-token`,
             options: {
                 httpOnly: true,
                 sameSite: "lax",
                 path: "/",
-                secure: true,
+                secure: isProduction,
             },
         },
         state: {
-            name: `__Secure-next-auth.state`,
+            name: `${secureCookiePrefix}next-auth.state`,
             options: {
                 httpOnly: true,
                 sameSite: "lax",
                 path: "/",
-                secure: true,
+                secure: isProduction,
                 maxAge: 900,
             },
         }

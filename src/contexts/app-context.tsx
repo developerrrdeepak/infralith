@@ -125,7 +125,7 @@ interface AppContextType {
   generateUserProfileJsonForChat: () => string | null;
   infralithResult: any | null;
   pipelineStage: number;
-  runInfralithEvaluation: (input: string | File) => Promise<void>;
+  runInfralithEvaluation: (input: File) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -386,7 +386,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const result = await signIn('credentials', {
         redirect: false,
         email,
-        role: "Engineer"
+        password: pass,
       });
       if (result?.error) throw new Error(result.error);
       setShowLogin(false);
@@ -423,7 +423,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const result = await signIn('credentials', {
         redirect: false,
         email: data.email,
-        role: "Engineer"
+        password: data.password || "",
       });
       if (result?.error) throw new Error(result.error);
 
@@ -442,11 +442,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const handleSignInOrSignUpWithGoogle = async () => {
-    signIn('google');
+    signIn('azure-ad', { callbackUrl: '/' });
   };
 
   const handleLoginWithGoogle = async () => {
-    signIn('google');
+    signIn('azure-ad', { callbackUrl: '/' });
   };
 
   const handleDeleteAccount = async () => {
@@ -528,7 +528,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [handleNavigate]);
 
-  const runInfralithEvaluation = async (input: string | File) => {
+  const runInfralithEvaluation = async (input: File) => {
     setIsAuthLoading(true);
     setPipelineStage(0);
 
@@ -536,7 +536,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (user) {
       auditLog.record('BLUEPRINT_UPLOADED',
         { uid: user.uid, name: user.name, role: user.role, email: user.email },
-        { fileName: input instanceof File ? input.name : 'text-input', fileSize: input instanceof File ? input.size : 0 }
+        { fileName: input.name, fileSize: input.size }
       );
     }
 

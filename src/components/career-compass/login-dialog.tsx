@@ -74,6 +74,7 @@ const GoogleIcon = () => (
 export default function LoginDialog() {
   // --- CORRECTION 1: Destructure `handleClearAssessmentState` from the context ---
   const { showLogin, setShowLogin, handleLogin, handleSignUp, loginView, setLoginView, signupFormState, setSignupFormState, clearSignupForm, handleClearAssessmentState } = useAppContext();
+  const enableLocalAuth = process.env.NODE_ENV !== 'production';
   const [loadingMethod, setLoadingMethod] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -159,28 +160,6 @@ export default function LoginDialog() {
     }
   };
 
-  const submitGoogleLoginFlow = async () => {
-    setLoadingMethod('google-login');
-    try {
-      await signIn('google', { callbackUrl: '/' });
-    } catch (error) {
-      console.error("Google Login failed:", error);
-    } finally {
-      setLoadingMethod(null);
-    }
-  }
-
-  const submitGoogleSignUpFlow = async () => {
-    setLoadingMethod('google-signup');
-    try {
-      await signIn('google', { callbackUrl: '/' });
-    } catch (error) {
-      console.error("Google Sign-In failed:", error);
-    } finally {
-      setLoadingMethod(null);
-    }
-  }
-
   const onFinalSubmit = form.handleSubmit(async (data) => {
     setLoadingMethod('signup');
     try {
@@ -255,54 +234,25 @@ export default function LoginDialog() {
         </Button>
       </div>
 
-      <div className="relative my-6">
-        <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-white/10" /></div>
-        <div className="relative flex justify-center text-xs uppercase"><span className="bg-background px-2 text-muted-foreground">Or corporate sign in</span></div>
-      </div>
+      {enableLocalAuth && (
+        <>
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-white/10" /></div>
+            <div className="relative flex justify-center text-xs uppercase"><span className="bg-background px-2 text-muted-foreground">Or local developer sign in</span></div>
+          </div>
 
-      <div className="space-y-3">
-        <Input placeholder="Work Email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" disabled={!!loadingMethod} />
-        <div className="relative">
-          <Input type={showPassword ? "text" : "password"} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitLogin()} disabled={!!loadingMethod} />
-          <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
-        </div>
-        <Button className="w-full" onClick={submitLogin} disabled={!!loadingMethod}>
-          {loadingMethod === 'email' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Please wait...</> : 'Sign In'}
-        </Button>
-      </div>
-
-      <div className="relative my-6">
-        <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-white/5" /></div>
-        <div className="relative flex justify-center text-[10px] uppercase"><span className="bg-background px-2 text-muted-foreground/40 tracking-widest">Development Bypass</span></div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        {(['Engineer', 'Supervisor', 'Admin'] as const).map((role) => (
-          <Button
-            key={role}
-            variant="outline"
-            size="sm"
-            className="text-[10px] h-8 border-dashed hover:bg-primary/5 hover:text-primary transition-all font-mono"
-            onClick={async () => {
-              setLoadingMethod(`dummy-${role.toLowerCase()}`);
-              try {
-                await signIn('credentials', {
-                  email: `${role.toLowerCase()}@infralith.ai`,
-                  role: role,
-                  callbackUrl: '/'
-                });
-              } catch (e) {
-                console.error("Dummy login failed:", e);
-              } finally {
-                setLoadingMethod(null);
-              }
-            }}
-            disabled={!!loadingMethod}
-          >
-            {loadingMethod === `dummy-${role.toLowerCase()}` ? <Loader2 className="h-3 w-3 animate-spin" /> : role}
-          </Button>
-        ))}
-      </div>
+          <div className="space-y-3">
+            <Input placeholder="Work Email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" disabled={!!loadingMethod} />
+            <div className="relative">
+              <Input type={showPassword ? "text" : "password"} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitLogin()} disabled={!!loadingMethod} />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+            </div>
+            <Button className="w-full" onClick={submitLogin} disabled={!!loadingMethod}>
+              {loadingMethod === 'email' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Please wait...</> : 'Sign In'}
+            </Button>
+          </div>
+        </>
+      )}
 
       <Button variant="link" className="w-full text-xs mt-4 opacity-50 hover:opacity-100" onClick={switchToSignup} disabled={!!loadingMethod}>Register a New Site / Supervisor</Button>
     </>

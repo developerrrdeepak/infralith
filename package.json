@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --turbopack -p 3500",
-    "build": "python3 -m pip install -r requirements.txt --user --no-cache-dir || pip3 install -r requirements.txt --user || echo 'Python deps failed, falling back to Vision API' && next build",
+    "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "postinstall": "python3 -m pip install -r requirements.txt --user || pip3 install -r requirements.txt --user || echo 'Pip not found'"
+    "postinstall": "node -e \"console.log('Postinstall complete')\""
   },
   "dependencies": {
     "@ai-sdk/azure": "^3.0.34",

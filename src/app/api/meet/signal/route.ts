@@ -23,9 +23,10 @@ type SignalEvent = {
     peers?: string[];
 };
 
-type Room = Map<string, ReadableStreamDefaultController>; // peerId -> SSE controller
+type Room = Map<string, ReadableStreamDefaultController<Uint8Array>>; // peerId -> SSE controller
 
 const rooms = new Map<string, Room>(); // roomId -> Room
+const sseEncoder = new TextEncoder();
 
 const ROOM_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
 const PEER_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
@@ -48,7 +49,7 @@ function sendTo(room: Room, peerId: string, event: SignalEvent) {
     const ctrl = room.get(peerId);
     if (ctrl) {
         try {
-            ctrl.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+            ctrl.enqueue(sseEncoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         } catch {
             room.delete(peerId);
         }
@@ -70,7 +71,13 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const roomId = searchParams.get('roomId') || '';
-    const peerId = searchParams.get('peerId') || session.user.id; // bind to authenticated identity if not provided
+    const requestedPeerId = searchParams.get('peerId') || '';
+    const peerId = requestedPeerId || session.user.id;
+
+    // Prevent clients from opening SSE channels for another user id.
+    if (requestedPeerId && requestedPeerId !== session.user.id) {
+        return NextResponse.json({ error: 'Forbidden: peer mismatch' }, { status: 403 });
+    }
 
     if (!validateIds(roomId, peerId)) {
         return NextResponse.json({ error: 'Invalid roomId or peerId format' }, { status: 400 });
@@ -85,8 +92,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'Room is full' }, { status: 429 });
     }
 
-    const encoder = new TextEncoder();
-    let controller: ReadableStreamDefaultController;
+    let controller: ReadableStreamDefaultController<Uint8Array>;
 
     const stream = new ReadableStream({
         start(ctrl) {
@@ -99,7 +105,7 @@ export async function GET(req: NextRequest) {
             const existingPeers = Array.from(room.keys()).filter(id => id !== peerId);
             const joinedEvent: SignalEvent = { type: 'joined', peerId, peers: existingPeers };
             try {
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(joinedEvent)}\n\n`));
+                controller.enqueue(sseEncoder.encode(`data: ${JSON.stringify(joinedEvent)}\n\n`));
             } catch {
                 /* ignore enqueue failures */
             }
@@ -137,19 +143,16 @@ export async function POST(req: NextRequest) {
     }
 
     const body: SignalEvent = await req.json();
-    const { roomId = '', to = '', from = session.user.id, type, payload } = body;
+    const { roomId = '', to = '', type, payload } = body;
+    const from = session.user.id;
 
     if (!type || !validateIds(roomId, to) || !validateIds(roomId, from)) {
         return NextResponse.json({ error: 'Missing or invalid fields' }, { status: 400 });
     }
 
-    // Prevent spoofing another authenticated user id
-    if (from !== session.user.id) {
-        return NextResponse.json({ error: 'Forbidden: sender mismatch' }, { status: 403 });
-    }
-
     const room = rooms.get(roomId);
     if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    if (!room.has(from)) return NextResponse.json({ error: 'Sender not in room' }, { status: 403 });
     if (!room.has(to)) return NextResponse.json({ error: 'Recipient not in room' }, { status: 404 });
 
     sendTo(room, to, { type, from, payload, roomId });

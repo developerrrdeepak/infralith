@@ -1,10 +1,17 @@
 'use server';
 import { generateAzureObject } from '@/ai/azure-ai';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { z } from 'zod';
 
-const DB_DIR = path.join(process.cwd(), '.data');
-const DB_FILE = path.join(DB_DIR, 'cosmos-local.json');
+const searchResponseSchema = z.object({
+    results: z.array(
+        z.object({
+            title: z.string().optional(),
+            summary: z.string().optional(),
+            semanticMatchPercentage: z.union([z.number(), z.string()]).optional(),
+            relevanceReason: z.string().optional(),
+        }).passthrough()
+    ).optional(),
+});
 
 /**
  * Advanced Semantic Search Agent — Synthesizes architectural knowledge 
@@ -70,7 +77,7 @@ export async function searchCosmosDB(query: string) {
             Return as a JSON object with a "results" array.
         `;
 
-        const advancedResult = await generateAzureObject<{ results: any[] }>(prompt);
+        const advancedResult = await generateAzureObject<z.infer<typeof searchResponseSchema>>(prompt, searchResponseSchema);
 
         console.log(`Search Agent: Found ${advancedResult.results?.length || 0} semantically relevant documents.`);
         return advancedResult.results || candidateBase;

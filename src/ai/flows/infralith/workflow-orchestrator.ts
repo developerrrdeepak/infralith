@@ -6,10 +6,13 @@ import { checkCompliance } from './compliance-check';
 import { analyzeRisk } from './risk-analysis';
 import { predictCost } from './cost-prediction';
 import { runDevOpsAgent } from './devops-agent'; // <-- IMPORTED THE ACTION AGENT
-import { generateAzureObject } from '@/ai/azure-ai';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 
 /** Current orchestrator version — bump on every prompt or logic change */
 const ORCHESTRATOR_VERSION = '2.2.0'; // Bumped version for Agentic integration
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 
 /** Simple checksum of all prompt templates for reproducibility */
 function paramHash(): string {
@@ -20,12 +23,31 @@ function paramHash(): string {
 }
 
 export async function runInfralithWorkflow(formData: FormData): Promise<WorkflowResult> {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        throw new Error("Unauthorized: authentication required.");
+    }
+
+    const role = session.user.role || "Guest";
+    if (role !== "Engineer" && role !== "Admin") {
+        throw new Error("Forbidden: Engineer or Admin role required.");
+    }
+
     const startTime = Date.now();
     const runId = `RUN-${startTime.toString(36).toUpperCase()}`;
     console.log(`[${runId}] Infralith Orchestrator v${ORCHESTRATOR_VERSION}: Initiating multi-agent BIM analysis...`);
 
-    const input = formData.get('file') as string | File;
-    if (!input) throw new Error("No input blueprint provided.");
+    const input = formData.get('file');
+    if (!(input instanceof File)) throw new Error("No input blueprint file provided.");
+    if (input.size > MAX_UPLOAD_BYTES) {
+        throw new Error("Uploaded file exceeds the 50MB limit.");
+    }
+
+    const fileName = input.name.toLowerCase();
+    const extension = fileName.slice(fileName.lastIndexOf('.'));
+    if (!ALLOWED_UPLOAD_EXTENSIONS.has(extension)) {
+        throw new Error("Unsupported file type. Please upload PDF, DOC, DOCX, PNG, JPG, JPEG, or WEBP.");
+    }
 
     // 1. Context Generation
     const blueprint = await parseBlueprint(input);

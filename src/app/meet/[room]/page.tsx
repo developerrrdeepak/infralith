@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import {
     Mic, MicOff, Video, VideoOff, PhoneOff,
@@ -29,7 +30,9 @@ type Peer = {
 export default function MeetRoomPage() {
     const params = useParams();
     const router = useRouter();
+    const { data: session, status } = useSession();
     const roomId = params.room as string;
+    const peerId = session?.user?.id || '';
 
     // ── State ──
     const [isMuted, setIsMuted] = useState(false);
@@ -45,17 +48,17 @@ export default function MeetRoomPage() {
     const localStream = useRef<MediaStream | null>(null);
     const screenStream = useRef<MediaStream | null>(null);
     const peersRef = useRef<Map<string, Peer>>(new Map());
-    const myPeerId = useRef(`peer-${Math.random().toString(36).slice(2, 9)}`);
     const sseRef = useRef<EventSource | null>(null);
 
     // ── Signal helpers ──
     const signal = useCallback(async (to: string, type: string, payload: any) => {
+        if (!peerId) return;
         await fetch('/api/meet/signal', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roomId, from: myPeerId.current, to, type, payload }),
+            body: JSON.stringify({ roomId, to, type, payload }),
         });
-    }, [roomId]);
+    }, [peerId, roomId]);
 
     // ── Create a new RTCPeerConnection for a remote peer ──
     const createPeerConnection = useCallback((remotePeerId: string): RTCPeerConnection => {
@@ -145,6 +148,12 @@ export default function MeetRoomPage() {
     // ── Initialize camera, then connect SSE signaling ──
     useEffect(() => {
         let mounted = true;
+        if (status === 'loading') return;
+        if (status === 'unauthenticated') {
+            router.push('/');
+            return;
+        }
+        if (!peerId) return;
 
         const init = async () => {
             try {
@@ -163,7 +172,7 @@ export default function MeetRoomPage() {
             if (!mounted) return;
 
             // Open SSE connection to signaling server
-            const sse = new EventSource(`/api/meet/signal?roomId=${roomId}&peerId=${myPeerId.current}`);
+            const sse = new EventSource(`/api/meet/signal?roomId=${encodeURIComponent(roomId)}&peerId=${encodeURIComponent(peerId)}`);
             sseRef.current = sse;
             sse.onmessage = handleSignal;
             sse.onerror = () => console.error('[Meet] SSE error — signaling disrupted');
@@ -177,7 +186,7 @@ export default function MeetRoomPage() {
             sseRef.current?.close();
             peersRef.current.forEach(p => p.pc.close());
         };
-    }, [roomId, handleSignal]);
+    }, [handleSignal, peerId, roomId, router, status]);
 
     // ── Attach local stream when video element mounts ──
     const attachLocalVideo = useCallback((el: HTMLVideoElement | null) => {
@@ -287,7 +296,7 @@ export default function MeetRoomPage() {
         localStream.current?.getTracks().forEach(t => t.stop());
         sseRef.current?.close();
         peersRef.current.forEach(p => p.pc.close());
-        router.push('/dashboard/team-directory?tab=messages');
+        router.push('/#messages');
     };
 
     // ── Copy invite link ──
