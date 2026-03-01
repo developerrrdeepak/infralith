@@ -55,6 +55,7 @@ import {
     Edit2,
     Lightbulb,
     Camera,
+    User,
     DoorOpen,
     Square,
     AppWindow as WindowIcon
@@ -675,6 +676,76 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
     return <PointerLockControls />;
 }
 
+function WalkthroughHumanCharacter({ enabled }: { enabled: boolean }) {
+    const { camera } = useThree();
+    const groupRef = useRef<THREE.Group>(null);
+    const smoothed = useRef(new THREE.Vector3());
+    const initialized = useRef(false);
+
+    useFrame((state, delta) => {
+        if (!enabled || !groupRef.current) return;
+
+        const yaw = camera.rotation.y;
+        const targetOffset = new THREE.Vector3(1.1, -1.7, 2.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        const targetPos = camera.position.clone().add(targetOffset);
+
+        if (!initialized.current) {
+            smoothed.current.copy(targetPos);
+            initialized.current = true;
+        } else {
+            smoothed.current.lerp(targetPos, Math.min(1, delta * 6));
+        }
+
+        const runningBob = Math.sin(state.clock.elapsedTime * 9) * 0.03;
+        groupRef.current.position.set(smoothed.current.x, smoothed.current.y + runningBob, smoothed.current.z);
+        groupRef.current.rotation.y = yaw + Math.PI;
+    });
+
+    if (!enabled) return null;
+
+    return (
+        <group ref={groupRef}>
+            {/* Legs */}
+            <mesh position={[-0.14, 0.38, 0]} castShadow>
+                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
+                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+            </mesh>
+            <mesh position={[0.14, 0.38, 0]} castShadow>
+                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
+                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+            </mesh>
+
+            {/* Torso */}
+            <mesh position={[0, 1.02, 0]} castShadow>
+                <capsuleGeometry args={[0.23, 0.58, 8, 14]} />
+                <meshStandardMaterial color="#16a34a" roughness={0.6} metalness={0.05} />
+            </mesh>
+
+            {/* Arms */}
+            <mesh position={[-0.33, 1.02, 0]} castShadow>
+                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
+                <meshStandardMaterial color="#16a34a" roughness={0.65} />
+            </mesh>
+            <mesh position={[0.33, 1.02, 0]} castShadow>
+                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
+                <meshStandardMaterial color="#16a34a" roughness={0.65} />
+            </mesh>
+
+            {/* Head */}
+            <mesh position={[0, 1.58, 0]} castShadow>
+                <sphereGeometry args={[0.16, 20, 20]} />
+                <meshStandardMaterial color="#f3c7a3" roughness={0.7} />
+            </mesh>
+
+            {/* Helmet */}
+            <mesh position={[0, 1.67, 0.01]} castShadow>
+                <sphereGeometry args={[0.17, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
+                <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.3} />
+            </mesh>
+        </group>
+    );
+}
+
 // -- Main Page --
 
 function BlueprintWorkspace() {
@@ -692,6 +763,7 @@ function BlueprintWorkspace() {
     const [isLoadingProjects, setIsLoadingProjects] = useState(false);
     const [timeOfDay, setTimeOfDay] = useState(14); // 2 PM default
     const [isWalkthrough, setIsWalkthrough] = useState(false);
+    const [showWalkthroughHuman, setShowWalkthroughHuman] = useState(false);
     const [isTopView, setIsTopView] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [activeTool, setActiveTool] = useState('select');
@@ -764,6 +836,10 @@ function BlueprintWorkspace() {
                 toast({ title: 'Scale', description: 'Select element corners to scale (Coming Soon in v2)' });
             } else if (e.key.toLowerCase() === 'p') {
                 setIsWalkthrough(prev => !prev);
+            } else if (e.key.toLowerCase() === 'h') {
+                if (isWalkthrough) {
+                    setShowWalkthroughHuman(prev => !prev);
+                }
             } else if (e.key.toLowerCase() === 'l') {
                 setTimeOfDay(prev => prev === 14 ? 22 : 14);
             } else if (e.key.toLowerCase() === 'c') {
@@ -772,7 +848,7 @@ function BlueprintWorkspace() {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleDeleteElement]);
+    }, [handleDeleteElement, isWalkthrough]);
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
@@ -1033,6 +1109,20 @@ function BlueprintWorkspace() {
                                 shortcut="P"
                             />
                             <ToolButton
+                                icon={<User className="h-4 w-4" />}
+                                label="Human"
+                                active={isWalkthrough && showWalkthroughHuman}
+                                onClick={() => {
+                                    if (!isWalkthrough) {
+                                        toast({ title: "Enable Walk Mode", description: "Turn on Walk Mode first to add a human character." });
+                                        return;
+                                    }
+                                    setShowWalkthroughHuman(prev => !prev);
+                                }}
+                                expanded={isLeftPanelExpanded}
+                                shortcut="H"
+                            />
+                            <ToolButton
                                 icon={timeOfDay === 14 ? <Lightbulb className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                                 label={timeOfDay === 14 ? "Day Mode" : "Night Mode"}
                                 active={timeOfDay === 22}
@@ -1263,6 +1353,22 @@ function BlueprintWorkspace() {
                             >
                                 <Footprints className="h-3 w-3 mr-1.5" /> Walk
                             </Button>
+                            <Button
+                                variant="ghost" size="sm"
+                                className={cn(
+                                    "h-7 text-[9px] font-black uppercase tracking-wider px-2 transition-all rounded-lg",
+                                    isWalkthrough && showWalkthroughHuman ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-white/5"
+                                )}
+                                onClick={() => {
+                                    if (!isWalkthrough) {
+                                        toast({ title: "Enable Walk Mode", description: "Turn on Walk Mode first to add a human character." });
+                                        return;
+                                    }
+                                    setShowWalkthroughHuman(prev => !prev);
+                                }}
+                            >
+                                <User className="h-3 w-3 mr-1.5" /> Human
+                            </Button>
                             <div className="w-[1px] h-3 bg-white/20 mx-1" />
                             <Button variant="ghost" size="sm" className="h-7 text-muted-foreground hover:bg-white/5 text-[9px] font-black uppercase tracking-wider px-2" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
                                 <FileCode className="h-3 w-3 mr-1.5" /> SVG
@@ -1364,6 +1470,7 @@ function BlueprintWorkspace() {
 
                             <Suspense fallback={null}>
                                 <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} />
+                                <WalkthroughHumanCharacter enabled={isWalkthrough && showWalkthroughHuman} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
