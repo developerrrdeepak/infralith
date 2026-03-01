@@ -57,6 +57,7 @@ export default function MeetRoomPage() {
     const localStream = useRef<MediaStream | null>(null);
     const screenStream = useRef<MediaStream | null>(null);
     const peersRef = useRef<Map<string, Peer>>(new Map());
+    const videoSendersRef = useRef<Map<string, RTCRtpSender>>(new Map());
     const sseRef = useRef<EventSource | null>(null);
 
     // ── Signal helpers ──
@@ -75,7 +76,10 @@ export default function MeetRoomPage() {
 
         // Send local tracks to remote peer
         localStream.current?.getTracks().forEach(track => {
-            pc.addTrack(track, localStream.current!);
+            const sender = pc.addTrack(track, localStream.current!);
+            if (track.kind === 'video') {
+                videoSendersRef.current.set(remotePeerId, sender);
+            }
         });
 
         // Send ICE candidates as they're found
@@ -186,6 +190,7 @@ export default function MeetRoomPage() {
             const peer = peersRef.current.get(data.peerId);
             peer?.pc.close();
             peersRef.current.delete(data.peerId);
+            videoSendersRef.current.delete(data.peerId);
             setPeers(prev => prev.filter(p => p.peerId !== data.peerId));
         }
     }, [createPeerConnection, peerId, signal]);
@@ -230,6 +235,8 @@ export default function MeetRoomPage() {
             localStream.current?.getTracks().forEach(t => t.stop());
             sseRef.current?.close();
             peersRef.current.forEach(p => p.pc.close());
+            peersRef.current.clear();
+            videoSendersRef.current.clear();
         };
     }, [handleSignal, peerId, roomId, router, status]);
 
@@ -302,6 +309,29 @@ export default function MeetRoomPage() {
     }, [isVideoOff]);
 
     // ── Screen share toggle ──
+    const renegotiatePeer = useCallback(async (remotePeerId: string, pc: RTCPeerConnection) => {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await signal(remotePeerId, 'offer', offer);
+    }, [signal]);
+
+    // Ensure every participant can publish video even when joining audio-only.
+    const setOutgoingVideoTrack = useCallback(async (track: MediaStreamTrack | null, sourceStream?: MediaStream | null) => {
+        for (const [remotePeerId, { pc }] of peersRef.current.entries()) {
+            const existingSender = videoSendersRef.current.get(remotePeerId);
+            if (existingSender) {
+                await existingSender.replaceTrack(track);
+                continue;
+            }
+            if (!track) continue;
+
+            const streamForTrack = sourceStream || screenStream.current || localStream.current || new MediaStream([track]);
+            const sender = pc.addTrack(track, streamForTrack);
+            videoSendersRef.current.set(remotePeerId, sender);
+            await renegotiatePeer(remotePeerId, pc);
+        }
+    }, [renegotiatePeer]);
+
     const toggleScreenShare = useCallback(async () => {
         if (isSharing) {
             // Stop screen share and restore camera
@@ -309,51 +339,42 @@ export default function MeetRoomPage() {
             screenStream.current = null;
             setIsSharing(false);
 
-            // Put camera video track back into all peer connections
-            const cameraTrack = localStream.current?.getVideoTracks()[0];
-            if (cameraTrack) {
-                peersRef.current.forEach(({ pc }) => {
-                    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-                    sender?.replaceTrack(cameraTrack);
-                });
-            }
+            const cameraTrack = localStream.current?.getVideoTracks()[0] || null;
+            await setOutgoingVideoTrack(cameraTrack, localStream.current);
+
             // Restore local preview
             if (myVideoRef.current && localStream.current) {
                 myVideoRef.current.srcObject = localStream.current;
             }
-        } else {
-            try {
-                const display = await (navigator.mediaDevices as any).getDisplayMedia({
-                    video: { cursor: 'always' },
-                    audio: false,
-                });
-                screenStream.current = display;
-                setIsSharing(true);
+            return;
+        }
 
-                const screenTrack = display.getVideoTracks()[0];
+        try {
+            const display = await (navigator.mediaDevices as any).getDisplayMedia({
+                video: { cursor: 'always' },
+                audio: false,
+            });
+            screenStream.current = display;
+            setIsSharing(true);
 
-                // Replace video track in every peer connection
-                peersRef.current.forEach(({ pc }) => {
-                    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-                    sender?.replaceTrack(screenTrack);
-                });
+            const screenTrack = display.getVideoTracks()[0];
+            await setOutgoingVideoTrack(screenTrack, display);
 
-                // Show screen in local preview
-                if (myVideoRef.current) {
-                    myVideoRef.current.srcObject = display;
-                }
+            // Show screen in local preview
+            if (myVideoRef.current) {
+                myVideoRef.current.srcObject = display;
+            }
 
-                // When user clicks the browser "Stop Sharing" button
-                screenTrack.addEventListener('ended', () => {
-                    toggleScreenShare();
-                });
-            } catch (err: any) {
-                if (err.name !== 'NotAllowedError') {
-                    toast({ title: 'Screen Share Failed', description: err.message, variant: 'destructive' });
-                }
+            // When user clicks the browser "Stop Sharing" button
+            screenTrack.addEventListener('ended', () => {
+                toggleScreenShare();
+            });
+        } catch (err: any) {
+            if (err.name !== 'NotAllowedError') {
+                toast({ title: 'Screen Share Failed', description: err.message, variant: 'destructive' });
             }
         }
-    }, [isSharing]);
+    }, [isSharing, setOutgoingVideoTrack]);
 
     // ── Fullscreen toggle ──
     const toggleFullscreen = useCallback(() => {
