@@ -2,7 +2,16 @@
  * WebRTC Signaling Server - Room-based, in-memory
  * Supports: join, offer, answer, ice-candidate, leave
  * Transport: Server-Sent Events (SSE) per client
+ *
+ * Hardening:
+ * - Requires authenticated session (NextAuth)
+ * - Validates room/peer identifiers
+ * - Caps room and peer counts to avoid unbounded memory growth
  */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 
 type SignalEvent = {
     type: string;
@@ -18,8 +27,20 @@ type Room = Map<string, ReadableStreamDefaultController>; // peerId -> SSE contr
 
 const rooms = new Map<string, Room>(); // roomId -> Room
 
-function getOrCreateRoom(roomId: string): Room {
-    if (!rooms.has(roomId)) rooms.set(roomId, new Map());
+const ROOM_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
+const PEER_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
+const MAX_ROOMS = Number(process.env.MEET_MAX_ROOMS || 200);
+const MAX_PEERS_PER_ROOM = Number(process.env.MEET_MAX_PEERS_PER_ROOM || 12);
+
+function validateIds(roomId: string, peerId: string) {
+    return ROOM_ID_REGEX.test(roomId) && PEER_ID_REGEX.test(peerId);
+}
+
+function getOrCreateRoom(roomId: string): Room | null {
+    if (!rooms.has(roomId)) {
+        if (rooms.size >= MAX_ROOMS) return null;
+        rooms.set(roomId, new Map());
+    }
     return rooms.get(roomId)!;
 }
 
@@ -35,22 +56,34 @@ function sendTo(room: Room, peerId: string, event: SignalEvent) {
 }
 
 function broadcast(room: Room, excludeId: string, event: SignalEvent) {
-    room.forEach((ctrl, peerId) => {
+    room.forEach((_ctrl, peerId) => {
         if (peerId !== excludeId) sendTo(room, peerId, event);
     });
 }
 
 // GET /api/meet/signal?roomId=xxx&peerId=yyy  → SSE stream
-export async function GET(req: Request) {
-    const { searchParams } = new URL(req.url);
-    const roomId = searchParams.get('roomId');
-    const peerId = searchParams.get('peerId');
+export async function GET(req: NextRequest) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-    if (!roomId || !peerId) {
-        return new Response('roomId and peerId are required', { status: 400 });
+    const { searchParams } = new URL(req.url);
+    const roomId = searchParams.get('roomId') || '';
+    const peerId = searchParams.get('peerId') || session.user.id; // bind to authenticated identity if not provided
+
+    if (!validateIds(roomId, peerId)) {
+        return NextResponse.json({ error: 'Invalid roomId or peerId format' }, { status: 400 });
     }
 
     const room = getOrCreateRoom(roomId);
+    if (!room) {
+        return NextResponse.json({ error: 'Room limit reached' }, { status: 429 });
+    }
+
+    if (!room.has(peerId) && room.size >= MAX_PEERS_PER_ROOM) {
+        return NextResponse.json({ error: 'Room is full' }, { status: 429 });
+    }
 
     const encoder = new TextEncoder();
     let controller: ReadableStreamDefaultController;
@@ -67,7 +100,9 @@ export async function GET(req: Request) {
             const joinedEvent: SignalEvent = { type: 'joined', peerId, peers: existingPeers };
             try {
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(joinedEvent)}\n\n`));
-            } catch { }
+            } catch {
+                /* ignore enqueue failures */
+            }
 
             // Tell existing peers about the new joiner
             broadcast(room, peerId, { type: 'peer-joined', peerId });
@@ -84,7 +119,7 @@ export async function GET(req: Request) {
         },
     });
 
-    return new Response(stream, {
+    return new NextResponse(stream, {
         headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
@@ -95,17 +130,28 @@ export async function GET(req: Request) {
 }
 
 // POST /api/meet/signal  → relay a signal to a specific peer
-export async function POST(req: Request) {
-    const body: SignalEvent = await req.json();
-    const { roomId, to, from, type, payload } = body;
+export async function POST(req: NextRequest) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-    if (!roomId || !to || !from || !type) {
-        return Response.json({ error: 'Missing fields' }, { status: 400 });
+    const body: SignalEvent = await req.json();
+    const { roomId = '', to = '', from = session.user.id, type, payload } = body;
+
+    if (!type || !validateIds(roomId, to) || !validateIds(roomId, from)) {
+        return NextResponse.json({ error: 'Missing or invalid fields' }, { status: 400 });
+    }
+
+    // Prevent spoofing another authenticated user id
+    if (from !== session.user.id) {
+        return NextResponse.json({ error: 'Forbidden: sender mismatch' }, { status: 403 });
     }
 
     const room = rooms.get(roomId);
-    if (!room) return Response.json({ error: 'Room not found' }, { status: 404 });
+    if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    if (!room.has(to)) return NextResponse.json({ error: 'Recipient not in room' }, { status: 404 });
 
-    sendTo(room, to, { type, from, payload });
-    return Response.json({ ok: true });
+    sendTo(room, to, { type, from, payload, roomId });
+    return NextResponse.json({ ok: true });
 }
