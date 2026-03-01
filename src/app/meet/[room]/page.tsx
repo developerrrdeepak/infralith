@@ -276,16 +276,16 @@ export default function MeetRoomPage() {
             if (ref.current && peer.stream) ref.current.srcObject = peer.stream;
         }, [peer.stream]);
         return (
-            <div className="relative bg-[#111827] rounded-xl overflow-hidden border border-white/5 flex items-center justify-center aspect-video">
+            <div className="relative bg-white rounded-2xl overflow-hidden shadow-md flex items-center justify-center aspect-video">
                 {peer.stream ? (
                     <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
                 ) : (
-                    <div className="flex flex-col items-center gap-2 opacity-50">
-                        <Users className="h-8 w-8 text-slate-500" />
-                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Connecting…</span>
+                    <div className="flex flex-col items-center gap-2 opacity-70">
+                        <Users className="h-8 w-8 text-gray-500" />
+                        <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Connecting...</span>
                     </div>
                 )}
-                <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-[10px] font-bold text-white">
+                <div className="absolute bottom-3 left-3 bg-white/80 backdrop-blur-sm px-3 py-1 rounded-full text-[10px] font-semibold text-gray-800 shadow-sm">
                     {peer.peerId.replace('peer-', 'Guest #')}
                 </div>
             </div>
@@ -382,17 +382,17 @@ export default function MeetRoomPage() {
 
     // ── Render ──
     return (
-        <div className="relative h-screen w-full bg-[#0a0f1c] flex flex-col overflow-hidden text-slate-100 font-sans">
+        <div className="relative h-screen w-full bg-[#f8f6f2] bg-[linear-gradient(to_right,rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(148,163,184,0.08)_1px,transparent_1px)] bg-[size:32px_32px] flex flex-col overflow-hidden text-gray-900 font-sans">
 
             {/* Top Bar */}
-            <div className="h-16 border-b border-white/5 bg-[#0d1425] flex items-center justify-between px-5 shrink-0 z-20">
-                <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-xl bg-blue-600/20 flex items-center justify-center border border-blue-500/20">
-                        <ShieldCheck className="h-5 w-5 text-blue-400" />
+            <div className="h-16 border-b border-gray-200 bg-white flex items-center justify-between px-6 shrink-0 z-20 shadow-sm">
+                <div className="flex items-center gap-4">
+                    <div className="h-9 w-9 rounded-xl bg-amber-100 flex items-center justify-center shadow-sm">
+                        <ShieldCheck className="h-5 w-5 text-amber-700" />
                     </div>
                     <div>
-                        <h1 className="text-sm font-bold tracking-tight">Secure Workspace Meet</h1>
-                        <p className="text-[10px] text-slate-400 font-mono uppercase">
+                        <h1 className="text-sm font-semibold tracking-tight text-gray-900">Secure Workspace Meet</h1>
+                        <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide">
                             Internal Room • {roomId?.replace('room-', '#')}
                         </p>
                     </div>
@@ -400,61 +400,61 @@ export default function MeetRoomPage() {
 
                 <div className="flex items-center gap-2">
                     {/* Participant count */}
-                    <span className="inline-flex items-center gap-1.5 bg-white/5 rounded-lg px-3 py-1.5 text-[11px] font-bold border border-white/10">
-                        <Users className="h-3.5 w-3.5 text-slate-400" />
+                    <span className="inline-flex items-center gap-1.5 bg-amber-100 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-amber-700 shadow-sm">
+                        <Users className="h-3.5 w-3.5 text-amber-700" />
                         {isJoinPending ? 'Awaiting approval' : `${peers.length + 1} in room`}
                     </span>
 
                     <span className={cn(
-                        "inline-flex items-center rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider border",
-                        isHost ? "bg-blue-500/10 text-blue-300 border-blue-400/30" : "bg-white/5 text-slate-300 border-white/10"
+                        "inline-flex items-center rounded-lg px-3 py-1 text-[10px] font-semibold uppercase tracking-wider shadow-sm",
+                        isHost ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"
                     )}>
                         {isHost ? 'Host' : 'Participant'}
                     </span>
 
                     {/* Live badge */}
-                    <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest border border-emerald-500/20">
-                        <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-pulse" /> Live
+                    <span className="inline-flex items-center gap-1.5 bg-green-100 text-green-700 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-widest">
+                        <span className="h-1.5 w-1.5 bg-green-600 rounded-full" /> Live
                     </span>
 
                     {/* Invite */}
                     <Button
-                        variant="outline"
+                        variant="default"
                         onClick={copyLink}
-                        className="h-8 border-white/10 bg-white/5 hover:bg-white/10 text-white text-xs font-bold gap-1.5"
+                        className="h-9 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg px-4 py-2 gap-1.5 shadow-sm"
                     >
-                        {copied ? <CheckCheck className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                        {copied ? <CheckCheck className="h-3.5 w-3.5 text-white" /> : <Copy className="h-3.5 w-3.5" />}
                         <span className="hidden sm:inline">{copied ? 'Copied!' : 'Invite'}</span>
                     </Button>
                 </div>
             </div>
 
             {isHost && joinRequests.length > 0 && (
-                <div className="absolute top-20 right-4 z-30 w-[320px] rounded-2xl border border-white/10 bg-[#0d1425]/95 backdrop-blur-xl p-3 shadow-2xl">
-                    <p className="mb-2 text-xs font-bold uppercase tracking-widest text-white/80">
+                <div className="absolute top-20 right-6 z-30 w-[320px] rounded-2xl bg-white border border-gray-200 p-4 shadow-lg">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-gray-700">
                         Join Requests ({joinRequests.length})
                     </p>
                     <div className="space-y-2 max-h-52 overflow-auto pr-1">
                         {joinRequests.map((request) => (
-                            <div key={request.peerId} className="flex items-center justify-between gap-2 rounded-lg bg-white/5 border border-white/10 px-2.5 py-2">
+                            <div key={request.peerId} className="flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-2 shadow-sm">
                                 <div className="min-w-0">
-                                    <p className="text-xs font-bold text-white truncate">{request.name || request.peerId}</p>
-                                    <p className="text-[10px] text-slate-400 truncate">{request.peerId}</p>
+                                    <p className="text-xs font-semibold text-gray-900 truncate">{request.name || request.peerId}</p>
+                                    <p className="text-[10px] text-gray-500 truncate">{request.peerId}</p>
                                 </div>
                                 <div className="flex items-center gap-1">
                                     <button
                                         onClick={() => handleJoinDecision(request.peerId, true)}
-                                        className="h-7 w-7 rounded-md bg-emerald-600 hover:bg-emerald-500 flex items-center justify-center"
+                                        className="h-7 w-7 rounded-md bg-amber-500 hover:bg-amber-600 flex items-center justify-center"
                                         title="Approve"
                                     >
                                         <Check className="h-4 w-4 text-white" />
                                     </button>
                                     <button
                                         onClick={() => handleJoinDecision(request.peerId, false)}
-                                        className="h-7 w-7 rounded-md bg-red-600 hover:bg-red-500 flex items-center justify-center"
+                                        className="h-7 w-7 rounded-md bg-gray-200 hover:bg-gray-300 flex items-center justify-center"
                                         title="Reject"
                                     >
-                                        <X className="h-4 w-4 text-white" />
+                                        <X className="h-4 w-4 text-gray-700" />
                                     </button>
                                 </div>
                             </div>
@@ -464,17 +464,17 @@ export default function MeetRoomPage() {
             )}
 
             {/* Video Grid */}
-            <div className="flex-1 relative bg-[#0a0f1c] flex items-center justify-center p-4 overflow-hidden">
+            <div className="flex-1 relative flex items-center justify-center p-6 overflow-hidden">
                 {joinRejected ? (
                     <div className="flex flex-col items-center gap-4 text-center max-w-md">
                         <div className="h-16 w-16 rounded-full bg-red-600/20 border border-red-500/30 flex items-center justify-center">
                             <X className="h-8 w-8 text-red-400" />
                         </div>
                         <div>
-                            <p className="text-lg font-bold text-white">Entry request rejected</p>
-                            <p className="text-sm text-slate-400 mt-1">{joinRejected}</p>
+                            <p className="text-xl font-semibold text-gray-800">Entry request rejected</p>
+                            <p className="text-sm text-gray-500 mt-2">{joinRejected}</p>
                         </div>
-                        <Button onClick={handleLeave} className="bg-red-600 hover:bg-red-700 text-white">
+                        <Button onClick={handleLeave} className="bg-red-500 hover:bg-red-600 text-white rounded-lg px-5 font-medium">
                             Leave Room
                         </Button>
                     </div>
@@ -487,10 +487,10 @@ export default function MeetRoomPage() {
                             </div>
                         </div>
                         <div>
-                            <p className="text-base font-bold text-white">Waiting for host approval</p>
-                            <p className="text-xs text-slate-400 mt-1">The host must accept your request before you enter this room.</p>
+                            <p className="text-xl font-semibold text-gray-800">Waiting for host approval</p>
+                            <p className="text-sm text-gray-500 mt-2">The host must accept your request before you enter this room.</p>
                         </div>
-                        <Button variant="outline" onClick={handleLeave} className="border-white/20 bg-white/5 text-white hover:bg-white/10">
+                        <Button variant="default" onClick={handleLeave} className="border border-gray-200 bg-white text-gray-700 hover:bg-gray-100 rounded-lg px-4">
                             Cancel Request
                         </Button>
                     </div>
@@ -503,13 +503,13 @@ export default function MeetRoomPage() {
                             </div>
                         </div>
                         <div>
-                            <p className="text-base font-bold text-white">Joining room...</p>
-                            <p className="text-xs text-slate-400 mt-1">Requesting camera & setting up connection</p>
+                            <p className="text-xl font-semibold text-gray-800">Joining room...</p>
+                            <p className="text-sm text-gray-500 mt-2">Requesting camera & setting up connection</p>
                         </div>
                     </div>
                 ) : (
                     <div className={cn(
-                        "w-full h-full max-w-7xl grid gap-3 auto-rows-fr",
+                        "w-full h-full max-w-6xl mx-auto rounded-2xl shadow-md bg-[#efe9df] p-4 grid gap-4 auto-rows-fr",
                         peers.length === 0 ? "grid-cols-1 max-w-3xl" :
                             peers.length === 1 ? "grid-cols-2" :
                                 peers.length <= 3 ? "grid-cols-2" :
@@ -517,11 +517,11 @@ export default function MeetRoomPage() {
                     )}>
 
                         {/* Local (my) video */}
-                        <div className="relative bg-[#111827] rounded-2xl overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center group">
+                        <div className="relative bg-white rounded-2xl overflow-hidden shadow-md flex items-center justify-center group">
                             {isVideoOff || cameraError ? (
                                 <div className="flex flex-col items-center gap-3 opacity-60">
-                                    <div className="h-20 w-20 rounded-full bg-slate-800 flex items-center justify-center border border-white/10 text-2xl font-black text-slate-300">ME</div>
-                                    {isMuted && <span className="text-xs text-slate-500 flex items-center gap-1"><MicOff className="h-3 w-3" /> Muted</span>}
+                                    <div className="h-20 w-20 rounded-full bg-gradient-to-br from-amber-200 to-amber-400 shadow-inner flex items-center justify-center text-2xl font-semibold text-amber-900">ME</div>
+                                    {isMuted && <span className="text-xs text-gray-500 flex items-center gap-1"><MicOff className="h-3 w-3" /> Muted</span>}
                                 </div>
                             ) : (
                                 <video
@@ -530,17 +530,17 @@ export default function MeetRoomPage() {
                                     className="w-full h-full object-cover [transform:scaleX(-1)]"
                                 />
                             )}
-                            <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
-                                <span className="text-xs font-bold">You ({isHost ? 'Host' : 'Participant'})</span>
+                            <div className="absolute bottom-3 left-3 bg-white/80 backdrop-blur-sm rounded-full px-3 py-1 text-xs text-gray-800 shadow-sm flex items-center gap-2">
+                                <span className="text-xs font-medium">You ({isHost ? 'Host' : 'Participant'})</span>
                                 {isMuted && <MicOff className="h-3 w-3 text-red-400" />}
                             </div>
 
                             {/* No peers - show invite prompt */}
                             {peers.length === 0 && (
                                 <div className="absolute inset-0 flex items-end justify-center pb-16 pointer-events-none">
-                                    <div className="bg-black/60 backdrop-blur-md px-6 py-3 rounded-2xl border border-white/10 text-center">
-                                        <p className="text-white font-bold text-sm">Waiting for others to join...</p>
-                                        <p className="text-slate-400 text-xs mt-1">Click <strong>Invite</strong> to share your room link</p>
+                                    <div className="bg-white/80 backdrop-blur-sm px-6 py-3 rounded-2xl shadow-sm text-center">
+                                        <p className="text-gray-800 text-sm font-semibold">Waiting for others to join...</p>
+                                        <p className="text-gray-500 text-xs mt-1">Click <strong>Invite</strong> to share your room link</p>
                                     </div>
                                 </div>
                             )}
@@ -556,7 +556,7 @@ export default function MeetRoomPage() {
             </div>
 
             {/* Control Bar */}
-            <div className="h-20 bg-[#0d1425] border-t border-white/5 flex items-center justify-center gap-3 shrink-0 z-20">
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-white rounded-xl shadow-lg border border-gray-200 px-6 py-3 flex items-center justify-center gap-4">
 
                 <CtrlBtn
                     active={!isMuted} danger={isMuted}
@@ -572,7 +572,7 @@ export default function MeetRoomPage() {
                     label={isVideoOff ? 'Start Video' : 'Stop Video'}
                 />
 
-                <div className="w-[1px] h-6 bg-white/10 mx-1 hidden sm:block" />
+                <div className="w-px h-6 bg-gray-200 mx-1 hidden sm:block" />
 
                 <CtrlBtn
                     active={!isSharing}
@@ -586,7 +586,7 @@ export default function MeetRoomPage() {
 
                 <Button
                     onClick={handleLeave}
-                    className="h-12 px-6 rounded-full bg-red-600 hover:bg-red-700 text-white border-none font-bold gap-2 ml-3 shadow-lg shadow-red-900/30"
+                    className="h-11 px-5 rounded-lg bg-red-500 hover:bg-red-600 text-white border-none font-medium gap-2 ml-3"
                 >
                     <PhoneOff className="h-5 w-5" />
                     <span className="hidden sm:inline">Leave</span>
@@ -603,20 +603,22 @@ function CtrlBtn({ active, danger, onClick, icon, label, className }: {
     icon: React.ReactNode; label?: string; className?: string;
 }) {
     return (
-        <div className={cn("flex flex-col items-center gap-1", className)}>
+        <div className={cn("flex flex-col items-center gap-1 text-gray-600", className)}>
             <button
                 onClick={onClick}
                 title={label}
                 className={cn(
-                    "h-12 w-12 rounded-full flex items-center justify-center shadow-lg transition-all border",
+                    "h-11 w-11 rounded-lg flex items-center justify-center transition-all duration-200",
                     danger
-                        ? "bg-red-600 hover:bg-red-700 border-red-700 text-white"
-                        : "bg-[#1f2937] hover:bg-[#374151] border-white/10 text-white"
+                        ? "bg-red-500 text-white hover:bg-red-600"
+                        : active
+                            ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                 )}
             >
                 {icon}
             </button>
-            {label && <span className="text-[9px] text-slate-500 font-medium hidden sm:block uppercase tracking-wider">{label}</span>}
+            {label && <span className="text-[9px] text-gray-500 font-medium hidden sm:block uppercase tracking-wider">{label}</span>}
         </div>
     );
 }
