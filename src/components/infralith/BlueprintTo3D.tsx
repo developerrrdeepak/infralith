@@ -676,73 +676,147 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
     return <PointerLockControls />;
 }
 
-function WalkthroughHumanCharacter({ enabled }: { enabled: boolean }) {
+function FreefireWalkthroughController({ bounds }: { bounds?: any }) {
     const { camera } = useThree();
-    const groupRef = useRef<THREE.Group>(null);
-    const smoothed = useRef(new THREE.Vector3());
-    const initialized = useRef(false);
+    const controlsRef = useRef<any>(null);
+    const playerRef = useRef<THREE.Group>(null);
+    const playerPosition = useRef(new THREE.Vector3(0, 0, 0));
+    const [moveForward, setMoveForward] = useState(false);
+    const [moveBackward, setMoveBackward] = useState(false);
+    const [moveLeft, setMoveLeft] = useState(false);
+    const [moveRight, setMoveRight] = useState(false);
+    const [isSprinting, setIsSprinting] = useState(false);
+
+    React.useEffect(() => {
+        if (bounds) {
+            const spawn = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, 0, bounds.maxZ + 1.2);
+            playerPosition.current.copy(spawn);
+            camera.position.set(spawn.x, 2.2, spawn.z + 4.2);
+            camera.lookAt(spawn.x, 1.2, spawn.z);
+        }
+    }, [bounds, camera]);
+
+    React.useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            switch (e.code) {
+                case 'KeyW': case 'ArrowUp': setMoveForward(true); break;
+                case 'KeyA': case 'ArrowLeft': setMoveLeft(true); break;
+                case 'KeyS': case 'ArrowDown': setMoveBackward(true); break;
+                case 'KeyD': case 'ArrowRight': setMoveRight(true); break;
+                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(true); break;
+            }
+        };
+        const handleKeyUp = (e: KeyboardEvent) => {
+            switch (e.code) {
+                case 'KeyW': case 'ArrowUp': setMoveForward(false); break;
+                case 'KeyA': case 'ArrowLeft': setMoveLeft(false); break;
+                case 'KeyS': case 'ArrowDown': setMoveBackward(false); break;
+                case 'KeyD': case 'ArrowRight': setMoveRight(false); break;
+                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(false); break;
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('keyup', handleKeyUp);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('keyup', handleKeyUp);
+        };
+    }, []);
 
     useFrame((state, delta) => {
-        if (!enabled || !groupRef.current) return;
+        const controls = controlsRef.current;
+        const player = playerRef.current;
+        if (!controls || !player) return;
 
-        const yaw = camera.rotation.y;
-        const targetOffset = new THREE.Vector3(1.1, -1.7, 2.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-        const targetPos = camera.position.clone().add(targetOffset);
+        const moveDir = new THREE.Vector3();
+        const cameraForward = new THREE.Vector3();
+        camera.getWorldDirection(cameraForward);
+        cameraForward.y = 0;
+        cameraForward.normalize();
+        const cameraRight = new THREE.Vector3().crossVectors(cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
 
-        if (!initialized.current) {
-            smoothed.current.copy(targetPos);
-            initialized.current = true;
-        } else {
-            smoothed.current.lerp(targetPos, Math.min(1, delta * 6));
+        if (moveForward) moveDir.add(cameraForward);
+        if (moveBackward) moveDir.sub(cameraForward);
+        if (moveRight) moveDir.add(cameraRight);
+        if (moveLeft) moveDir.sub(cameraRight);
+
+        if (moveDir.lengthSq() > 0) {
+            moveDir.normalize();
+            const speed = (isSprinting ? 6.2 : 3.9) * delta;
+            playerPosition.current.addScaledVector(moveDir, speed);
+
+            if (bounds) {
+                playerPosition.current.x = Math.max(bounds.minX - 12, Math.min(bounds.maxX + 12, playerPosition.current.x));
+                playerPosition.current.z = Math.max(bounds.minZ - 12, Math.min(bounds.maxZ + 12, playerPosition.current.z));
+            }
+
+            const targetYaw = Math.atan2(moveDir.x, moveDir.z);
+            player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, Math.min(1, delta * 10));
         }
 
-        const runningBob = Math.sin(state.clock.elapsedTime * 9) * 0.03;
-        groupRef.current.position.set(smoothed.current.x, smoothed.current.y + runningBob, smoothed.current.z);
-        groupRef.current.rotation.y = yaw + Math.PI;
+        const runningBob = moveDir.lengthSq() > 0 ? Math.sin(state.clock.elapsedTime * (isSprinting ? 14 : 9)) * 0.04 : 0;
+        player.position.set(playerPosition.current.x, runningBob, playerPosition.current.z);
+
+        const target = new THREE.Vector3(playerPosition.current.x, 1.15, playerPosition.current.z);
+        controls.target.lerp(target, Math.min(1, delta * 8));
+        controls.update();
     });
 
-    if (!enabled) return null;
-
     return (
-        <group ref={groupRef}>
-            {/* Legs */}
-            <mesh position={[-0.14, 0.38, 0]} castShadow>
-                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
-                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
-            </mesh>
-            <mesh position={[0.14, 0.38, 0]} castShadow>
-                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
-                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
-            </mesh>
+        <>
+            <OrbitControls
+                ref={controlsRef}
+                makeDefault
+                enablePan={false}
+                enableZoom={false}
+                enableDamping
+                dampingFactor={0.08}
+                minDistance={3.6}
+                maxDistance={6.8}
+                minPolarAngle={0.25}
+                maxPolarAngle={Math.PI / 2.15}
+            />
 
-            {/* Torso */}
-            <mesh position={[0, 1.02, 0]} castShadow>
-                <capsuleGeometry args={[0.23, 0.58, 8, 14]} />
-                <meshStandardMaterial color="#16a34a" roughness={0.6} metalness={0.05} />
-            </mesh>
+            <group ref={playerRef}>
+                {/* Legs */}
+                <mesh position={[-0.14, 0.38, 0]} castShadow>
+                    <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
+                    <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+                </mesh>
+                <mesh position={[0.14, 0.38, 0]} castShadow>
+                    <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
+                    <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+                </mesh>
 
-            {/* Arms */}
-            <mesh position={[-0.33, 1.02, 0]} castShadow>
-                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
-                <meshStandardMaterial color="#16a34a" roughness={0.65} />
-            </mesh>
-            <mesh position={[0.33, 1.02, 0]} castShadow>
-                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
-                <meshStandardMaterial color="#16a34a" roughness={0.65} />
-            </mesh>
+                {/* Torso */}
+                <mesh position={[0, 1.02, 0]} castShadow>
+                    <capsuleGeometry args={[0.23, 0.58, 8, 14]} />
+                    <meshStandardMaterial color="#16a34a" roughness={0.6} metalness={0.05} />
+                </mesh>
 
-            {/* Head */}
-            <mesh position={[0, 1.58, 0]} castShadow>
-                <sphereGeometry args={[0.16, 20, 20]} />
-                <meshStandardMaterial color="#f3c7a3" roughness={0.7} />
-            </mesh>
+                {/* Arms */}
+                <mesh position={[-0.33, 1.02, 0]} castShadow>
+                    <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
+                    <meshStandardMaterial color="#16a34a" roughness={0.65} />
+                </mesh>
+                <mesh position={[0.33, 1.02, 0]} castShadow>
+                    <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
+                    <meshStandardMaterial color="#16a34a" roughness={0.65} />
+                </mesh>
 
-            {/* Helmet */}
-            <mesh position={[0, 1.67, 0.01]} castShadow>
-                <sphereGeometry args={[0.17, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.3} />
-            </mesh>
-        </group>
+                {/* Head */}
+                <mesh position={[0, 1.58, 0]} castShadow>
+                    <sphereGeometry args={[0.16, 20, 20]} />
+                    <meshStandardMaterial color="#f3c7a3" roughness={0.7} />
+                </mesh>
+
+                {/* Helmet */}
+                <mesh position={[0, 1.67, 0.01]} castShadow>
+                    <sphereGeometry args={[0.17, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
+                    <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.3} />
+                </mesh>
+            </group>
+        </>
     );
 }
 
@@ -1407,15 +1481,26 @@ function BlueprintWorkspace() {
                             style={{ background: 'transparent' }}
                         >
                             {isWalkthrough ? (
-                                <WalkthroughController
-                                    bounds={elements ? {
-                                        minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                        maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                        minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                        maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                    } : undefined}
-                                    walls={elements?.walls}
-                                />
+                                showWalkthroughHuman ? (
+                                    <FreefireWalkthroughController
+                                        bounds={elements ? {
+                                            minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                            maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                            minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                            maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                        } : undefined}
+                                    />
+                                ) : (
+                                    <WalkthroughController
+                                        bounds={elements ? {
+                                            minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                            maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
+                                            minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                            maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
+                                        } : undefined}
+                                        walls={elements?.walls}
+                                    />
+                                )
                             ) : (
                                 <OrbitControls
                                     makeDefault
@@ -1470,7 +1555,6 @@ function BlueprintWorkspace() {
 
                             <Suspense fallback={null}>
                                 <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} />
-                                <WalkthroughHumanCharacter enabled={isWalkthrough && showWalkthroughHuman} />
                                 <Environment preset="apartment" />
                                 <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
@@ -1504,7 +1588,11 @@ function BlueprintWorkspace() {
                                 <div className="absolute top-8 left-1/2 -translate-x-1/2 pointer-events-none z-[100]">
                                     <div className="bg-black/40 backdrop-blur-sm border border-white/10 text-white px-5 py-2.5 rounded-xl shadow-2xl flex flex-col items-center">
                                         <span className="text-[11px] font-black tracking-widest uppercase mb-1">Interactive Walkthrough Enabled</span>
-                                        <span className="text-[9px] font-bold text-white/60 tracking-wider">CLICK TO LOOK AROUND • WASD TO MOVE • SHIFT TO SPRINT • ESC TO UNLOCK MOUSE</span>
+                                        <span className="text-[9px] font-bold text-white/60 tracking-wider">
+                                            {showWalkthroughHuman
+                                                ? 'FREEFIRE MODE • DRAG TO ROTATE CAMERA • WASD MOVE • SHIFT SPRINT'
+                                                : 'CLICK TO LOOK AROUND • WASD TO MOVE • SHIFT TO SPRINT • ESC TO UNLOCK MOUSE'}
+                                        </span>
                                     </div>
                                 </div>
                             </>
