@@ -17,7 +17,6 @@ import path from 'path';
 import DxfParser from 'dxf-parser';
 import { promises as fs } from 'fs';
 import os from 'os';
-import openCvJs from '@techstark/opencv-js';
 
 const AIAssetSchema = z.object({
   name: z.string(),
@@ -135,92 +134,6 @@ const parseDimensionMeters = (text: string): number | null => {
   if (unit.includes('ft') || unit.includes('feet') || unit.includes("'")) return value * 0.3048;
   if (unit.includes('"') || unit.includes('in') || unit.includes('inch')) return value * 0.0254;
   return value; // treat as meters when no explicit unit
-};
-
-const normalizeDimensionUnitToMeters = (value: number, unitRaw?: string): number => {
-  const unit = String(unitRaw || '').toLowerCase();
-  if (unit.includes('mm')) return value / 1000;
-  if (unit.includes('cm')) return value / 100;
-  if (unit.includes('ft') || unit.includes('feet') || unit.includes("'")) return value * 0.3048;
-  if (unit.includes('"') || unit.includes('in') || unit.includes('inch')) return value * 0.0254;
-  return value;
-};
-
-const parseFootprintPairFromText = (text: string): { width: number; depth: number; sourceText: string } | null => {
-  const normalized = text.replace(/\u00D7/g, 'x').trim();
-  const pairMatch = normalized.match(
-    /(\d+(\.\d+)?)\s*(mm|cm|m|ft|feet|in|inch|\"|')?\s*x\s*(\d+(\.\d+)?)\s*(mm|cm|m|ft|feet|in|inch|\"|')?/i
-  );
-  if (!pairMatch) return null;
-
-  const a = Number(pairMatch[1]);
-  const unitA = pairMatch[3] || '';
-  const b = Number(pairMatch[4]);
-  const unitB = pairMatch[6] || unitA;
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-
-  const width = normalizeDimensionUnitToMeters(a, unitA);
-  const depth = normalizeDimensionUnitToMeters(b, unitB);
-  if (width <= 0 || depth <= 0) return null;
-
-  return {
-    width: Number(width.toFixed(3)),
-    depth: Number(depth.toFixed(3)),
-    sourceText: normalized,
-  };
-};
-
-const inferFootprintFromLayoutHints = (layoutHints: BlueprintLayoutHints | null): { width: number; depth: number; sourceText: string } | null => {
-  if (!layoutHints?.dimensionAnchors?.length) return null;
-  let best: { width: number; depth: number; sourceText: string } | null = null;
-  for (const anchor of layoutHints.dimensionAnchors) {
-    const text = String(anchor?.text || '').trim();
-    if (!text) continue;
-    const parsed = parseFootprintPairFromText(text);
-    if (!parsed) continue;
-    if (!best || parsed.width * parsed.depth > best.width * best.depth) {
-      best = parsed;
-    }
-  }
-  return best;
-};
-
-const getGeometryQualitySummary = (payload: GeometricReconstruction) => {
-  const walls = Array.isArray(payload?.walls) ? payload.walls : [];
-  const lengths = walls.map((wall) => {
-    const sx = Number(wall?.start?.[0]);
-    const sy = Number(wall?.start?.[1]);
-    const ex = Number(wall?.end?.[0]);
-    const ey = Number(wall?.end?.[1]);
-    if (![sx, sy, ex, ey].every((v) => Number.isFinite(v))) return 0;
-    return Math.hypot(ex - sx, ey - sy);
-  });
-  const nonZeroWalls = lengths.filter((value) => value >= 0.2).length;
-  const uniquePoints = new Set<string>();
-  for (const wall of walls) {
-    if (Array.isArray(wall?.start) && wall.start.length >= 2) {
-      uniquePoints.add(`${Number(wall.start[0]).toFixed(3)},${Number(wall.start[1]).toFixed(3)}`);
-    }
-    if (Array.isArray(wall?.end) && wall.end.length >= 2) {
-      uniquePoints.add(`${Number(wall.end[0]).toFixed(3)},${Number(wall.end[1]).toFixed(3)}`);
-    }
-  }
-
-  return {
-    wallCount: walls.length,
-    nonZeroWalls,
-    uniquePointCount: uniquePoints.size,
-    maxLength: lengths.length ? Number(Math.max(...lengths).toFixed(3)) : 0,
-  };
-};
-
-const shouldRetryForWeakGeometry = (payload: GeometricReconstruction): boolean => {
-  const q = getGeometryQualitySummary(payload);
-  if (q.wallCount === 0) return true;
-  if (q.nonZeroWalls < Math.min(4, q.wallCount)) return true;
-  if (q.uniquePointCount < 6) return true;
-  if (q.maxLength < 0.75) return true;
-  return false;
 };
 
 const polygonArea = (points: [number, number][]) => {
@@ -508,7 +421,10 @@ function contourMatToPoints(mat: any): Array<[number, number]> {
 
 async function loadOpenCvModule(): Promise<any> {
   if (!openCvModulePromise) {
-    openCvModulePromise = Promise.resolve(openCvJs);
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (
+      specifier: string
+    ) => Promise<any>;
+    openCvModulePromise = dynamicImport('@techstark/opencv-js');
   }
 
   const mod = await openCvModulePromise;
@@ -1954,8 +1870,6 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     console.warn(`[Infralith Vision Engine] Layout hint extraction failed: ${e?.message || e}.`);
   }
 
-  const inferredFootprint = inferFootprintFromLayoutHints(layoutHints);
-
   // STAGE 2: Send image and vector hints to the AI Vision model
   const prompt = `
     You are the Infralith Engineering Engine—a world - class architectural auditor and spatial synthesis AI powered by advanced computer vision.
@@ -1976,9 +1890,6 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     I also extracted OCR line polygons and dimension anchors from local/Azure layout analyzers. Use these as an additional constraint for wall tracing and scale calibration.
     LAYOUT HINTS:
     ${layoutHints ? JSON.stringify(layoutHints, null, 2) : "Not available."}
-
-    INFERRED BUILDING FOOTPRINT HINT:
-    ${inferredFootprint ? `${inferredFootprint.width}m x ${inferredFootprint.depth}m (from OCR text: "${inferredFootprint.sourceText}")` : "Not available."}
 
     CORE VISION ANALYSIS PROTOCOL:
 1. EXACT VISUAL WALL TRACING: Scan the image systematically.Identify every dark continuous line segment as a wall.
@@ -2024,8 +1935,6 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     - Room polygons MUST be Counter - Clockwise(CCW) ordered to prevent "bow-tie" rendering in Three.js.
     - Identify the outermost building boundary and ALWAYS map it into roof.polygon.
     - If roof style is unclear, set roof.type="flat" and still return roof.polygon from that outer boundary.
-    - Every wall MUST include real numeric start/end coordinates; do not use placeholders like [0,0] repeatedly.
-    - Output geometry directly, not summaries or counts-only data.
 
     THINKING PROCESS(reason step - by - step before generating output):
 - Step 1: Identify the scale factor from dimension labels or standard ratios.
@@ -2055,26 +1964,6 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     console.log("[Infralith Vision Engine] Step 2/9 sending blueprint + hybrid hints to Azure Vision.");
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
     console.log("[Infralith Vision Engine] Step 3/9 AI reconstruction received.", summarizeReconstruction(result));
-    console.log("[Infralith Vision Engine] Geometry quality:", getGeometryQualitySummary(result));
-
-    if (shouldRetryForWeakGeometry(result)) {
-      const geometryRepairPrompt = `${prompt}
-
-CRITICAL GEOMETRY REPAIR (MANDATORY):
-The previous output had weak or degenerate geometry.
-
-HARD OUTPUT RULES FOR THIS RETRY:
-- Return explicit coordinates for every wall as unique [x,y] start/end points in meters.
-- Do not repeat [0,0] coordinates across many walls.
-- Ensure wall segments form a coherent floor-plan footprint with connected endpoints.
-- Include realistic wall lengths and room polygons derived from the actual blueprint.
-${inferredFootprint ? `- Fit the overall exterior envelope approximately to ${inferredFootprint.width}m x ${inferredFootprint.depth}m.` : ''}
-`;
-      console.warn("[Infralith Vision Engine] Step 3.5/9 weak geometry detected. Retrying for coordinate-complete output.");
-      result = await generateAzureVisionObject<GeometricReconstruction>(geometryRepairPrompt, imageUrl);
-      console.log("[Infralith Vision Engine] Geometry-retry summary:", summarizeReconstruction(result));
-      console.log("[Infralith Vision Engine] Geometry quality after retry:", getGeometryQualitySummary(result));
-    }
 
     if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints)) {
       const strictPrompt = `${prompt}
@@ -2094,7 +1983,7 @@ HARD CONSTRAINTS FOR THIS RETRY:
       console.log("[Infralith Vision Engine] Retry reconstruction summary:", summarizeReconstruction(result));
     }
 
-    if ((shouldRetryForUnderfit(result, vectorizationHints, layoutHints) || shouldRetryForWeakGeometry(result)) && vectorizationHints) {
+    if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints) && vectorizationHints) {
       const vectorFallback = buildVectorFallbackReconstruction(vectorizationHints, layoutHints);
       if (vectorFallback) {
         console.warn("[Infralith Vision Engine] Step 5/9 applying deterministic vector fallback reconstruction.");
