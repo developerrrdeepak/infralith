@@ -247,17 +247,54 @@ const buildVectorFallbackReconstruction = (vectorHints: any, layoutHints: Bluepr
  * Executes the Python-based OpenCV script to perform initial vectorization.
  * This pre-processes the image to find structural polygons before sending to the AI.
  */
+async function resolvePythonBinary(): Promise<string | null> {
+  const configured = process.env.INFRALITH_PYTHON_BIN?.trim();
+  if (configured) {
+    if (await commandExists(configured)) {
+      return configured;
+    }
+    console.warn(`[Vectorization] Configured INFRALITH_PYTHON_BIN was not found: ${configured}`);
+  }
+
+  const candidates = ['python3', 'python'];
+  for (const candidate of candidates) {
+    if (await commandExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 async function runVectorizationScript(base64Image: string): Promise<any> {
+  const pythonBinary = await resolvePythonBinary();
+  if (!pythonBinary) {
+    console.warn("[Vectorization] Python executable not found in path. Falling back to AI Vision only.");
+    throw new Error("Python not installed or in PATH.");
+  }
+
   return new Promise((resolve, reject) => {
-    // Correctly locate the script within the Next.js server environment
     const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
     const startedAt = Date.now();
-    console.log(`[Vectorization] Step 1/4 launching Python script: ${scriptPath}`);
+    console.log(`[Vectorization] Step 1/4 launching Python script: ${scriptPath} (bin=${pythonBinary})`);
     console.log(`[Vectorization] Input image payload chars=${base64Image.length}`);
-    const pythonProcess = spawn('python', [scriptPath]);
+    const pythonProcess = spawn(pythonBinary, [scriptPath]);
 
     let output = '';
     let errorOutput = '';
+    let settled = false;
+
+    const rejectOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    const resolveOnce = (value: any) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
 
     pythonProcess.stdout.on('data', (data) => {
       output += data.toString();
@@ -268,36 +305,42 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
     });
 
     pythonProcess.on('close', (code) => {
+      if (settled) return;
       if (code !== 0) {
-        console.error(`[Vectorization] Python script error: ${errorOutput} `);
-        reject(new Error(`Python script exited with code ${code}: ${errorOutput} `));
-      } else {
-        try {
-          const result = JSON.parse(output);
-          if (result.error) {
-            reject(new Error(result.error));
-          }
-          const durationMs = Date.now() - startedAt;
-          console.log(`[Vectorization] Step 4/4 success in ${durationMs}ms. line_count=${result.line_count || 0}, segment_count=${result.segment_count || 0}`);
-          resolve(result);
-        } catch (e) {
-          console.error("[Vectorization] Failed to parse Python script output:", output);
-          reject(new Error('Failed to parse vectorization output.'));
+        const details = errorOutput.trim() || `exit code ${code}`;
+        console.error(`[Vectorization] Python script error: ${details}`);
+        rejectOnce(new Error(`Python script exited with code ${code}: ${details}`));
+        return;
+      }
+
+      try {
+        const result = JSON.parse(output);
+        if (result.error) {
+          rejectOnce(new Error(result.error));
+          return;
         }
+        const durationMs = Date.now() - startedAt;
+        console.log(
+          `[Vectorization] Step 4/4 success in ${durationMs}ms. line_count=${result.line_count || 0}, segment_count=${result.segment_count || 0}`
+        );
+        resolveOnce(result);
+      } catch {
+        console.error("[Vectorization] Failed to parse Python script output:", output);
+        rejectOnce(new Error('Failed to parse vectorization output.'));
       }
     });
 
     pythonProcess.on('error', (err: any) => {
+      if (settled) return;
       if (err.code === 'ENOENT') {
         console.warn("[Vectorization] Python executable not found in path. Falling back to AI Vision only.");
-        reject(new Error("Python not installed or in PATH."));
+        rejectOnce(new Error("Python not installed or in PATH."));
       } else {
         console.error("[Vectorization] Python spawn error:", err);
-        reject(err);
+        rejectOnce(err instanceof Error ? err : new Error(String(err)));
       }
     });
 
-    // Pipe the large base64 string to the Python script's standard input
     console.log("[Vectorization] Step 2/4 streaming image payload to Python process.");
     pythonProcess.stdin.write(base64Image);
     pythonProcess.stdin.end();
@@ -306,6 +349,8 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
 }
 
 type Segment2D = { start: [number, number]; end: [number, number] };
+type Affine2D = { a: number; b: number; c: number; d: number; e: number; f: number };
+type FlattenedDxfEntity = { entity: any; transform: Affine2D };
 
 const DXF_UNIT_TO_METERS: Record<number, number> = {
   1: 0.0254, // inches
@@ -315,10 +360,14 @@ const DXF_UNIT_TO_METERS: Record<number, number> = {
   6: 1, // meters
 };
 
+const IDENTITY_AFFINE: Affine2D = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
 const toFiniteNumber = (value: unknown): number | null => {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
+
+const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
 
 const toDxfPoint = (value: any): [number, number] | null => {
   const x = toFiniteNumber(value?.x);
@@ -326,6 +375,50 @@ const toDxfPoint = (value: any): [number, number] | null => {
   if (x == null || y == null) return null;
   return [x, y];
 };
+
+const applyAffineToPoint = (point: [number, number], t: Affine2D): [number, number] => {
+  const [x, y] = point;
+  return [
+    Number((t.a * x + t.c * y + t.e).toFixed(6)),
+    Number((t.b * x + t.d * y + t.f).toFixed(6)),
+  ];
+};
+
+const composeAffine = (parent: Affine2D, child: Affine2D): Affine2D => ({
+  a: parent.a * child.a + parent.c * child.b,
+  b: parent.b * child.a + parent.d * child.b,
+  c: parent.a * child.c + parent.c * child.d,
+  d: parent.b * child.c + parent.d * child.d,
+  e: parent.a * child.e + parent.c * child.f + parent.e,
+  f: parent.b * child.e + parent.d * child.f + parent.f,
+});
+
+const getInsertTransform = (entity: any): Affine2D => {
+  const position = toDxfPoint(entity?.position) ?? [0, 0];
+  const scaleX = toFiniteNumber(entity?.xScale) ?? toFiniteNumber(entity?.scaleX) ?? 1;
+  const scaleY = toFiniteNumber(entity?.yScale) ?? toFiniteNumber(entity?.scaleY) ?? 1;
+  const rotationDegrees = toFiniteNumber(entity?.rotation) ?? 0;
+  const rotation = toRadians(rotationDegrees);
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+
+  return {
+    a: cos * scaleX,
+    b: sin * scaleX,
+    c: -sin * scaleY,
+    d: cos * scaleY,
+    e: position[0],
+    f: position[1],
+  };
+};
+
+const transformSegment = (segment: Segment2D, transform: Affine2D): Segment2D => ({
+  start: applyAffineToPoint(segment.start, transform),
+  end: applyAffineToPoint(segment.end, transform),
+});
+
+const transformPolygon = (points: [number, number][], transform: Affine2D): [number, number][] =>
+  points.map((point) => applyAffineToPoint(point, transform));
 
 const hasClosedPolylineFlag = (entity: any): boolean => {
   if (entity?.shape === true || entity?.closed === true) return true;
@@ -341,6 +434,21 @@ const getEntityVertices = (entity: any): [number, number][] => {
     .filter((point: [number, number] | null): point is [number, number] => point != null);
 };
 
+const buildSegmentsFromPoints = (points: [number, number][], closeLoop = false): Segment2D[] => {
+  if (points.length < 2) return [];
+
+  const segments: Segment2D[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    segments.push({ start: points[i], end: points[i + 1] });
+  }
+
+  if (closeLoop && points.length >= 3) {
+    segments.push({ start: points[points.length - 1], end: points[0] });
+  }
+
+  return segments;
+};
+
 const getEntitySegments = (entity: any): Segment2D[] => {
   const type = String(entity?.type || '').toUpperCase();
 
@@ -351,21 +459,108 @@ const getEntitySegments = (entity: any): Segment2D[] => {
     return [{ start, end }];
   }
 
-  if (type !== 'LWPOLYLINE' && type !== 'POLYLINE') {
-    return [];
+  if (type === 'LWPOLYLINE' || type === 'POLYLINE') {
+    const vertices = getEntityVertices(entity);
+    return buildSegmentsFromPoints(vertices, hasClosedPolylineFlag(entity));
+  }
+
+  if (type === 'ARC') {
+    const center = toDxfPoint(entity?.center);
+    const radius = toFiniteNumber(entity?.radius);
+    const startAngle = toFiniteNumber(entity?.startAngle);
+    const endAngle = toFiniteNumber(entity?.endAngle);
+    if (!center || radius == null || radius <= 0 || startAngle == null || endAngle == null) return [];
+
+    let arcStart = startAngle;
+    let arcEnd = endAngle;
+    while (arcEnd <= arcStart) arcEnd += 360;
+    const span = Math.min(360, Math.max(1, arcEnd - arcStart));
+    const samples = Math.max(8, Math.min(96, Math.ceil(span / 7.5)));
+    const points: [number, number][] = [];
+    for (let i = 0; i <= samples; i++) {
+      const angle = toRadians(arcStart + (span * i) / samples);
+      points.push([
+        center[0] + radius * Math.cos(angle),
+        center[1] + radius * Math.sin(angle),
+      ]);
+    }
+    return buildSegmentsFromPoints(points, false);
+  }
+
+  if (type === 'CIRCLE') {
+    const center = toDxfPoint(entity?.center);
+    const radius = toFiniteNumber(entity?.radius);
+    if (!center || radius == null || radius <= 0) return [];
+    const samples = 48;
+    const points: [number, number][] = [];
+    for (let i = 0; i < samples; i++) {
+      const angle = (2 * Math.PI * i) / samples;
+      points.push([
+        center[0] + radius * Math.cos(angle),
+        center[1] + radius * Math.sin(angle),
+      ]);
+    }
+    return buildSegmentsFromPoints(points, true);
+  }
+
+  if (type === 'ELLIPSE') {
+    const center = toDxfPoint(entity?.center);
+    const majorAxis = toDxfPoint(entity?.majorAxisEndPoint);
+    const axisRatio = toFiniteNumber(entity?.axisRatio);
+    if (!center || !majorAxis || axisRatio == null || axisRatio <= 0) return [];
+
+    const majorRadius = Math.hypot(majorAxis[0], majorAxis[1]);
+    if (majorRadius <= 1e-6) return [];
+    const minorRadius = majorRadius * axisRatio;
+    const majorAngle = Math.atan2(majorAxis[1], majorAxis[0]);
+    const startParam = toFiniteNumber(entity?.startAngle) ?? 0;
+    const rawEndParam = toFiniteNumber(entity?.endAngle) ?? Math.PI * 2;
+    let span = rawEndParam - startParam;
+    while (span <= 0) span += Math.PI * 2;
+    span = Math.min(Math.PI * 2, span);
+
+    const samples = Math.max(12, Math.min(120, Math.ceil(span / (Math.PI / 18))));
+    const points: [number, number][] = [];
+    for (let i = 0; i <= samples; i++) {
+      const t = startParam + (span * i) / samples;
+      const localX = majorRadius * Math.cos(t);
+      const localY = minorRadius * Math.sin(t);
+      const rotatedX = localX * Math.cos(majorAngle) - localY * Math.sin(majorAngle);
+      const rotatedY = localX * Math.sin(majorAngle) + localY * Math.cos(majorAngle);
+      points.push([center[0] + rotatedX, center[1] + rotatedY]);
+    }
+
+    const closeLoop = span >= (Math.PI * 2 - 1e-3);
+    return buildSegmentsFromPoints(points, closeLoop);
+  }
+
+  if (type === 'SPLINE') {
+    const sourcePoints = Array.isArray(entity?.fitPoints) && entity.fitPoints.length >= 2
+      ? entity.fitPoints
+      : Array.isArray(entity?.controlPoints)
+        ? entity.controlPoints
+        : [];
+    const points = sourcePoints
+      .map(toDxfPoint)
+      .filter((point: [number, number] | null): point is [number, number] => point != null);
+    return buildSegmentsFromPoints(points, false);
   }
 
   const vertices = getEntityVertices(entity);
-  if (vertices.length < 2) return [];
+  if (vertices.length >= 2) {
+    return buildSegmentsFromPoints(vertices, hasClosedPolylineFlag(entity));
+  }
 
-  const segments: Segment2D[] = [];
-  for (let i = 0; i < vertices.length - 1; i++) {
-    segments.push({ start: vertices[i], end: vertices[i + 1] });
+  const pointList = Array.isArray(entity?.points)
+    ? entity.points
+      .map(toDxfPoint)
+      .filter((point: [number, number] | null): point is [number, number] => point != null)
+    : [];
+  if (pointList.length >= 2) {
+    return buildSegmentsFromPoints(pointList, false);
   }
-  if (hasClosedPolylineFlag(entity) && vertices.length >= 3) {
-    segments.push({ start: vertices[vertices.length - 1], end: vertices[0] });
-  }
-  return segments;
+
+  return [];
 };
 
 const dedupeSegments = (segments: Segment2D[]): Segment2D[] => {
@@ -417,6 +612,34 @@ const getClosedPolyline = (entity: any): [number, number][] | null => {
   return vertices;
 };
 
+const flattenDxfEntities = (parsed: any): FlattenedDxfEntity[] => {
+  const rootEntities = Array.isArray(parsed?.entities) ? parsed.entities : [];
+  const blocks = parsed?.blocks ?? {};
+  const flattened: FlattenedDxfEntity[] = [];
+
+  const visit = (entities: any[], transform: Affine2D, depth: number) => {
+    if (!Array.isArray(entities)) return;
+    for (const entity of entities) {
+      const type = String(entity?.type || '').toUpperCase();
+      if (type === 'INSERT' && depth < 8) {
+        const blockName = String(entity?.name || '');
+        const blockEntities = Array.isArray(blocks?.[blockName]?.entities)
+          ? blocks[blockName].entities
+          : null;
+        if (blockEntities && blockEntities.length > 0) {
+          const insertTransform = composeAffine(transform, getInsertTransform(entity));
+          visit(blockEntities, insertTransform, depth + 1);
+          continue;
+        }
+      }
+      flattened.push({ entity, transform });
+    }
+  };
+
+  visit(rootEntities, IDENTITY_AFFINE, 0);
+  return flattened;
+};
+
 export async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
   const startedAt = Date.now();
   if (!dxfContent || !dxfContent.trim()) {
@@ -431,14 +654,21 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
     throw new Error('Invalid DXF file. Failed to parse CAD geometry.');
   }
 
-  const entities = Array.isArray(parsed?.entities) ? parsed.entities : [];
-  if (entities.length === 0) {
+  const flattenedEntities = flattenDxfEntities(parsed);
+  if (flattenedEntities.length === 0) {
     throw new Error('DXF has no entities to process.');
   }
 
-  const allSegments = dedupeSegments(entities.flatMap(getEntitySegments));
+  const allSegments = dedupeSegments(
+    flattenedEntities.flatMap(({ entity, transform }) =>
+      getEntitySegments(entity).map((segment) => transformSegment(segment, transform))
+    )
+  );
   if (allSegments.length === 0) {
-    throw new Error('DXF parsing completed but no LINE/POLYLINE wall geometry was found.');
+    const types = [...new Set(flattenedEntities.map(({ entity }) => String(entity?.type || 'UNKNOWN').toUpperCase()))];
+    throw new Error(
+      `DXF parsing completed but no usable wall geometry was found. Entity types present: ${types.slice(0, 16).join(', ') || 'none'}.`
+    );
   }
 
   const allPoints = allSegments.flatMap((segment) => [segment.start, segment.end]);
@@ -454,9 +684,16 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
   const { scale: metersPerUnit, inferred: isInferredScale } = getDxfScaleMeters(parsed, rawWidth, rawHeight);
   const boundaryTolerance = Math.max(rawWidth, rawHeight) * 0.03;
 
+  const maxWallCount = 1800;
+  const sortedSegments = [...allSegments].sort((a, b) => {
+    const al = Math.hypot(a.end[0] - a.start[0], a.end[1] - a.start[1]);
+    const bl = Math.hypot(b.end[0] - b.start[0], b.end[1] - b.start[1]);
+    return bl - al;
+  });
+
   const walls: GeometricReconstruction['walls'] = [];
   let wallCounter = 1;
-  for (const segment of allSegments) {
+  for (const segment of sortedSegments) {
     const rawLength = Math.hypot(segment.end[0] - segment.start[0], segment.end[1] - segment.start[1]);
     const metricLength = rawLength * metersPerUnit;
     if (metricLength < 0.35) continue;
@@ -481,6 +718,7 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
       is_exterior: nearBoundary,
       floor_level: 0,
     });
+    if (walls.length >= maxWallCount) break;
   }
 
   if (walls.length === 0) {
@@ -488,8 +726,11 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
   }
 
   const rooms: GeometricReconstruction['rooms'] = [];
-  const closedPolylines = entities
-    .map(getClosedPolyline)
+  const closedPolylines = flattenedEntities
+    .map(({ entity, transform }) => {
+      const polygon = getClosedPolyline(entity);
+      return polygon ? transformPolygon(polygon, transform) : null;
+    })
     .filter((polygon: [number, number][] | null): polygon is [number, number][] => polygon != null);
 
   let roomCounter = 1;
@@ -539,6 +780,14 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
           type: 'code' as const,
           severity: 'low' as const,
           description: 'DXF units were unspecified. Geometry was normalized to a 25m envelope; verify dimensions.',
+          location: [0, 0] as [number, number],
+        }]
+        : []),
+      ...(allSegments.length > maxWallCount
+        ? [{
+          type: 'code' as const,
+          severity: 'low' as const,
+          description: `DXF contained ${allSegments.length} segments. Model was simplified to the longest ${maxWallCount} wall candidates.`,
           location: [0, 0] as [number, number],
         }]
         : []),
