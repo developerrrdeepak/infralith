@@ -12,6 +12,7 @@ const PLACEHOLDER_MARKERS = [
 ];
 
 let client: CosmosClient | null = null;
+let cosmosConfigCache: CosmosConfig | null = null;
 
 export interface BIMDocument {
     id: string; // The partition key, usually blueprint/project ID
@@ -77,11 +78,17 @@ function assertCloudCosmosConfig(config: CosmosConfig): void {
     }
 }
 
-const cosmosConfig = resolveCosmosConfig();
-assertCloudCosmosConfig(cosmosConfig);
+function getValidatedCosmosConfig(): CosmosConfig {
+    if (cosmosConfigCache) return cosmosConfigCache;
+    const config = resolveCosmosConfig();
+    assertCloudCosmosConfig(config);
+    cosmosConfigCache = config;
+    return config;
+}
 
 function getCosmosClient(): CosmosClient {
     if (client) return client;
+    const cosmosConfig = getValidatedCosmosConfig();
 
     if (cosmosConfig.mode === "connectionString") {
         client = new CosmosClient(cosmosConfig.connectionString);
