@@ -38,6 +38,15 @@ This repository has been cleaned and reorganized for maintainability, with expli
 - DevOps agent (optional): `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`
 - Storage and backend: `AZURE_COSMOS_CONNECTION_STRING`, `USER_LOOKUP_URL`, `GNEWS_API_KEY`
 - CAD conversion (optional for DWG): `INFRALITH_DWG_TO_DXF_COMMAND`
+- Vectorization (optional): `INFRALITH_VECTOR_ENGINE` (`auto|opencvjs|python`), `INFRALITH_PYTHON_BIN`
+
+## Optional Native-Free Vectorization
+
+- Install OpenCV.js WASM runtime for Node pre-processing:
+  ```bash
+  npm install @techstark/opencv-js
+  ```
+- With `INFRALITH_VECTOR_ENGINE=auto` (default), the server will try OpenCV.js first, then Python, then vision-only fallback.
 
 ## Repository Layout
 

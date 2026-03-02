@@ -73,6 +73,20 @@ const summarizeVectorizationHints = (payload: any) => ({
   height: payload?.image_size?.height || 0,
 });
 
+type VectorizationResult = {
+  width: number;
+  height: number;
+  lines: Array<Array<[number, number]>>;
+  line_count: number;
+  segments: Array<[number, number, number, number, number]>;
+  segment_count: number;
+  threshold_mode: string;
+  debug_image?: string;
+};
+
+const MAX_VECTOR_POLYGONS = 220;
+const MAX_VECTOR_SEGMENTS = 320;
+
 const shouldRetryForUnderfit = (result: GeometricReconstruction, vectorHints: any, layoutHints: BlueprintLayoutHints | null) => {
   const wallCount = result?.walls?.length || 0;
   const roomCount = result?.rooms?.length || 0;
@@ -244,9 +258,258 @@ const buildVectorFallbackReconstruction = (vectorHints: any, layoutHints: Bluepr
 };
 
 /**
- * Executes the Python-based OpenCV script to perform initial vectorization.
- * This pre-processes the image to find structural polygons before sending to the AI.
+ * Runs structural pre-processing for blueprint vectorization.
+ * Preferred engine: OpenCV.js (WASM) in Node runtime.
+ * Fallback engine: Python/OpenCV script when OpenCV.js is unavailable.
  */
+let openCvModulePromise: Promise<any> | null = null;
+
+function stripDataUrl(value: string): string {
+  const marker = 'base64,';
+  const idx = value.indexOf(marker);
+  return idx >= 0 ? value.slice(idx + marker.length).trim() : value.trim();
+}
+
+function decodeBase64ImageBytes(base64Image: string): Uint8Array {
+  const payload = stripDataUrl(base64Image);
+  const buffer = Buffer.from(payload, 'base64');
+  if (!buffer.length) {
+    throw new Error('Image payload is empty.');
+  }
+  return new Uint8Array(buffer);
+}
+
+function dedupeVectorSegments(
+  segments: Array<[number, number, number, number, number]>,
+  quant = 4
+): Array<[number, number, number, number, number]> {
+  const seen = new Set<string>();
+  const deduped: Array<[number, number, number, number, number]> = [];
+
+  for (const [x1, y1, x2, y2, length] of segments) {
+    const p1x = Math.round(x1 / quant) * quant;
+    const p1y = Math.round(y1 / quant) * quant;
+    const p2x = Math.round(x2 / quant) * quant;
+    const p2y = Math.round(y2 / quant) * quant;
+    const a = `${p1x},${p1y}`;
+    const b = `${p2x},${p2y}`;
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push([x1, y1, x2, y2, length]);
+  }
+
+  return deduped;
+}
+
+function contourMatToPoints(mat: any): Array<[number, number]> {
+  const points: Array<[number, number]> = [];
+  const data: Int32Array | undefined = mat?.data32S;
+  if (!data || data.length < 4) return points;
+  for (let i = 0; i + 1 < data.length; i += 2) {
+    points.push([data[i], data[i + 1]]);
+  }
+  return points;
+}
+
+async function loadOpenCvModule(): Promise<any> {
+  if (!openCvModulePromise) {
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (
+      specifier: string
+    ) => Promise<any>;
+    openCvModulePromise = dynamicImport('@techstark/opencv-js');
+  }
+
+  const mod = await openCvModulePromise;
+  const cv = mod?.default ?? mod;
+  if (!cv) {
+    throw new Error('OpenCV.js module did not load.');
+  }
+
+  if (cv.Mat) {
+    return cv;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('OpenCV.js runtime initialization timeout.')), 15_000);
+    const original = cv.onRuntimeInitialized;
+    cv.onRuntimeInitialized = () => {
+      clearTimeout(timeout);
+      if (typeof original === 'function') {
+        try {
+          original();
+        } catch {
+          // ignore callback errors from previous handlers
+        }
+      }
+      resolve();
+    };
+  });
+
+  if (!cv.Mat) {
+    throw new Error('OpenCV.js runtime not ready.');
+  }
+
+  return cv;
+}
+
+function decodeImageWithOpenCv(cv: any, bytes: Uint8Array): any {
+  if (typeof cv.imdecode === 'function') {
+    try {
+      return cv.imdecode(bytes);
+    } catch {
+      // continue with Mat-vector fallback
+    }
+  }
+
+  const byteMat = cv.matFromArray(1, bytes.length, cv.CV_8UC1, Array.from(bytes));
+  try {
+    return cv.imdecode(byteMat);
+  } finally {
+    byteMat.delete();
+  }
+}
+
+async function runOpenCvJsVectorizationScript(base64Image: string): Promise<VectorizationResult> {
+  const startedAt = Date.now();
+  console.log(`[Vectorization/OpenCV.js] Step 1/4 loading OpenCV.js runtime. payloadChars=${base64Image.length}`);
+  const cv = await loadOpenCvModule();
+  const bytes = decodeBase64ImageBytes(base64Image);
+
+  const disposable: Array<{ delete: () => void }> = [];
+  const track = <T extends { delete: () => void }>(value: T): T => {
+    disposable.push(value);
+    return value;
+  };
+
+  try {
+    const src = track(decodeImageWithOpenCv(cv, bytes));
+    if (!src || src.empty?.()) {
+      throw new Error('Could not decode blueprint image with OpenCV.js.');
+    }
+
+    const height = Number(src.rows || 0);
+    const width = Number(src.cols || 0);
+
+    const gray = track(new cv.Mat());
+    cv.cvtColor(src, gray, cv.COLOR_BGR2GRAY);
+
+    const blur = track(new cv.Mat());
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+
+    const otsu = track(new cv.Mat());
+    cv.threshold(blur, otsu, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+    const adaptive = track(new cv.Mat());
+    cv.adaptiveThreshold(
+      blur,
+      adaptive,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      31,
+      7
+    );
+
+    const thresh = track(new cv.Mat());
+    cv.bitwise_or(otsu, adaptive, thresh);
+
+    const denoised = track(new cv.Mat());
+    cv.medianBlur(thresh, denoised, 3);
+
+    const closeKernel = track(cv.Mat.ones(3, 3, cv.CV_8U));
+    const closed = track(new cv.Mat());
+    cv.morphologyEx(denoised, closed, cv.MORPH_CLOSE, closeKernel, new cv.Point(-1, -1), 2);
+
+    const hKernel = track(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(Math.max(15, Math.floor(width / 60)), 1)));
+    const vKernel = track(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, Math.max(15, Math.floor(height / 60)))));
+    const horizontal = track(new cv.Mat());
+    const vertical = track(new cv.Mat());
+    cv.morphologyEx(closed, horizontal, cv.MORPH_OPEN, hKernel);
+    cv.morphologyEx(closed, vertical, cv.MORPH_OPEN, vKernel);
+
+    const hv = track(new cv.Mat());
+    cv.bitwise_or(horizontal, vertical, hv);
+    const wallsIsolated = track(new cv.Mat());
+    cv.bitwise_or(closed, hv, wallsIsolated);
+
+    const dilateKernel = track(cv.Mat.ones(2, 2, cv.CV_8U));
+    cv.dilate(wallsIsolated, wallsIsolated, dilateKernel, new cv.Point(-1, -1), 1);
+
+    const contours = track(new cv.MatVector());
+    const hierarchy = track(new cv.Mat());
+    cv.findContours(wallsIsolated, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
+
+    const polygons: Array<Array<[number, number]>> = [];
+    const minArea = Math.max(24, Math.floor(0.00003 * width * height));
+    const maxArea = Math.floor(0.95 * width * height);
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      disposable.push(cnt);
+
+      const area = cv.contourArea(cnt, false);
+      if (area < minArea || area > maxArea) continue;
+
+      const perimeter = cv.arcLength(cnt, true);
+      if (perimeter < 20) continue;
+
+      const approx = track(new cv.Mat());
+      cv.approxPolyDP(cnt, approx, 0.005 * perimeter, true);
+      const points = contourMatToPoints(approx);
+      if (points.length >= 2) {
+        polygons.push(points);
+      }
+    }
+
+    polygons.sort((a, b) => b.length - a.length);
+    const lines = polygons.slice(0, MAX_VECTOR_POLYGONS);
+
+    const minLineLength = Math.max(12, Math.floor(Math.min(width, height) * 0.03));
+    const houghLines = track(new cv.Mat());
+    cv.HoughLinesP(wallsIsolated, houghLines, 1, Math.PI / 180, 60, minLineLength, 8);
+
+    const rawSegments: Array<[number, number, number, number, number]> = [];
+    const lineData: Int32Array | undefined = houghLines?.data32S;
+    if (lineData) {
+      for (let i = 0; i + 3 < lineData.length; i += 4) {
+        const x1 = lineData[i];
+        const y1 = lineData[i + 1];
+        const x2 = lineData[i + 2];
+        const y2 = lineData[i + 3];
+        const length = Number(Math.hypot(x2 - x1, y2 - y1).toFixed(2));
+        if (length < minLineLength) continue;
+        rawSegments.push([x1, y1, x2, y2, length]);
+      }
+    }
+
+    rawSegments.sort((a, b) => b[4] - a[4]);
+    const segments = dedupeVectorSegments(rawSegments).slice(0, MAX_VECTOR_SEGMENTS);
+    const durationMs = Date.now() - startedAt;
+    console.log(
+      `[Vectorization/OpenCV.js] Step 4/4 success in ${durationMs}ms. line_count=${lines.length}, segment_count=${segments.length}`
+    );
+
+    return {
+      width,
+      height,
+      lines,
+      line_count: lines.length,
+      segments,
+      segment_count: segments.length,
+      threshold_mode: 'hybrid-otsu-adaptive',
+    };
+  } finally {
+    for (const value of disposable.reverse()) {
+      try {
+        value.delete();
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }
+}
+
 async function resolvePythonBinary(): Promise<string | null> {
   const configured = process.env.INFRALITH_PYTHON_BIN?.trim();
   if (configured) {
@@ -266,18 +529,18 @@ async function resolvePythonBinary(): Promise<string | null> {
   return null;
 }
 
-async function runVectorizationScript(base64Image: string): Promise<any> {
+async function runPythonVectorizationScript(base64Image: string): Promise<VectorizationResult> {
   const pythonBinary = await resolvePythonBinary();
   if (!pythonBinary) {
-    console.warn("[Vectorization] Python executable not found in path. Falling back to AI Vision only.");
+    console.warn("[Vectorization/Python] Python executable not found in path. Falling back to AI Vision only.");
     throw new Error("Python not installed or in PATH.");
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise<VectorizationResult>((resolve, reject) => {
     const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
     const startedAt = Date.now();
-    console.log(`[Vectorization] Step 1/4 launching Python script: ${scriptPath} (bin=${pythonBinary})`);
-    console.log(`[Vectorization] Input image payload chars=${base64Image.length}`);
+    console.log(`[Vectorization/Python] Step 1/4 launching Python script: ${scriptPath} (bin=${pythonBinary})`);
+    console.log(`[Vectorization/Python] Input image payload chars=${base64Image.length}`);
     const pythonProcess = spawn(pythonBinary, [scriptPath]);
 
     let output = '';
@@ -308,7 +571,7 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
       if (settled) return;
       if (code !== 0) {
         const details = errorOutput.trim() || `exit code ${code}`;
-        console.error(`[Vectorization] Python script error: ${details}`);
+        console.error(`[Vectorization/Python] Python script error: ${details}`);
         rejectOnce(new Error(`Python script exited with code ${code}: ${details}`));
         return;
       }
@@ -321,11 +584,11 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
         }
         const durationMs = Date.now() - startedAt;
         console.log(
-          `[Vectorization] Step 4/4 success in ${durationMs}ms. line_count=${result.line_count || 0}, segment_count=${result.segment_count || 0}`
+          `[Vectorization/Python] Step 4/4 success in ${durationMs}ms. line_count=${result.line_count || 0}, segment_count=${result.segment_count || 0}`
         );
-        resolveOnce(result);
+        resolveOnce(result as VectorizationResult);
       } catch {
-        console.error("[Vectorization] Failed to parse Python script output:", output);
+        console.error("[Vectorization/Python] Failed to parse Python script output:", output);
         rejectOnce(new Error('Failed to parse vectorization output.'));
       }
     });
@@ -333,19 +596,53 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
     pythonProcess.on('error', (err: any) => {
       if (settled) return;
       if (err.code === 'ENOENT') {
-        console.warn("[Vectorization] Python executable not found in path. Falling back to AI Vision only.");
+        console.warn("[Vectorization/Python] Python executable not found in path. Falling back to AI Vision only.");
         rejectOnce(new Error("Python not installed or in PATH."));
       } else {
-        console.error("[Vectorization] Python spawn error:", err);
+        console.error("[Vectorization/Python] Python spawn error:", err);
         rejectOnce(err instanceof Error ? err : new Error(String(err)));
       }
     });
 
-    console.log("[Vectorization] Step 2/4 streaming image payload to Python process.");
+    console.log("[Vectorization/Python] Step 2/4 streaming image payload to Python process.");
     pythonProcess.stdin.write(base64Image);
     pythonProcess.stdin.end();
-    console.log("[Vectorization] Step 3/4 waiting for vectorization response.");
+    console.log("[Vectorization/Python] Step 3/4 waiting for vectorization response.");
   });
+}
+
+async function runVectorizationScript(base64Image: string): Promise<VectorizationResult> {
+  const preference = (process.env.INFRALITH_VECTOR_ENGINE || 'auto').trim().toLowerCase();
+  const allowOpenCvJs = preference !== 'python';
+  const allowPython = preference !== 'opencvjs';
+
+  let openCvError: unknown = null;
+  if (allowOpenCvJs) {
+    try {
+      return await runOpenCvJsVectorizationScript(base64Image);
+    } catch (error) {
+      openCvError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[Vectorization] OpenCV.js path unavailable: ${message}`);
+      if (!allowPython) {
+        throw error;
+      }
+    }
+  }
+
+  if (allowPython) {
+    try {
+      return await runPythonVectorizationScript(base64Image);
+    } catch (pythonError) {
+      const message = pythonError instanceof Error ? pythonError.message : String(pythonError);
+      const cvMessage = openCvError
+        ? ` OpenCV.js error: ${openCvError instanceof Error ? openCvError.message : String(openCvError)}.`
+        : '';
+      throw new Error(`Vectorization engines failed. Python error: ${message}.${cvMessage}`);
+    }
+  }
+
+  throw new Error('Vectorization disabled: no engine enabled.');
 }
 
 type Segment2D = { start: [number, number]; end: [number, number] };
@@ -1112,7 +1409,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
 
   // STAGE 1: Pre-process with OpenCV vectorization to get structural hints
   let vectorizationHints = null;
-  let debugImage = null;
+  let debugImage: string | undefined;
   let layoutHints: BlueprintLayoutHints | null = null;
 
   console.log("[Infralith Vision Engine] Step 1/9 running structural pre-processing (OpenCV + Azure prebuilt-layout).");
