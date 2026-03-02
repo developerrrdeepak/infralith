@@ -6,14 +6,15 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/contexts/app-context';
+import { pipelineStageToProgress } from '@/ai/flows/infralith/pipeline';
 
 export default function BlueprintUpload() {
-    const { handleNavigate, user, runInfralithEvaluation } = useAppContext();
+    const { handleNavigate, user, runInfralithEvaluation, pipelineStage } = useAppContext();
     const [isUploading, setIsUploading] = useState(false);
-    const [progress, setProgress] = useState(0);
     const [uploaded, setUploaded] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const { toast } = useToast();
+    const progress = pipelineStageToProgress(pipelineStage);
 
     const isEngineer = user?.role === 'Engineer' || user?.role === 'Admin';
 
@@ -28,7 +29,6 @@ export default function BlueprintUpload() {
 
         setIsUploading(true);
         setUploaded(false);
-        setProgress(0);
 
         try {
             await runInfralithEvaluation(file);
@@ -37,7 +37,6 @@ export default function BlueprintUpload() {
             toast({ title: "Processing Complete", description: `AI Pipeline finished. Intelligence report is ready for ${user?.name}.` });
         } catch (error) {
             setIsUploading(false);
-            setProgress(0);
             toast({ title: "Processing Failed", description: "The AI agent orchestration encountered an error.", variant: "destructive" });
         }
     };

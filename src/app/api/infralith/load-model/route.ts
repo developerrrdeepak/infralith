@@ -29,8 +29,10 @@ export async function GET(req: Request) {
         }
 
         return NextResponse.json(model);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("[Cosmos DB Load API Error]:", error);
-        return NextResponse.json({ error: "Failed to load model" }, { status: 500 });
+        const message = error instanceof Error ? error.message : "Failed to load model";
+        const status = message.startsWith("Cloud Cosmos DB") ? 503 : 500;
+        return NextResponse.json({ error: message }, { status });
     }
 }

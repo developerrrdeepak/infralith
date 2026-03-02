@@ -48,3 +48,6 @@ code_base.py
 project.txt
 service-account-key.json
 .env
+tsc.log
+tsc_output.txt
+.modified

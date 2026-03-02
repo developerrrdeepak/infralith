@@ -14,6 +14,9 @@ import { applyBuildingCodes } from './building-codes';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import path from 'path';
+import DxfParser from 'dxf-parser';
+import { promises as fs } from 'fs';
+import os from 'os';
 
 const AIAssetSchema = z.object({
   name: z.string(),
@@ -300,6 +303,551 @@ async function runVectorizationScript(base64Image: string): Promise<any> {
     pythonProcess.stdin.end();
     console.log("[Vectorization] Step 3/4 waiting for vectorization response.");
   });
+}
+
+type Segment2D = { start: [number, number]; end: [number, number] };
+
+const DXF_UNIT_TO_METERS: Record<number, number> = {
+  1: 0.0254, // inches
+  2: 0.3048, // feet
+  4: 0.001, // millimeters
+  5: 0.01, // centimeters
+  6: 1, // meters
+};
+
+const toFiniteNumber = (value: unknown): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const toDxfPoint = (value: any): [number, number] | null => {
+  const x = toFiniteNumber(value?.x);
+  const y = toFiniteNumber(value?.y);
+  if (x == null || y == null) return null;
+  return [x, y];
+};
+
+const hasClosedPolylineFlag = (entity: any): boolean => {
+  if (entity?.shape === true || entity?.closed === true) return true;
+  const flags = Number(entity?.flags);
+  if (!Number.isFinite(flags)) return false;
+  return (flags & 1) === 1;
+};
+
+const getEntityVertices = (entity: any): [number, number][] => {
+  const vertices = Array.isArray(entity?.vertices) ? entity.vertices : [];
+  return vertices
+    .map(toDxfPoint)
+    .filter((point: [number, number] | null): point is [number, number] => point != null);
+};
+
+const getEntitySegments = (entity: any): Segment2D[] => {
+  const type = String(entity?.type || '').toUpperCase();
+
+  if (type === 'LINE') {
+    const start = toDxfPoint(entity?.start);
+    const end = toDxfPoint(entity?.end);
+    if (!start || !end) return [];
+    return [{ start, end }];
+  }
+
+  if (type !== 'LWPOLYLINE' && type !== 'POLYLINE') {
+    return [];
+  }
+
+  const vertices = getEntityVertices(entity);
+  if (vertices.length < 2) return [];
+
+  const segments: Segment2D[] = [];
+  for (let i = 0; i < vertices.length - 1; i++) {
+    segments.push({ start: vertices[i], end: vertices[i + 1] });
+  }
+  if (hasClosedPolylineFlag(entity) && vertices.length >= 3) {
+    segments.push({ start: vertices[vertices.length - 1], end: vertices[0] });
+  }
+  return segments;
+};
+
+const dedupeSegments = (segments: Segment2D[]): Segment2D[] => {
+  const seen = new Set<string>();
+  const deduped: Segment2D[] = [];
+
+  for (const segment of segments) {
+    const [x1, y1] = segment.start;
+    const [x2, y2] = segment.end;
+    const a = `${x1.toFixed(4)},${y1.toFixed(4)}`;
+    const b = `${x2.toFixed(4)},${y2.toFixed(4)}`;
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(segment);
+  }
+
+  return deduped;
+};
+
+const getDxfScaleMeters = (parsed: any, rawWidth: number, rawHeight: number): { scale: number; inferred: boolean } => {
+  let insUnits: unknown = parsed?.header?.$INSUNITS;
+  if (typeof insUnits === 'object' && insUnits !== null && 'value' in insUnits) {
+    insUnits = (insUnits as { value?: unknown }).value;
+  }
+
+  const mapped = DXF_UNIT_TO_METERS[Number(insUnits)];
+  if (Number.isFinite(mapped) && mapped > 0) {
+    return { scale: mapped, inferred: false };
+  }
+
+  // Unitless DXF: normalize largest dimension to 25m envelope.
+  const maxDim = Math.max(rawWidth, rawHeight, 1);
+  return { scale: 25 / maxDim, inferred: true };
+};
+
+const toMetersFromDxf = (point: [number, number], minX: number, minY: number, scaleMeters: number): [number, number] => {
+  const [x, y] = point;
+  return [Number(((x - minX) * scaleMeters).toFixed(3)), Number(((y - minY) * scaleMeters).toFixed(3))];
+};
+
+const getClosedPolyline = (entity: any): [number, number][] | null => {
+  const type = String(entity?.type || '').toUpperCase();
+  if (type !== 'LWPOLYLINE' && type !== 'POLYLINE') return null;
+  if (!hasClosedPolylineFlag(entity)) return null;
+
+  const vertices = getEntityVertices(entity);
+  if (vertices.length < 3) return null;
+  return vertices;
+};
+
+export async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
+  const startedAt = Date.now();
+  if (!dxfContent || !dxfContent.trim()) {
+    throw new Error('DXF file is empty.');
+  }
+
+  let parsed: any;
+  try {
+    const parser = new DxfParser();
+    parsed = parser.parseSync(dxfContent);
+  } catch (error) {
+    throw new Error('Invalid DXF file. Failed to parse CAD geometry.');
+  }
+
+  const entities = Array.isArray(parsed?.entities) ? parsed.entities : [];
+  if (entities.length === 0) {
+    throw new Error('DXF has no entities to process.');
+  }
+
+  const allSegments = dedupeSegments(entities.flatMap(getEntitySegments));
+  if (allSegments.length === 0) {
+    throw new Error('DXF parsing completed but no LINE/POLYLINE wall geometry was found.');
+  }
+
+  const allPoints = allSegments.flatMap((segment) => [segment.start, segment.end]);
+  const xs = allPoints.map((p) => p[0]);
+  const ys = allPoints.map((p) => p[1]);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const rawWidth = Math.max(1, maxX - minX);
+  const rawHeight = Math.max(1, maxY - minY);
+
+  const { scale: metersPerUnit, inferred: isInferredScale } = getDxfScaleMeters(parsed, rawWidth, rawHeight);
+  const boundaryTolerance = Math.max(rawWidth, rawHeight) * 0.03;
+
+  const walls: GeometricReconstruction['walls'] = [];
+  let wallCounter = 1;
+  for (const segment of allSegments) {
+    const rawLength = Math.hypot(segment.end[0] - segment.start[0], segment.end[1] - segment.start[1]);
+    const metricLength = rawLength * metersPerUnit;
+    if (metricLength < 0.35) continue;
+
+    const nearBoundary =
+      Math.abs(segment.start[0] - minX) <= boundaryTolerance ||
+      Math.abs(segment.start[0] - maxX) <= boundaryTolerance ||
+      Math.abs(segment.start[1] - minY) <= boundaryTolerance ||
+      Math.abs(segment.start[1] - maxY) <= boundaryTolerance ||
+      Math.abs(segment.end[0] - minX) <= boundaryTolerance ||
+      Math.abs(segment.end[0] - maxX) <= boundaryTolerance ||
+      Math.abs(segment.end[1] - minY) <= boundaryTolerance ||
+      Math.abs(segment.end[1] - maxY) <= boundaryTolerance;
+
+    walls.push({
+      id: `dxf-w-${wallCounter++}`,
+      start: toMetersFromDxf(segment.start, minX, minY, metersPerUnit),
+      end: toMetersFromDxf(segment.end, minX, minY, metersPerUnit),
+      thickness: nearBoundary ? 0.23 : 0.115,
+      height: 2.8,
+      color: nearBoundary ? '#f5e6d3' : '#faf7f2',
+      is_exterior: nearBoundary,
+      floor_level: 0,
+    });
+  }
+
+  if (walls.length === 0) {
+    throw new Error('DXF was parsed, but no valid wall segments could be derived.');
+  }
+
+  const rooms: GeometricReconstruction['rooms'] = [];
+  const closedPolylines = entities
+    .map(getClosedPolyline)
+    .filter((polygon: [number, number][] | null): polygon is [number, number][] => polygon != null);
+
+  let roomCounter = 1;
+  for (const polygon of closedPolylines) {
+    const metricPolygon = polygon.map((point: [number, number]) => toMetersFromDxf(point, minX, minY, metersPerUnit));
+    if (metricPolygon.length < 3) continue;
+
+    let signedArea = polygonArea(metricPolygon);
+    if (Math.abs(signedArea) < 3 || Math.abs(signedArea) > 4000) continue;
+
+    let ordered = metricPolygon;
+    if (signedArea < 0) {
+      ordered = [...metricPolygon].reverse();
+      signedArea = -signedArea;
+    }
+
+    rooms.push({
+      id: `dxf-r-${roomCounter}`,
+      name: `Room ${roomCounter}`,
+      polygon: ordered,
+      area: Number(signedArea.toFixed(2)),
+      floor_color: '#e8d5b7',
+      floor_level: 0,
+    });
+    roomCounter++;
+    if (rooms.length >= 150) break;
+  }
+
+  const reconstruction: GeometricReconstruction = {
+    building_name: 'DXF Reconstruction',
+    exterior_color: '#f5e6d3',
+    walls,
+    doors: [],
+    windows: [],
+    rooms,
+    conflicts: [
+      ...(rooms.length === 0
+        ? [{
+          type: 'code' as const,
+          severity: 'medium' as const,
+          description: 'No closed room polygons found in DXF. Verify room outlines and closed polylines.',
+          location: [0, 0] as [number, number],
+        }]
+        : []),
+      ...(isInferredScale
+        ? [{
+          type: 'code' as const,
+          severity: 'low' as const,
+          description: 'DXF units were unspecified. Geometry was normalized to a 25m envelope; verify dimensions.',
+          location: [0, 0] as [number, number],
+        }]
+        : []),
+    ],
+  };
+
+  const validated = applyBuildingCodes(reconstruction);
+  const durationMs = Date.now() - startedAt;
+  console.log(`[Infralith CAD Engine] DXF conversion complete in ${durationMs}ms.`, summarizeReconstruction(validated));
+  return validated;
+}
+
+type CommandResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+};
+
+const KNOWN_DWG_CONVERTERS = ['dwg2dxf', 'dwgread', 'ODAFileConverter', 'TeighaFileConverter'] as const;
+
+export type CadPipelineCapabilities = {
+  dxfSupported: boolean;
+  dwgSupported: boolean;
+  dwgResolver: 'env-template' | 'binary' | 'none';
+  availableConverters: string[];
+};
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasFileExtension(name: string): boolean {
+  const baseName = path.basename(name);
+  return baseName.includes('.') && baseName.lastIndexOf('.') > 0;
+}
+
+async function commandExists(command: string): Promise<boolean> {
+  if (!command.trim()) return false;
+
+  const isDirectPath = command.includes('/') || command.includes('\\');
+  if (isDirectPath) {
+    return pathExists(command);
+  }
+
+  const pathEnv = process.env.PATH || '';
+  const pathParts = pathEnv.split(path.delimiter).filter(Boolean);
+  const pathExtRaw = process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM';
+  const pathExt = pathExtRaw.split(';').filter(Boolean);
+
+  const candidates = hasFileExtension(command)
+    ? [command]
+    : [
+      command,
+      ...pathExt.map((ext) => `${command}${ext.toLowerCase()}`),
+      ...pathExt.map((ext) => `${command}${ext.toUpperCase()}`),
+    ];
+
+  for (const dir of pathParts) {
+    for (const candidate of candidates) {
+      const fullPath = path.join(dir, candidate);
+      if (await pathExists(fullPath)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function runCommand(
+  command: string,
+  args: string[],
+  options?: { cwd?: string; shell?: boolean; timeoutMs?: number }
+): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options?.cwd,
+      shell: options?.shell ?? false,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    const timeoutMs = options?.timeoutMs ?? 45_000;
+
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${command}`));
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
+  });
+}
+
+function stripDataUrlPrefix(value: string): string {
+  const marker = 'base64,';
+  const idx = value.indexOf(marker);
+  if (idx === -1) return value.trim();
+  return value.slice(idx + marker.length).trim();
+}
+
+function renderConverterTemplate(
+  template: string,
+  replacements: Record<string, string>
+): string {
+  return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key: string) => replacements[key] ?? `{${key}}`);
+}
+
+async function fileExistsWithContent(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function getCadPipelineCapabilities(): Promise<CadPipelineCapabilities> {
+  const envTemplate = process.env.INFRALITH_DWG_TO_DXF_COMMAND?.trim();
+  const availableConverters: string[] = [];
+
+  for (const converter of KNOWN_DWG_CONVERTERS) {
+    if (await commandExists(converter)) {
+      availableConverters.push(converter);
+    }
+  }
+
+  if (envTemplate) {
+    return {
+      dxfSupported: true,
+      dwgSupported: true,
+      dwgResolver: 'env-template',
+      availableConverters,
+    };
+  }
+
+  if (availableConverters.length > 0) {
+    return {
+      dxfSupported: true,
+      dwgSupported: true,
+      dwgResolver: 'binary',
+      availableConverters,
+    };
+  }
+
+  return {
+    dxfSupported: true,
+    dwgSupported: false,
+    dwgResolver: 'none',
+    availableConverters,
+  };
+}
+
+async function convertDwgToDxfString(dwgBase64: string): Promise<string> {
+  const payload = stripDataUrlPrefix(dwgBase64);
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(payload, 'base64');
+  } catch {
+    throw new Error('Invalid DWG payload encoding.');
+  }
+
+  if (!buffer.length) {
+    throw new Error('DWG payload is empty.');
+  }
+
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'infralith-dwg-'));
+  const inputDir = path.join(tempRoot, 'input');
+  const outputDir = path.join(tempRoot, 'output');
+  const inputPath = path.join(inputDir, 'blueprint.dwg');
+  const outputPath = path.join(outputDir, 'blueprint.dxf');
+  const outputCandidates = [
+    outputPath,
+    path.join(outputDir, 'blueprint.DXF'),
+  ];
+  const errors: string[] = [];
+
+  await fs.mkdir(inputDir, { recursive: true });
+  await fs.mkdir(outputDir, { recursive: true });
+  await fs.writeFile(inputPath, buffer);
+
+  const envTemplate = process.env.INFRALITH_DWG_TO_DXF_COMMAND?.trim();
+  const capabilities = await getCadPipelineCapabilities();
+  if (!capabilities.dwgSupported) {
+    throw new Error(
+      'DWG conversion is not configured on this server. Install dwg2dxf/dwgread/ODAFileConverter or set INFRALITH_DWG_TO_DXF_COMMAND.'
+    );
+  }
+
+  const replacements = {
+    input: inputPath,
+    output: outputPath,
+    input_dir: inputDir,
+    output_dir: outputDir,
+    input_name: 'blueprint.dwg',
+    output_name: 'blueprint.dxf',
+  };
+
+  const attempts: Array<
+    | { name: string; type: 'shell'; command: string }
+    | { name: string; type: 'binary'; command: string; args: string[] }
+  > = [];
+
+  if (envTemplate) {
+    attempts.push({
+      name: 'env-template',
+      type: 'shell',
+      command: renderConverterTemplate(envTemplate, replacements),
+    });
+  }
+
+  attempts.push(
+    {
+      name: 'dwg2dxf',
+      type: 'binary',
+      command: 'dwg2dxf',
+      args: [inputPath, outputPath],
+    },
+    {
+      name: 'dwgread',
+      type: 'binary',
+      command: 'dwgread',
+      args: ['-O', 'DXF', '-o', outputPath, inputPath],
+    },
+    {
+      name: 'ODAFileConverter',
+      type: 'binary',
+      command: 'ODAFileConverter',
+      args: [inputDir, outputDir, 'ACAD2018', 'DXF', '0', '1'],
+    },
+    {
+      name: 'TeighaFileConverter',
+      type: 'binary',
+      command: 'TeighaFileConverter',
+      args: [inputDir, outputDir, 'ACAD2018', 'DXF', '0', '1'],
+    }
+  );
+
+  try {
+    for (const attempt of attempts) {
+      try {
+        const result = attempt.type === 'shell'
+          ? await runCommand(attempt.command, [], { shell: true })
+          : await runCommand(attempt.command, attempt.args);
+
+        const producedPath = outputCandidates.find((candidate) => candidate && candidate.length > 0);
+        if (!producedPath) {
+          errors.push(`${attempt.name}: no output candidates configured`);
+          continue;
+        }
+
+        let finalPath: string | null = null;
+        for (const candidate of outputCandidates) {
+          if (await fileExistsWithContent(candidate)) {
+            finalPath = candidate;
+            break;
+          }
+        }
+
+        if (!finalPath) {
+          const stderr = result.stderr?.trim();
+          const stdout = result.stdout?.trim();
+          errors.push(`${attempt.name}: conversion produced no DXF file.${stderr ? ` stderr=${stderr}` : ''}${stdout ? ` stdout=${stdout}` : ''}`);
+          continue;
+        }
+
+        return await fs.readFile(finalPath, 'utf8');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${attempt.name}: ${message}`);
+      }
+    }
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+
+  throw new Error(
+    `DWG conversion failed. Install/configure a converter and set INFRALITH_DWG_TO_DXF_COMMAND (example: "dwgread -O DXF -o {output} {input}") or install dwg2dxf/dwgread/ODAFileConverter. Details: ${errors.join(' | ')}`
+  );
+}
+
+export async function processDwgTo3D(dwgBase64: string): Promise<GeometricReconstruction> {
+  const startedAt = Date.now();
+  console.log('[Infralith CAD Engine] Starting DWG conversion pipeline.');
+  const dxfContent = await convertDwgToDxfString(dwgBase64);
+  const result = await processDxfTo3D(dxfContent);
+  const durationMs = Date.now() - startedAt;
+  console.log(`[Infralith CAD Engine] DWG conversion + parsing completed in ${durationMs}ms.`);
+  return result;
 }
 
 

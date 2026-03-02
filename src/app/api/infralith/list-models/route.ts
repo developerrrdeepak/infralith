@@ -14,8 +14,10 @@ export async function GET() {
         const userId = session.user.email || "anonymous";
         const models = await listUserBIMModels(userId);
         return NextResponse.json(models);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("[Cosmos DB List API Error]:", error);
-        return NextResponse.json({ error: "Failed to list models" }, { status: 500 });
+        const message = error instanceof Error ? error.message : "Failed to list models";
+        const status = message.startsWith("Cloud Cosmos DB") ? 503 : 500;
+        return NextResponse.json({ error: message }, { status });
     }
 }

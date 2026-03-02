@@ -40,6 +40,8 @@ export async function POST(req: Request) {
         });
     } catch (error: any) {
         console.error("[Cosmos DB Save API Error]:", error);
-        return NextResponse.json({ error: error.message || "Failed to save model" }, { status: 500 });
+        const message = error instanceof Error ? error.message : "Failed to save model";
+        const status = message.startsWith("Cloud Cosmos DB") ? 503 : 500;
+        return NextResponse.json({ error: message }, { status });
     }
 }

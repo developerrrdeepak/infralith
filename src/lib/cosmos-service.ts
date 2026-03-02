@@ -1,20 +1,10 @@
 import { CosmosClient } from "@azure/cosmos";
 import { GeometricReconstruction } from "@/ai/flows/infralith/reconstruction-types";
 
-const endpoint = process.env.COSMOS_ENDPOINT || "https://localhost:8081";
-const key = process.env.COSMOS_KEY || "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
+const DATABASE_ID = process.env.AZURE_COSMOS_DATABASE_ID || "InfralithDB";
+const CONTAINER_ID = process.env.AZURE_COSMOS_CONTAINER_ID || "BIMModels";
 
-const client = (endpoint.includes("localhost") && process.env.NODE_ENV === "production")
-    ? null
-    : new CosmosClient({ endpoint, key });
-
-const isConfigured = !!client && !endpoint.includes("localhost");
-
-// In-memory mock storage for when Cosmos DB is not reachable
-const mockStorage = new Map<string, BIMDocument>();
-
-const DATABASE_ID = "InfralithDB";
-const CONTAINER_ID = "BIMModels";
+let client: CosmosClient | null = null;
 
 export interface BIMDocument {
     id: string; // The partition key, usually blueprint/project ID
@@ -25,23 +15,61 @@ export interface BIMDocument {
     updatedAt: string;
 }
 
+function hasLocalHost(value: string | undefined): boolean {
+    if (!value) return false;
+    const normalized = value.toLowerCase();
+    return normalized.includes("localhost") || normalized.includes("127.0.0.1");
+}
+
+function getCosmosClient(): CosmosClient {
+    if (client) return client;
+
+    const connectionString = process.env.AZURE_COSMOS_CONNECTION_STRING?.trim();
+    const endpoint = process.env.COSMOS_ENDPOINT?.trim();
+    const key = process.env.COSMOS_KEY?.trim();
+
+    if (connectionString) {
+        if (hasLocalHost(connectionString)) {
+            throw new Error("Cloud Cosmos DB required: AZURE_COSMOS_CONNECTION_STRING points to localhost.");
+        }
+        client = new CosmosClient(connectionString);
+        return client;
+    }
+
+    if (endpoint && key) {
+        if (hasLocalHost(endpoint)) {
+            throw new Error("Cloud Cosmos DB required: COSMOS_ENDPOINT points to localhost.");
+        }
+        client = new CosmosClient({ endpoint, key });
+        return client;
+    }
+
+    throw new Error(
+        "Cloud Cosmos DB is not configured. Set AZURE_COSMOS_CONNECTION_STRING or COSMOS_ENDPOINT + COSMOS_KEY."
+    );
+}
+
+function isNotFoundError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const maybeCode = (error as { code?: number | string }).code;
+    const maybeStatus = (error as { statusCode?: number }).statusCode;
+    return maybeCode === 404 || maybeCode === "404" || maybeStatus === 404;
+}
+
 /**
  * Ensures the Cosmos DB Database and Container exist.
  */
 async function ensureContainer() {
-    if (!client) {
-        throw new Error("Cosmos DB is not configured. Please set COSMOS_ENDPOINT and COSMOS_KEY in your environment variables.");
-    }
+    const cosmosClient = getCosmosClient();
     try {
-        const { database } = await client.databases.createIfNotExists({ id: DATABASE_ID });
+        const { database } = await cosmosClient.databases.createIfNotExists({ id: DATABASE_ID });
         const { container } = await database.containers.createIfNotExists({
             id: CONTAINER_ID,
             partitionKey: { paths: ["/id"] }
         });
         return container;
     } catch (e) {
-        console.warn("Cosmos DB Connection Failed. Falling back to simulation mode.", e);
-        throw e;
+        throw new Error("Cosmos DB connection failed.");
     }
 }
 
@@ -49,27 +77,22 @@ async function ensureContainer() {
  * Saves or updates a BIM Model in Cosmos DB.
  */
 export async function saveBIMModel(doc: BIMDocument): Promise<BIMDocument> {
-    try {
-        const container = await ensureContainer();
-        const { resource } = await container.items.upsert(doc);
-        return resource as unknown as BIMDocument;
-    } catch (error) {
-        console.warn("Saving to mock storage (Cloud Sync Unavailable)");
-        mockStorage.set(doc.id, { ...doc, updatedAt: new Date().toISOString() });
-        return doc;
-    }
+    const container = await ensureContainer();
+    const { resource } = await container.items.upsert(doc);
+    return resource as unknown as BIMDocument;
 }
 
 /**
  * Retrieves a specific BIM Model by its ID.
  */
 export async function getBIMModel(id: string): Promise<BIMDocument | null> {
+    const container = await ensureContainer();
     try {
-        const container = await ensureContainer();
-        const { resource } = await container.item(id, id).read();
-        return (resource as unknown as BIMDocument) || mockStorage.get(id) || null;
-    } catch (error) {
-        return mockStorage.get(id) || null;
+        const { resource } = await container.item(id, id).read<BIMDocument>();
+        return resource || null;
+    } catch (error: unknown) {
+        if (isNotFoundError(error)) return null;
+        throw error;
     }
 }
 
@@ -77,24 +100,16 @@ export async function getBIMModel(id: string): Promise<BIMDocument | null> {
  * Lists all BIM Models for a specific user.
  */
 export async function listUserBIMModels(userId: string): Promise<Pick<BIMDocument, 'id' | 'modelName' | 'createdAt' | 'updatedAt'>[]> {
-    try {
-        const container = await ensureContainer();
-        const querySpec = {
-            query: "SELECT c.id, c.modelName, c.createdAt, c.updatedAt FROM c WHERE c.userId = @userId ORDER BY c.updatedAt DESC",
-            parameters: [
-                {
-                    name: "@userId",
-                    value: userId
-                }
-            ]
-        };
-        const { resources } = await container.items.query(querySpec).fetchAll();
-        return resources;
-    } catch (error) {
-        // Fallback to mock list
-        return Array.from(mockStorage.values())
-            .filter(d => d.userId === userId)
-            .map(({ id, modelName, createdAt, updatedAt }) => ({ id, modelName, createdAt, updatedAt }))
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    }
+    const container = await ensureContainer();
+    const querySpec = {
+        query: "SELECT c.id, c.modelName, c.createdAt, c.updatedAt FROM c WHERE c.userId = @userId ORDER BY c.updatedAt DESC",
+        parameters: [
+            {
+                name: "@userId",
+                value: userId
+            }
+        ]
+    };
+    const { resources } = await container.items.query(querySpec).fetchAll();
+    return resources;
 }

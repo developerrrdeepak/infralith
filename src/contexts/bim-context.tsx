@@ -3,6 +3,11 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { GeometricReconstruction, RoomGeometry, WallGeometry } from '@/ai/flows/infralith/reconstruction-types';
 
+type CloudOperationResult = {
+    ok: boolean;
+    error?: string;
+};
+
 interface BIMContextType {
     model: GeometricReconstruction | null;
     setModel: (model: GeometricReconstruction | null) => void;
@@ -12,8 +17,8 @@ interface BIMContextType {
     setSelectedElement: (element: { type: 'room' | 'wall', data: RoomGeometry | WallGeometry } | null) => void;
     updateWallColor: (id: string | number, color: string) => void;
     updateRoomColor: (id: string | number, color: string) => void;
-    saveToCloud: (modelName?: string) => Promise<boolean>;
-    loadModel: (id: string) => Promise<boolean>;
+    saveToCloud: (modelName?: string) => Promise<CloudOperationResult>;
+    loadModel: (id: string) => Promise<CloudOperationResult>;
 }
 
 const BIMContext = createContext<BIMContextType | undefined>(undefined);
@@ -39,8 +44,8 @@ export function BIMProvider({ children }: { children: ReactNode }) {
         });
     };
 
-    const saveToCloud = async (modelName?: string): Promise<boolean> => {
-        if (!model) return false;
+    const saveToCloud = async (modelName?: string): Promise<CloudOperationResult> => {
+        if (!model) return { ok: false, error: 'No model is available to save.' };
         try {
             const res = await fetch('/api/infralith/save-model', {
                 method: 'POST',
@@ -50,26 +55,38 @@ export function BIMProvider({ children }: { children: ReactNode }) {
                     data: model
                 })
             });
-            return res.ok;
+            const payload = await res.json().catch(() => null);
+            if (!res.ok) {
+                return {
+                    ok: false,
+                    error: payload?.error || `Save failed with status ${res.status}.`,
+                };
+            }
+            return { ok: true };
         } catch (error) {
             console.error("Failed to sync BIM to Cosmos DB", error);
-            return false;
+            return { ok: false, error: 'Network error while saving to Cosmos DB.' };
         }
     };
 
-    const loadModel = async (id: string): Promise<boolean> => {
+    const loadModel = async (id: string): Promise<CloudOperationResult> => {
         try {
             const res = await fetch(`/api/infralith/load-model?id=${id}`);
-            if (!res.ok) return false;
-            const doc = await res.json();
-            if (doc && doc.data) {
-                setModel(doc.data);
-                return true;
+            const payload = await res.json().catch(() => null);
+            if (!res.ok) {
+                return {
+                    ok: false,
+                    error: payload?.error || `Load failed with status ${res.status}.`,
+                };
             }
-            return false;
+            if (payload && payload.data) {
+                setModel(payload.data);
+                return { ok: true };
+            }
+            return { ok: false, error: 'Loaded payload did not contain model data.' };
         } catch (error) {
             console.error("Failed to load BIM from Cosmos DB", error);
-            return false;
+            return { ok: false, error: 'Network error while loading from Cosmos DB.' };
         }
     };
 

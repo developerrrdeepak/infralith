@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { runInfralithWorkflow } from '@/ai/flows/infralith/workflow-orchestrator';
 import { WorkflowResult } from '@/ai/flows/infralith/types';
+import { PIPELINE_STAGE_COUNT, PIPELINE_STAGE_ERROR } from '@/ai/flows/infralith/pipeline';
 import { auditLog } from '@/lib/audit-log';
 
 export interface EvaluationContext {
@@ -542,7 +543,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     // Simulate agent progression while server action runs
     const progInterval = setInterval(() => {
-      setPipelineStage(prev => (prev < 5 ? prev + 1 : prev));
+      setPipelineStage(prev => (prev < PIPELINE_STAGE_COUNT - 1 ? prev + 1 : prev));
     }, 2000);
 
     try {
@@ -553,7 +554,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.log("DEBUG: Infralith Workflow Result on Client:", result);
 
       clearInterval(progInterval);
-      setPipelineStage(6);
+      setPipelineStage(PIPELINE_STAGE_COUNT);
       setInfralithResult(result);
 
       if (user?.uid) {
@@ -585,7 +586,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       handleNavigate('report');
     } catch (error) {
       clearInterval(progInterval);
-      setPipelineStage(-1);
+      setPipelineStage(PIPELINE_STAGE_ERROR);
       console.error("Infralith workflow failed:", error);
 
       if (user) {

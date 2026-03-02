@@ -74,7 +74,10 @@ import {
 import {
     processBlueprintTo3D,
     generateBuildingFromDescription,
-    generateRealTimeAsset
+    generateRealTimeAsset,
+    processDxfTo3D,
+    processDwgTo3D,
+    getCadPipelineCapabilities,
 } from '@/ai/flows/infralith/blueprint-to-3d-agent';
 
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
@@ -119,6 +122,8 @@ function isHumanLabel(value?: string | null) {
     if (HUMAN_LABEL_ALIASES.has(normalized)) return true;
     return normalized.includes("person") && (normalized.includes("walking") || normalized.includes("waking"));
 }
+
+const getVisibilityKey = (type: string, id: string | number) => `${type}::${id}`;
 
 // -- UI Helper Components for Professional CAD Interface --
 
@@ -532,7 +537,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                     })}
 
                     {/* Room Floors */}
-                    {data.rooms.filter(r => !visibleElements || visibleElements.has(`room - ${r.id} `)).map((room, i) => {
+                    {data.rooms.filter(r => !visibleElements || visibleElements.has(getVisibilityKey('room', r.id))).map((room, i) => {
                         const shape = new THREE.Shape();
                         room.polygon.forEach((pt, idx) => {
                             if (idx === 0) shape.moveTo(pt[0], pt[1]);
@@ -562,7 +567,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                     })}
 
                     {/* Walls, Windows, and Doors (Integrated via CSG) */}
-                    {data.walls.filter(w => !visibleElements || visibleElements.has(`wall - ${w.id} `)).map((wall, i) => (
+                    {data.walls.filter(w => !visibleElements || visibleElements.has(getVisibilityKey('wall', w.id))).map((wall, i) => (
                         <WallSegment
                             key={`wall - ${i} `}
                             wall={wall}
@@ -961,6 +966,11 @@ function BlueprintWorkspace() {
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
+    const [dwgSupport, setDwgSupport] = useState<{
+        checked: boolean;
+        enabled: boolean;
+        message: string | null;
+    }>({ checked: false, enabled: true, message: null });
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
 
@@ -983,21 +993,53 @@ function BlueprintWorkspace() {
         console.log(`[Blueprint Flow][${runId}] ${step}`);
     };
 
+    React.useEffect(() => {
+        let active = true;
+        (async () => {
+            try {
+                const capabilities = await getCadPipelineCapabilities();
+                if (!active) return;
+
+                if (capabilities.dwgSupported) {
+                    setDwgSupport({ checked: true, enabled: true, message: null });
+                    return;
+                }
+
+                setDwgSupport({
+                    checked: true,
+                    enabled: false,
+                    message: 'DWG converter is not configured on the server. Upload DXF or image files, or configure INFRALITH_DWG_TO_DXF_COMMAND.',
+                });
+            } catch (error) {
+                if (!active) return;
+                setDwgSupport({
+                    checked: true,
+                    enabled: false,
+                    message: 'Could not verify DWG converter availability. Upload DXF or image files.',
+                });
+            }
+        })();
+
+        return () => {
+            active = false;
+        };
+    }, []);
+
     // Initialize visibility
     React.useEffect(() => {
         if (elements) {
             const allIds = [
-                ...(elements.rooms?.map(r => `room - ${r.id} `) || []),
-                ...(elements.walls?.map(w => `wall - ${w.id} `) || []),
-                ...(elements.doors?.map(d => `door - ${d.id} `) || []),
-                ...(elements.windows?.map(w => `win - ${w.id} `) || [])
+                ...(elements.rooms?.map(r => getVisibilityKey('room', r.id)) || []),
+                ...(elements.walls?.map(w => getVisibilityKey('wall', w.id)) || []),
+                ...(elements.doors?.map(d => getVisibilityKey('door', d.id)) || []),
+                ...(elements.windows?.map(w => getVisibilityKey('win', w.id)) || [])
             ];
             setVisibleElements(new Set(allIds));
         }
     }, [elements]);
 
     const toggleElementVisibility = (type: string, id: string | number) => {
-        const key = `${type} -${id} `;
+        const key = getVisibilityKey(type, id);
         setVisibleElements(prev => {
             const next = new Set(prev);
             if (next.has(key)) next.delete(key);
@@ -1063,19 +1105,36 @@ function BlueprintWorkspace() {
 
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
-    const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/acad', 'image/vnd.dwg', 'image/x-dwg'];
+    const ACCEPTED_TYPES = [
+        'image/png',
+        'image/jpeg',
+        'image/jpg',
+        'image/webp',
+        'application/dxf',
+        'image/vnd.dxf',
+        'application/acad',
+        'application/dwg',
+        'application/x-dwg',
+        'image/vnd.dwg',
+        'image/x-dwg',
+    ];
 
     const isAcceptedFile = (f: File) => {
         if (ACCEPTED_TYPES.includes(f.type)) return true;
         const name = f.name.toLowerCase();
-        return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp') || name.endsWith('.dwg') || name.endsWith('.dxf');
+        return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp') || name.endsWith('.dxf') || name.endsWith('.dwg');
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files?.[0]) {
             const f = e.target.files[0];
+            const isDwg = f.name.toLowerCase().endsWith('.dwg');
             if (!isAcceptedFile(f)) {
-                toast({ title: 'Invalid File', description: 'Please upload an Image or CAD file (PNG, JPG, WEBP, DWG, DXF). Document native parsing is coming soon.', variant: 'destructive' });
+                toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, WEBP, DXF, or DWG.', variant: 'destructive' });
+                return;
+            }
+            if (isDwg && dwgSupport.checked && !dwgSupport.enabled) {
+                toast({ title: 'DWG Unavailable', description: dwgSupport.message || 'DWG converter is not configured.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -1086,8 +1145,13 @@ function BlueprintWorkspace() {
         e.preventDefault();
         if (e.dataTransfer.files?.[0]) {
             const f = e.dataTransfer.files[0];
+            const isDwg = f.name.toLowerCase().endsWith('.dwg');
             if (!isAcceptedFile(f)) {
-                toast({ title: 'Invalid File', description: 'Please upload an Image or CAD file (PNG, JPG, WEBP, DWG, DXF). Document native parsing is coming soon.', variant: 'destructive' });
+                toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, WEBP, DXF, or DWG.', variant: 'destructive' });
+                return;
+            }
+            if (isDwg && dwgSupport.checked && !dwgSupport.enabled) {
+                toast({ title: 'DWG Unavailable', description: dwgSupport.message || 'DWG converter is not configured.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -1146,9 +1210,18 @@ function BlueprintWorkspace() {
         setFile(f); setStatus('preprocessing'); setProgress(0);
 
         try {
-            const previewUrl = URL.createObjectURL(f);
-            setPreview(previewUrl);
-            logBlueprintFlow('Step 2/9 preview URL created.');
+            const fileName = f.name.toLowerCase();
+            const isDxf = fileName.endsWith('.dxf');
+            const isDwg = fileName.endsWith('.dwg');
+
+            if (isDxf || isDwg) {
+                setPreview(null);
+                logBlueprintFlow('Step 2/9 CAD file detected, skipping image preview.', { isDxf, isDwg });
+            } else {
+                const previewUrl = URL.createObjectURL(f);
+                setPreview(previewUrl);
+                logBlueprintFlow('Step 2/9 preview URL created.');
+            }
         } catch (previewError) {
             console.warn('[Blueprint Flow] Preview creation failed.', previewError);
         }
@@ -1156,20 +1229,29 @@ function BlueprintWorkspace() {
         let cur = 0;
         const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
-            const isCAD = f.name.toLowerCase().endsWith('.dwg') || f.name.toLowerCase().endsWith('.dxf');
+            const fileName = f.name.toLowerCase();
+            const isDwg = fileName.endsWith('.dwg');
+            const isDxf = fileName.endsWith('.dxf');
             let result;
-            logBlueprintFlow('Step 5/9 selecting processing pipeline.', { isCAD });
+            logBlueprintFlow('Step 5/9 selecting processing pipeline.', { isDxf, isDwg });
+            setStatus('analyzing');
 
-            if (isCAD) {
-                toast({ title: "CAD Model Detected", description: "Parsing via Advanced Babylon engine to enhance model accuracy from raw vector endpoints...", duration: 5000 });
-                // We use the descriptive generator as a highly-accurate structured fallback since we can't rasterize DWG purely client-side without an external service or heavy WASM binary right now. 
-                setTimeout(() => setStatus('analyzing'), 1500);
-                await new Promise(r => setTimeout(r, 2000));
-                logBlueprintFlow('Step 6/9 executing CAD fallback generation.');
-                result = await generateBuildingFromDescription("A highly accurate, multi-room commercial layout with very precise parametric walls and clearly defined doors and windows, matching a complex DWG CAD vector format");
+            if (isDwg) {
+                if (dwgSupport.checked && !dwgSupport.enabled) {
+                    throw new Error(dwgSupport.message || 'DWG conversion is unavailable on this server.');
+                }
+                toast({ title: "DWG Model Detected", description: "Converting DWG to DXF and parsing CAD geometry...", duration: 5000 });
+                const dwgBase64 = await fileToBase64(f);
+                logBlueprintFlow('Step 6/9 executing DWG conversion pipeline.', { base64Chars: dwgBase64.length });
+                result = await processDwgTo3D(dwgBase64);
+            }
+            else if (isDxf) {
+                toast({ title: "DXF Model Detected", description: "Parsing CAD vector entities and constructing BIM geometry...", duration: 5000 });
+                const dxfText = await f.text();
+                logBlueprintFlow('Step 6/9 executing DXF CAD pipeline.', { textChars: dxfText.length });
+                result = await processDxfTo3D(dxfText);
             } else {
                 const b64 = await fileToBase64(f);
-                setTimeout(() => setStatus('analyzing'), 1500);
                 logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', { base64Chars: b64.length });
                 result = await processBlueprintTo3D(b64);
             }
@@ -1177,10 +1259,13 @@ function BlueprintWorkspace() {
             clearInterval(iv);
             logBlueprintFlow('Step 7/9 structured geometry received from AI pipeline.', summarizeReconstruction(result));
             animateProgress(result);
-        } catch (error) {
+        } catch (error: unknown) {
             clearInterval(iv); setStatus('idle'); setFile(null); setPreview(null);
             console.error('[Blueprint Flow] Generation failed.', error);
-            toast({ title: "Construction Failed", description: "The vision engine could not understand this image layout. Please try a clearer blueprint.", variant: 'destructive' });
+            const message = error instanceof Error
+                ? error.message
+                : "The vision engine could not understand this layout. Please try a clearer blueprint.";
+            toast({ title: "Construction Failed", description: message, variant: 'destructive' });
         }
     };
 
@@ -1204,14 +1289,14 @@ function BlueprintWorkspace() {
 
     const handleSaveToCloud = async () => {
         setIsSaving(true);
-        const success = await saveToCloud();
+        const result = await saveToCloud();
         setIsSaving(false);
-        if (success) {
+        if (result.ok) {
             toast({ title: "Saved to Cosmos DB", description: "Your BIM parametric model has been securely stored in the cloud.", variant: 'default' });
             // Refresh projects list if it's already open
             if (showProjects) fetchProjects();
         } else {
-            toast({ title: "Sync Failed", description: "Could not connect to Azure Cosmos DB.", variant: 'destructive' });
+            toast({ title: "Sync Failed", description: result.error || "Could not connect to Azure Cosmos DB.", variant: 'destructive' });
         }
     };
 
@@ -1219,9 +1304,19 @@ function BlueprintWorkspace() {
         setIsLoadingProjects(true);
         try {
             const res = await fetch('/api/infralith/list-models');
-            if (res.ok) setProjects(await res.json());
+            if (res.ok) {
+                setProjects(await res.json());
+            } else {
+                const payload = await res.json().catch(() => null);
+                toast({
+                    title: "Project List Unavailable",
+                    description: payload?.error || `Failed to fetch projects (status ${res.status}).`,
+                    variant: 'destructive'
+                });
+            }
         } catch (e) {
             console.error("Failed to fetch projects", e);
+            toast({ title: "Project List Unavailable", description: "Network error while fetching projects.", variant: 'destructive' });
         } finally {
             setIsLoadingProjects(false);
         }
@@ -1229,14 +1324,14 @@ function BlueprintWorkspace() {
 
     const handleLoadProject = async (id: string) => {
         setStatus('analyzing'); setProgress(0.5);
-        const success = await loadModel(id);
-        if (success) {
+        const result = await loadModel(id);
+        if (result.ok) {
             setStatus('complete'); setProgress(1);
             setShowProjects(false);
             toast({ title: "Project Loaded", description: "Successfully retrieved from Azure Cosmos DB." });
         } else {
             setStatus('idle');
-            toast({ title: "Load Failed", description: "Could not retrieve project.", variant: 'destructive' });
+            toast({ title: "Load Failed", description: result.error || "Could not retrieve project.", variant: 'destructive' });
         }
     };
 
@@ -1463,7 +1558,7 @@ function BlueprintWorkspace() {
                                                     label={room.name}
                                                     sublabel={`${room.area?.toFixed(0)} m²`}
                                                     active={selectedElement?.type === 'room' && selectedElement.data.id === room.id}
-                                                    visible={visibleElements.has(`room - ${room.id} `)}
+                                                    visible={visibleElements.has(getVisibilityKey('room', room.id))}
                                                     onSelect={() => setSelectedElement({ type: 'room', data: room })}
                                                     onToggleVisibility={() => toggleElementVisibility('room', room.id)}
                                                     onEdit={() => setSelectedElement({ type: 'room', data: room })}
@@ -1962,16 +2057,21 @@ function BlueprintWorkspace() {
                                         >
                                             <Upload className="h-10 w-10 text-[#f97316] mb-3" strokeWidth={2.5} />
                                             <h3 className="text-lg font-black text-foreground tracking-tight mb-1">Upload Blueprint</h3>
-                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image, CAD or PDF</p>
+                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image, DXF, or DWG file</p>
                                             <div className="flex items-center gap-2">
-                                                {["PNG", "JPG", "JPEG", "WEBP", "DWG"].map(ext => (
+                                                {["PNG", "JPG", "JPEG", "WEBP", "DXF", "DWG"].map(ext => (
                                                     <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-background">
                                                         {ext}
                                                     </span>
                                                 ))}
                                             </div>
+                                            {dwgSupport.checked && !dwgSupport.enabled && (
+                                                <div className="mt-4 w-full rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-700 text-center">
+                                                    DWG conversion is unavailable on this server. Upload DXF or image files instead.
+                                                </div>
+                                            )}
                                         </div>
-                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".png,.jpg,.jpeg,.webp,.dwg,.dxf,image/*" onChange={handleFileUpload} />
+                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".png,.jpg,.jpeg,.webp,.dxf,.dwg,image/*" onChange={handleFileUpload} />
                                         <Button
                                             onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
                                             className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-12 rounded-[16px] text-[14px] shadow-lg shadow-[#f97316]/20 transition-all hover:-translate-y-0.5"

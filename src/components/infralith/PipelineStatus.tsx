@@ -1,34 +1,27 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Database, ShieldCheck, Cpu, Network, FileSearch, Calculator, AlertTriangle, Layers, CheckCircle } from 'lucide-react';
+import { ShieldCheck, Cpu, Network, FileSearch, Calculator, AlertTriangle, Layers, CheckCircle } from 'lucide-react';
 import { useAppContext } from '@/contexts/app-context';
 import { Button } from '@/components/ui/button';
+import { PIPELINE_STAGE_COUNT, PIPELINE_STAGES } from '@/ai/flows/infralith/pipeline';
 
-const stages = [
-    { title: 'API Gateway Orchestration', icon: Network, desc: 'Routing payload and initializing continuous workflow...', duration: 1500 },
-    { title: 'Document Parsing Agent', icon: FileSearch, desc: 'Extracting blueprints & storing structured data...', duration: 2500 },
-    { title: 'Cost Prediction Agent', icon: Calculator, desc: 'Algorithmic cost forecasting based on materials...', duration: 2000 },
-    { title: 'Risk Analysis Agent', icon: AlertTriangle, desc: 'Predicting failure patterns and structural risks...', duration: 2000 },
-    { title: 'Compliance Agent', icon: ShieldCheck, desc: 'Verifying data against ISO and regional codes...', duration: 2000 },
-    { title: 'Analytics Aggregator', icon: Layers, desc: 'Consolidating results to Database & Dashboard...', duration: 2500 },
-];
+const stageIcons = {
+    gateway: Network,
+    parse: FileSearch,
+    cost: Calculator,
+    risk: AlertTriangle,
+    compliance: ShieldCheck,
+    aggregate: Layers,
+} as const;
 
 export default function PipelineStatus() {
     const { handleNavigate, pipelineStage } = useAppContext();
-    const [completed, setCompleted] = useState<number[]>([]);
-    const current = pipelineStage < 0 ? 0 : pipelineStage;
-
-    useEffect(() => {
-        const completedArr = [];
-        for (let i = 0; i < current; i++) {
-            completedArr.push(i);
-        }
-        setCompleted(completedArr);
-    }, [current]);
+    const boundedStage = Math.max(0, pipelineStage);
+    const currentIndex = Math.min(boundedStage, PIPELINE_STAGE_COUNT);
+    const isPipelineComplete = currentIndex >= PIPELINE_STAGE_COUNT;
 
 
     return (
@@ -44,10 +37,10 @@ export default function PipelineStatus() {
             </div>
 
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {stages.map((stage, idx) => {
-                    const isDone = completed.includes(idx);
-                    const isCurrent = current === idx;
-                    const Icon = stage.icon;
+                {PIPELINE_STAGES.map((stage, idx) => {
+                    const isDone = idx < currentIndex;
+                    const isCurrent = idx === currentIndex && !isPipelineComplete;
+                    const Icon = stageIcons[stage.key];
 
                     return (
                         <Card key={idx} className={`premium-glass relative overflow-hidden transition-all duration-500 premium-glass-hover ${isCurrent ? 'border-primary ring-4 ring-primary/30 scale-[1.02] shadow-primary/40 shadow-2xl z-10' : 'opacity-50 hover:opacity-100'}`}>
@@ -61,7 +54,7 @@ export default function PipelineStatus() {
                                     </Badge>
                                 </div>
                                 <CardTitle className="text-lg font-black tracking-tighter uppercase">{stage.title}</CardTitle>
-                                <CardDescription className="text-sm leading-relaxed">{stage.desc}</CardDescription>
+                                <CardDescription className="text-sm leading-relaxed">{stage.description}</CardDescription>
                             </CardHeader>
                             <CardContent />
                             {isCurrent && (
@@ -74,7 +67,7 @@ export default function PipelineStatus() {
                 })}
             </div>
 
-            {current >= stages.length && (
+            {isPipelineComplete && (
                 <div className="flex flex-col items-center justify-center p-12 bg-primary/5 rounded-3xl border-2 border-primary/20 border-dashed animate-in fade-in zoom-in duration-700">
                     <div className="p-6 bg-green-500/20 rounded-full mb-6">
                         <CheckCircle className="h-12 w-12 text-green-500" />
