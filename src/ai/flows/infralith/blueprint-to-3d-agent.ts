@@ -46,6 +46,28 @@ const summarizeLayoutHints = (payload: BlueprintLayoutHints | null) => ({
   dimensionAnchors: payload?.dimensionAnchors?.length || 0,
 });
 
+const LAYOUT_POLYGON_LIMIT = 180;
+const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
+const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
+
+type LayoutHintMode = 'auto' | 'azure' | 'local' | 'hybrid';
+
+const asBool = (value: string | undefined, fallback: boolean): boolean => {
+  if (value == null || value.trim() === '') return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
+
+const getLayoutHintMode = (): LayoutHintMode => {
+  const raw = (process.env.INFRALITH_LAYOUT_HINT_MODE || 'auto').trim().toLowerCase();
+  if (raw === 'azure' || raw === 'local' || raw === 'hybrid' || raw === 'auto') {
+    return raw;
+  }
+  return 'auto';
+};
+
 const buildVectorizationHints = (raw: any) => {
   if (!raw) return null;
   const polygons = Array.isArray(raw.lines) ? raw.lines.slice(0, 220) : [];
@@ -709,6 +731,297 @@ const getInsertTransform = (entity: any): Affine2D => {
   };
 };
 
+type BlueprintPreprocessResult = {
+  image: string;
+  source: 'original' | 'sharp';
+  width: number;
+  height: number;
+};
+
+let sharpUnsupported = false;
+let sharpWarned = false;
+let tesseractUnsupported = false;
+let tesseractWarned = false;
+let canvasUnsupported = false;
+let canvasWarned = false;
+
+const ensureDataUrlPng = (base64Payload: string): string => `data:image/png;base64,${base64Payload}`;
+
+const readPolygonFromBoundingBox = (bbox: any): number[] => {
+  const x0 = Number(bbox?.x0 ?? bbox?.left ?? 0);
+  const y0 = Number(bbox?.y0 ?? bbox?.top ?? 0);
+  const x1 = Number(bbox?.x1 ?? ((bbox?.left ?? 0) + (bbox?.width ?? 0)));
+  const y1 = Number(bbox?.y1 ?? ((bbox?.top ?? 0) + (bbox?.height ?? 0)));
+  if (![x0, y0, x1, y1].every((v) => Number.isFinite(v))) return [];
+  if (x1 <= x0 || y1 <= y0) return [];
+  return [x0, y0, x1, y0, x1, y1, x0, y1].map((v) => Number(v.toFixed(2)));
+};
+
+const mergeLayoutHintSources = (
+  localHints: BlueprintLayoutHints | null,
+  azureHints: BlueprintLayoutHints | null
+): BlueprintLayoutHints | null => {
+  if (!localHints && !azureHints) return null;
+  if (localHints && !azureHints) return localHints;
+  if (!localHints && azureHints) return azureHints;
+
+  const lineSeen = new Set<string>();
+  const mergedLinePolygons: number[][] = [];
+  for (const polygon of [...(azureHints?.linePolygons || []), ...(localHints?.linePolygons || [])]) {
+    if (!Array.isArray(polygon) || polygon.length < 6) continue;
+    const normalized = polygon.map((v) => Number(v.toFixed(2)));
+    const key = normalized.join(',');
+    if (lineSeen.has(key)) continue;
+    lineSeen.add(key);
+    mergedLinePolygons.push(normalized);
+    if (mergedLinePolygons.length >= LAYOUT_POLYGON_LIMIT) break;
+  }
+
+  const anchorSeen = new Set<string>();
+  const mergedAnchors: Array<{ text: string; polygon: number[]; }> = [];
+  for (const anchor of [...(azureHints?.dimensionAnchors || []), ...(localHints?.dimensionAnchors || [])]) {
+    const text = String(anchor?.text || '').trim();
+    const polygon = Array.isArray(anchor?.polygon) ? anchor.polygon.map((v) => Number(v.toFixed(2))) : [];
+    if (!text || polygon.length < 6) continue;
+    const key = `${text}|${polygon.join(',')}`;
+    if (anchorSeen.has(key)) continue;
+    anchorSeen.add(key);
+    mergedAnchors.push({ text, polygon });
+    if (mergedAnchors.length >= LAYOUT_DIMENSION_ANCHOR_LIMIT) break;
+  }
+
+  const basePages = (azureHints?.pages?.length || 0) > 0 ? azureHints?.pages : localHints?.pages;
+  return {
+    pageCount: Math.max(localHints?.pageCount || 0, azureHints?.pageCount || 0, basePages?.length || 0),
+    pages: basePages || [],
+    linePolygons: mergedLinePolygons,
+    dimensionAnchors: mergedAnchors,
+  };
+};
+
+const isLocalLayoutStrong = (hints: BlueprintLayoutHints | null) => {
+  if (!hints) return false;
+  const dimensionSignals = hints.dimensionAnchors?.length || 0;
+  const polygonSignals = hints.linePolygons?.length || 0;
+  return dimensionSignals >= 2 || polygonSignals >= 40;
+};
+
+async function preprocessBlueprintImage(base64Image: string): Promise<BlueprintPreprocessResult> {
+  const useSharp = asBool(process.env.INFRALITH_USE_SHARP_PREPROCESS, true);
+  if (!useSharp || sharpUnsupported) {
+    return { image: base64Image, source: 'original', width: 0, height: 0 };
+  }
+
+  try {
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
+    const sharpModule = await dynamicImport('sharp');
+    const sharp = sharpModule?.default ?? sharpModule;
+    if (typeof sharp !== 'function') {
+      throw new Error('Sharp module is invalid.');
+    }
+
+    const inputBuffer = Buffer.from(stripDataUrl(base64Image), 'base64');
+    if (!inputBuffer.length) {
+      return { image: base64Image, source: 'original', width: 0, height: 0 };
+    }
+
+    const maxDim = Math.max(512, Math.min(4096, Number(process.env.INFRALITH_PREPROCESS_MAX_DIM || 2400)));
+    const thresholdRaw = Number(process.env.INFRALITH_PREPROCESS_THRESHOLD || 0);
+    const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 255
+      ? Math.round(thresholdRaw)
+      : null;
+
+    let pipeline = sharp(inputBuffer, { limitInputPixels: false })
+      .rotate()
+      .grayscale()
+      .normalize()
+      .resize({ width: maxDim, height: maxDim, fit: 'inside', withoutEnlargement: true });
+
+    if (threshold != null) {
+      pipeline = pipeline.threshold(threshold);
+    }
+
+    const { data, info } = await pipeline.png({ compressionLevel: 9 }).toBuffer({ resolveWithObject: true });
+    const payload = ensureDataUrlPng(data.toString('base64'));
+    return {
+      image: payload,
+      source: 'sharp',
+      width: Number(info?.width || 0),
+      height: Number(info?.height || 0),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message)) {
+      sharpUnsupported = true;
+      if (!sharpWarned) {
+        sharpWarned = true;
+        console.warn('[Infralith Vision Engine] Sharp not installed. Skipping local image pre-processing.');
+      }
+      return { image: base64Image, source: 'original', width: 0, height: 0 };
+    }
+
+    console.warn(`[Infralith Vision Engine] Sharp pre-processing failed: ${message}. Using original image.`);
+    return { image: base64Image, source: 'original', width: 0, height: 0 };
+  }
+}
+
+async function runLocalOcrLayoutHints(
+  base64Image: string,
+  widthHint = 0,
+  heightHint = 0
+): Promise<BlueprintLayoutHints | null> {
+  const enableLocalOcr = asBool(process.env.INFRALITH_ENABLE_LOCAL_OCR, true);
+  if (!enableLocalOcr || tesseractUnsupported) return null;
+
+  try {
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
+    const tesseractModule = await dynamicImport('tesseract.js');
+    const recognize = tesseractModule?.recognize || tesseractModule?.default?.recognize;
+    if (typeof recognize !== 'function') {
+      throw new Error('tesseract.js recognize() is unavailable.');
+    }
+
+    const startedAt = Date.now();
+    const imageBuffer = Buffer.from(stripDataUrl(base64Image), 'base64');
+    const result = await recognize(imageBuffer, 'eng', {
+      logger: () => { /* quiet server logs */ },
+    });
+
+    const data = result?.data || {};
+    const lines = Array.isArray(data?.lines) ? data.lines : [];
+    const words = Array.isArray(data?.words) ? data.words : [];
+    const linePolygons: number[][] = [];
+    const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
+
+    for (const line of lines) {
+      if (linePolygons.length >= LAYOUT_POLYGON_LIMIT) break;
+      const polygon = readPolygonFromBoundingBox(line?.bbox);
+      if (polygon.length >= 6) {
+        linePolygons.push(polygon);
+      }
+
+      const text = String(line?.text || '').trim();
+      if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
+        if (polygon.length >= 6) {
+          dimensionAnchors.push({ text, polygon });
+        }
+      }
+    }
+
+    if (linePolygons.length < 20) {
+      for (const word of words) {
+        if (linePolygons.length >= LAYOUT_POLYGON_LIMIT) break;
+        const polygon = readPolygonFromBoundingBox(word?.bbox);
+        if (polygon.length >= 6) {
+          linePolygons.push(polygon);
+        }
+        const text = String(word?.text || '').trim();
+        if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
+          if (polygon.length >= 6) {
+            dimensionAnchors.push({ text, polygon });
+          }
+        }
+      }
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const width = Number(widthHint || data?.width || 0);
+    const height = Number(heightHint || data?.height || 0);
+    console.log(
+      `[Local OCR] Parsed in ${durationMs}ms. lines=${linePolygons.length}, dimensionAnchors=${dimensionAnchors.length}`
+    );
+
+    return {
+      pageCount: 1,
+      pages: [{
+        pageNumber: 1,
+        width,
+        height,
+        unit: 'pixel',
+        lineCount: linePolygons.length,
+        wordCount: words.length,
+      }],
+      linePolygons,
+      dimensionAnchors,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message)) {
+      tesseractUnsupported = true;
+      if (!tesseractWarned) {
+        tesseractWarned = true;
+        console.warn('[Infralith Vision Engine] tesseract.js not installed. Local OCR layout hints disabled.');
+      }
+      return null;
+    }
+
+    console.warn(`[Local OCR] Failed to extract hints: ${message}`);
+    return null;
+  }
+}
+
+async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls']): Promise<string | undefined> {
+  const enablePreview = asBool(process.env.INFRALITH_DXF_DEBUG_CANVAS, false);
+  if (!enablePreview || canvasUnsupported || walls.length === 0) return undefined;
+
+  try {
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
+    const canvasModule = await dynamicImport('canvas');
+    const createCanvas = canvasModule?.createCanvas || canvasModule?.default?.createCanvas;
+    if (typeof createCanvas !== 'function') {
+      throw new Error('createCanvas not available in canvas module.');
+    }
+
+    const points = walls.flatMap((wall) => [wall.start, wall.end]);
+    const xs = points.map((p) => p[0]);
+    const ys = points.map((p) => p[1]);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    const size = Math.max(512, Math.min(2048, Number(process.env.INFRALITH_DXF_DEBUG_CANVAS_SIZE || 1024)));
+    const padding = 24;
+    const width = maxX - minX || 1;
+    const height = maxY - minY || 1;
+    const scale = Math.min((size - padding * 2) / width, (size - padding * 2) / height);
+
+    const canvas = createCanvas(size, size);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = '#1f2937';
+    ctx.lineWidth = 1.6;
+
+    for (const wall of walls) {
+      const sx = padding + (wall.start[0] - minX) * scale;
+      const sy = size - (padding + (wall.start[1] - minY) * scale);
+      const ex = padding + (wall.end[0] - minX) * scale;
+      const ey = size - (padding + (wall.end[1] - minY) * scale);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+    }
+
+    const pngBuffer: Buffer = canvas.toBuffer('image/png');
+    return ensureDataUrlPng(pngBuffer.toString('base64'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message)) {
+      canvasUnsupported = true;
+      if (!canvasWarned) {
+        canvasWarned = true;
+        console.warn('[Infralith CAD Engine] canvas not installed. DXF preview rasterization disabled.');
+      }
+      return undefined;
+    }
+
+    console.warn(`[Infralith CAD Engine] DXF preview rasterization failed: ${message}`);
+    return undefined;
+  }
+}
+
 const transformSegment = (segment: Segment2D, transform: Affine2D): Segment2D => ({
   start: applyAffineToPoint(segment.start, transform),
   end: applyAffineToPoint(segment.end, transform),
@@ -1056,6 +1369,8 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
     if (rooms.length >= 150) break;
   }
 
+  const dxfDebugImage = await renderDxfPreviewCanvas(walls);
+
   const reconstruction: GeometricReconstruction = {
     building_name: 'DXF Reconstruction',
     exterior_color: '#f5e6d3',
@@ -1063,6 +1378,7 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
     doors: [],
     windows: [],
     rooms,
+    debug_image: dxfDebugImage,
     conflicts: [
       ...(rooms.length === 0
         ? [{
@@ -1412,10 +1728,36 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   let debugImage: string | undefined;
   let layoutHints: BlueprintLayoutHints | null = null;
 
-  console.log("[Infralith Vision Engine] Step 1/9 running structural pre-processing (OpenCV + Azure prebuilt-layout).");
+  const layoutHintMode = getLayoutHintMode();
+  console.log("[Infralith Vision Engine] Step 1/9 running structural pre-processing (OpenCV + OCR/layout hints).", {
+    layoutHintMode,
+  });
+
+  const preprocessed = await preprocessBlueprintImage(imageUrl);
+  const structuralInputImage = preprocessed.image;
+  console.log('[Infralith Vision Engine] Pre-process result:', {
+    source: preprocessed.source,
+    width: preprocessed.width,
+    height: preprocessed.height,
+    payloadChars: structuralInputImage.length,
+  });
+
+  let localLayoutHints: BlueprintLayoutHints | null = null;
+  if (layoutHintMode !== 'azure') {
+    localLayoutHints = await runLocalOcrLayoutHints(structuralInputImage, preprocessed.width, preprocessed.height);
+    if (localLayoutHints) {
+      console.log('[Infralith Vision Engine] Local OCR layout hints:', summarizeLayoutHints(localLayoutHints));
+    }
+  }
+
+  const shouldCallAzureLayout =
+    layoutHintMode === 'azure' ||
+    layoutHintMode === 'hybrid' ||
+    (layoutHintMode === 'auto' && !isLocalLayoutStrong(localLayoutHints));
+
   const [vectorizationAttempt, layoutAttempt] = await Promise.allSettled([
-    runVectorizationScript(imageUrl),
-    analyzeBlueprintLayoutFromBase64(imageUrl),
+    runVectorizationScript(structuralInputImage),
+    shouldCallAzureLayout ? analyzeBlueprintLayoutFromBase64(structuralInputImage) : Promise.resolve(null),
   ]);
 
   if (vectorizationAttempt.status === "fulfilled") {
@@ -1431,10 +1773,15 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   }
 
   if (layoutAttempt.status === "fulfilled") {
-    layoutHints = layoutAttempt.value;
-    console.log("[Infralith Vision Engine] Layout hint output:", summarizeLayoutHints(layoutHints));
+    const azureLayoutHints = layoutAttempt.value;
+    layoutHints = mergeLayoutHintSources(localLayoutHints, azureLayoutHints);
+    console.log("[Infralith Vision Engine] Layout hint output:", {
+      source: shouldCallAzureLayout ? (localLayoutHints ? 'merged-local-azure' : 'azure') : (localLayoutHints ? 'local' : 'none'),
+      ...summarizeLayoutHints(layoutHints),
+    });
   } else {
     const e: any = layoutAttempt.reason;
+    layoutHints = localLayoutHints;
     console.warn(`[Infralith Vision Engine] Layout hint extraction failed: ${e?.message || e}.`);
   }
 
@@ -1454,8 +1801,8 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     OPENCV VECTOR HINTS:
     ${vectorizationHints ? JSON.stringify(vectorizationHints, null, 2) : "Not available."}
 
-    AZURE DOCUMENT LAYOUT HINTS (PREBUILT-LAYOUT):
-    I also extracted OCR line polygons and dimension anchors using Azure Document Intelligence prebuilt-layout. Use these as an additional constraint for wall tracing and scale calibration.
+    OCR LAYOUT HINTS (LOCAL/AZURE):
+    I also extracted OCR line polygons and dimension anchors from local/Azure layout analyzers. Use these as an additional constraint for wall tracing and scale calibration.
     LAYOUT HINTS:
     ${layoutHints ? JSON.stringify(layoutHints, null, 2) : "Not available."}
 

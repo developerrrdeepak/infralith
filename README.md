@@ -39,14 +39,30 @@ This repository has been cleaned and reorganized for maintainability, with expli
 - Storage and backend: `AZURE_COSMOS_CONNECTION_STRING`, `USER_LOOKUP_URL`, `GNEWS_API_KEY`
 - CAD conversion (optional for DWG): `INFRALITH_DWG_TO_DXF_COMMAND`
 - Vectorization (optional): `INFRALITH_VECTOR_ENGINE` (`auto|opencvjs|python`), `INFRALITH_PYTHON_BIN`
+- Layout/OCR mode (optional): `INFRALITH_LAYOUT_HINT_MODE` (`auto|azure|local|hybrid`), `INFRALITH_ENABLE_LOCAL_OCR`
+- Image pre-processing (optional): `INFRALITH_USE_SHARP_PREPROCESS`, `INFRALITH_PREPROCESS_MAX_DIM`, `INFRALITH_PREPROCESS_THRESHOLD`
+- DXF debug rasterization (optional): `INFRALITH_DXF_DEBUG_CANVAS`, `INFRALITH_DXF_DEBUG_CANVAS_SIZE`
 
-## Optional Native-Free Vectorization
+## Optional Local Processing Stack
 
 - Install OpenCV.js WASM runtime for Node pre-processing:
   ```bash
   npm install @techstark/opencv-js
   ```
-- With `INFRALITH_VECTOR_ENGINE=auto` (default), the server will try OpenCV.js first, then Python, then vision-only fallback.
+- Optional high-performance image pre-processing:
+  ```bash
+  npm install sharp
+  ```
+- Optional local OCR for dimension/label extraction:
+  ```bash
+  npm install tesseract.js
+  ```
+- Optional DXF line preview rendering:
+  ```bash
+  npm install canvas
+  ```
+- With `INFRALITH_VECTOR_ENGINE=auto` (default), the server tries OpenCV.js first, then Python, then vision-only fallback.
+- With `INFRALITH_LAYOUT_HINT_MODE=auto` (default), local OCR is used first (if installed), and Azure layout calls are used only when local hints are weak.
 
 ## Repository Layout
 
