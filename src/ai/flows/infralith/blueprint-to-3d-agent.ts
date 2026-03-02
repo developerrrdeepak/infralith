@@ -720,8 +720,9 @@ async function runPythonVectorizationScript(base64Image: string): Promise<Vector
 
 async function runVectorizationScript(base64Image: string): Promise<VectorizationResult> {
   const preference = (process.env.INFRALITH_VECTOR_ENGINE || 'opencvjs').trim().toLowerCase();
+  const isCloudRuntime = !!process.env.WEBSITE_SITE_NAME || !!process.env.WEBSITE_INSTANCE_ID;
   const allowOpenCvJs = preference !== 'python';
-  const allowPython = preference !== 'opencvjs';
+  const allowPython = preference === 'python' || (preference === 'auto' && !isCloudRuntime);
 
   let openCvError: unknown = null;
   if (allowOpenCvJs) {
@@ -2123,13 +2124,47 @@ export async function generateRealTimeAsset(description: string): Promise<AIAsse
     5. Aesthetics: Select high - end, realistic HEX colors.
 
     Make it look extremely premium, detailed, and structurally correct.
+
+    OUTPUT STRICTLY THIS SHAPE (NO BUILDING FIELDS):
+    {
+      "name": "asset name",
+      "parts": [
+        {
+          "name": "part name",
+          "position": [x, y, z],
+          "size": [w, h, d],
+          "color": "#hex",
+          "material": "wood|metal|glass|plastic|stone|cloth"
+        }
+      ]
+    }
   `;
 
   try {
-    const result = await generateAzureObject<AIAsset>(prompt, AIAssetSchema);
-    if (!result || !result.parts || result.parts.length === 0) {
+    let result = await generateAzureObject<AIAsset>(prompt, AIAssetSchema);
+    if (!result || !Array.isArray(result.parts) || result.parts.length === 0) {
       throw new Error("Asset Generation Failed.");
     }
+
+    if (result.parts.length < 4) {
+      const retryPrompt = `${prompt}
+
+CORRECTION:
+- Previous result was under-detailed.
+- Return at least 4 distinct parts.
+- Each part must have unique position and size.
+`;
+      console.warn("[Procedural Voxel Engine] Under-detailed asset detected. Retrying with stricter part-count constraints.");
+      const retried = await generateAzureObject<AIAsset>(retryPrompt, AIAssetSchema);
+      if (retried && Array.isArray(retried.parts) && retried.parts.length >= result.parts.length) {
+        result = retried;
+      }
+    }
+
+    console.log("[Procedural Voxel Engine] Asset summary:", {
+      name: result.name,
+      partCount: result.parts.length,
+    });
     return result;
   } catch (e) {
     console.error("[Procedural Voxel Engine] Error calling Azure OpenAI for asset:", e);

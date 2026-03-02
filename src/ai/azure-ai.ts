@@ -32,6 +32,27 @@ const summarizeGeometry = (payload: any) => ({
     buildingName: payload?.building_name || 'N/A',
 });
 
+const summarizeAsset = (payload: any) => ({
+    assetName: payload?.name || 'N/A',
+    partCount: Array.isArray(payload?.parts) ? payload.parts.length : 0,
+    materials: Array.isArray(payload?.parts)
+        ? Array.from(new Set(payload.parts.map((p: any) => p?.material).filter(Boolean))).slice(0, 8)
+        : [],
+});
+
+const summarizeStructured = (payload: any) => {
+    if (Array.isArray(payload?.parts)) {
+        return { mode: 'asset', ...summarizeAsset(payload) };
+    }
+    if (Array.isArray(payload?.walls) || Array.isArray(payload?.rooms) || Array.isArray(payload?.doors) || Array.isArray(payload?.windows)) {
+        return { mode: 'geometry', ...summarizeGeometry(payload) };
+    }
+    if (payload && typeof payload === 'object') {
+        return { mode: 'generic', keys: Object.keys(payload).slice(0, 12) };
+    }
+    return { mode: 'primitive', type: typeof payload };
+};
+
 const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
 const DIMENSION_TEXT_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
@@ -290,7 +311,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
 
                 const durationMs = Date.now() - startedAt;
                 console.log(`[Azure Vision via AI SDK] Step 3/4 response received in ${durationMs}ms.`);
-                console.log(`[Azure Vision via AI SDK] Structured result summary:`, summarizeGeometry(result.object));
+                console.log(`[Azure Vision via AI SDK] Structured result summary:`, summarizeStructured(result.object));
                 console.log(`[Azure Vision via AI SDK] Step 4/4 returning structured object.`);
                 return result.object as unknown as T;
             } catch (error: any) {
@@ -345,7 +366,7 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
 
                 const durationMs = Date.now() - startedAt;
                 console.log(`[Azure AI SDK] Step 2/3 response received in ${durationMs}ms.`);
-                console.log(`[Azure AI SDK] Structured result summary:`, summarizeGeometry(result.object));
+                console.log(`[Azure AI SDK] Structured result summary:`, summarizeStructured(result.object));
                 console.log(`[Azure AI SDK] Step 3/3 returning structured object.`);
                 return result.object as unknown as T;
             } catch (error: any) {
