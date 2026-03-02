@@ -379,65 +379,79 @@ function AIAssetRenderer({ description, width, height, depth, fallbackColor, isW
 
 // -- Wall with CSG Openings --
 
-const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWalkthrough }: any) => {
+const WallSegment = React.memo(function WallSegment({
+    wall,
+    wallWindows,
+    wallDoors,
+    defaultColor,
+    onSelect,
+    isWalkthrough,
+    useCsg = true,
+    renderWallMesh = true,
+    renderOpeningAssets = true
+}: any) {
     const dx = wall.end[0] - wall.start[0];
     const dz = wall.end[1] - wall.start[1];
     const len = Math.sqrt(dx * dx + dz * dz);
     const ang = Math.atan2(dz, dx);
     const cx = (wall.start[0] + wall.end[0]) / 2;
     const cz = (wall.start[1] + wall.end[1]) / 2;
-    const baseY = (wall.floor_level || 0) * 2.8;
-
-    // Filter windows/doors belonging to this wall
-    const wallWindows = allWindows.filter((w: any) => w.host_wall_id === wall.id || w.host_wall_id?.toString() === wall.id?.toString());
-    const wallDoors = allDoors.filter((d: any) => d.host_wall_id === wall.id || d.host_wall_id?.toString() === wall.id?.toString());
+    const baseY = (wall.floor_level || 0) * 2.8 + (wall.base_offset || 0);
 
     return (
         <group position={[cx, baseY + wall.height / 2, cz]} rotation={[0, -ang, 0]}>
-            <mesh castShadow receiveShadow
-                onClick={(e) => { e.stopPropagation(); onSelect?.({ type: 'wall', data: wall }) }}
-                onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
-                onPointerOut={() => { document.body.style.cursor = 'auto'; }}
-            >
-                <Geometry>
-                    <Base geometry={new THREE.BoxGeometry(len, wall.height, wall.thickness)} />
+            {renderWallMesh && (
+                <>
+                    <mesh castShadow receiveShadow
+                        onClick={(e) => { e.stopPropagation(); onSelect?.({ type: 'wall', data: wall }) }}
+                        onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
+                        onPointerOut={() => { document.body.style.cursor = 'auto'; }}
+                    >
+                        {useCsg ? (
+                            <Geometry>
+                                <Base geometry={new THREE.BoxGeometry(len, wall.height, wall.thickness)} />
 
-                    {/* Subtract Windows */}
-                    {wallWindows.map((win: any) => {
-                        const winDx = win.position[0] - wall.start[0];
-                        const winDz = win.position[1] - wall.start[1];
-                        const dist = (winDx * dx + winDz * dz) / len;
-                        const localX = dist - len / 2;
-                        const wh = 1.2;
-                        return (
-                            <Subtraction key={win.id} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
-                                <boxGeometry args={[win.width, wh, wall.thickness + 0.1]} />
-                            </Subtraction>
-                        );
-                    })}
+                                {/* Subtract Windows */}
+                                {wallWindows.map((win: any) => {
+                                    const winDx = win.position[0] - wall.start[0];
+                                    const winDz = win.position[1] - wall.start[1];
+                                    const dist = (winDx * dx + winDz * dz) / len;
+                                    const localX = dist - len / 2;
+                                    const wh = 1.2;
+                                    return (
+                                        <Subtraction key={win.id} position={[localX, win.sill_height + wh / 2 - wall.height / 2, 0]}>
+                                            <boxGeometry args={[win.width, wh, wall.thickness + 0.1]} />
+                                        </Subtraction>
+                                    );
+                                })}
 
-                    {/* Subtract Doors */}
-                    {wallDoors.map((door: any) => {
-                        const doorDx = door.position[0] - wall.start[0];
-                        const doorDz = door.position[1] - wall.start[1];
-                        const dist = (doorDx * dx + doorDz * dz) / len;
-                        const localX = dist - len / 2;
-                        return (
-                            <Subtraction key={door.id} position={[localX, door.height / 2 - wall.height / 2, 0]}>
-                                <boxGeometry args={[door.width, door.height, wall.thickness + 0.1]} />
-                            </Subtraction>
-                        );
-                    })}
-                </Geometry>
-                <meshStandardMaterial color={wall.color || defaultColor} roughness={0.7} />
-                <Edges color="#00000020" threshold={15} />
-            </mesh>
+                                {/* Subtract Doors */}
+                                {wallDoors.map((door: any) => {
+                                    const doorDx = door.position[0] - wall.start[0];
+                                    const doorDz = door.position[1] - wall.start[1];
+                                    const dist = (doorDx * dx + doorDz * dz) / len;
+                                    const localX = dist - len / 2;
+                                    return (
+                                        <Subtraction key={door.id} position={[localX, door.height / 2 - wall.height / 2, 0]}>
+                                            <boxGeometry args={[door.width, door.height, wall.thickness + 0.1]} />
+                                        </Subtraction>
+                                    );
+                                })}
+                            </Geometry>
+                        ) : (
+                            <boxGeometry args={[len, wall.height, wall.thickness]} />
+                        )}
+                        <meshStandardMaterial color={wall.color || defaultColor} roughness={0.7} />
+                        <Edges color="#00000020" threshold={15} />
+                    </mesh>
 
-            {/* Skirting Baseboard for Interior */}
-            {!wall.is_exterior && <SkirtingBoard width={len} depth={wall.thickness} />}
+                    {/* Skirting Baseboard for Interior */}
+                    {!wall.is_exterior && <SkirtingBoard width={len} depth={wall.thickness} />}
+                </>
+            )}
 
             {/* Visual Fillers for Glass and Frames Generated by OpenAI */}
-            {wallWindows.map((win: any) => {
+            {renderOpeningAssets && wallWindows.map((win: any) => {
                 const winDx = win.position[0] - wall.start[0];
                 const winDz = win.position[1] - wall.start[1];
                 const dist = (winDx * dx + winDz * dz) / len;
@@ -453,7 +467,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWal
             })}
 
             {/* Visual Fillers for Doors Generated by OpenAI */}
-            {wallDoors.map((door: any) => {
+            {renderOpeningAssets && wallDoors.map((door: any) => {
                 const doorDx = door.position[0] - wall.start[0];
                 const doorDz = door.position[1] - wall.start[1];
                 const dist = (doorDx * dx + doorDz * dz) / len;
@@ -468,7 +482,7 @@ const WallSegment = ({ wall, allWindows, allDoors, defaultColor, onSelect, isWal
             })}
         </group>
     );
-};
+});
 
 function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkthrough, humanModelUrl }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void, isWalkthrough?: boolean, humanModelUrl?: string | null }) {
     if (!data) return null;
@@ -478,6 +492,29 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
     const defaultExterior = data.exterior_color || '#f5e6d3';
     const defaultInterior = '#faf7f2';
     const defaultFloor = '#e8d5b7';
+    const totalOpenings = (data.windows?.length || 0) + (data.doors?.length || 0);
+    const serverWallSolids = Array.isArray(data.wallSolids) ? data.wallSolids : [];
+    const useServerCuts = serverWallSolids.length > 0;
+    const useCsg = !useServerCuts && totalOpenings <= 40;
+
+    const openingsByWall = useMemo(() => {
+        const windowsMap = new Map<string, any[]>();
+        const doorsMap = new Map<string, any[]>();
+
+        for (const win of data.windows || []) {
+            const key = String(win.host_wall_id);
+            if (!windowsMap.has(key)) windowsMap.set(key, []);
+            windowsMap.get(key)!.push(win);
+        }
+
+        for (const door of data.doors || []) {
+            const key = String(door.host_wall_id);
+            if (!doorsMap.has(key)) doorsMap.set(key, []);
+            doorsMap.get(key)!.push(door);
+        }
+
+        return { windowsMap, doorsMap };
+    }, [data.windows, data.doors]);
 
     // Calculate building bounds for boundary wall
     const allX = data.walls.flatMap(w => [w.start[0], w.end[0]]);
@@ -551,18 +588,44 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                         );
                     })}
 
-                    {/* Walls, Windows, and Doors (Integrated via CSG) */}
-                    {data.walls.filter(w => !visibleElements || visibleElements.has(getVisibilityKey('wall', w.id))).map((wall, i) => (
-                        <WallSegment
-                            key={`wall - ${i} `}
-                            wall={wall}
-                            allWindows={data.windows}
-                            allDoors={data.doors}
-                            defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
-                            onSelect={onSelect}
-                            isWalkthrough={isWalkthrough}
-                        />
-                    ))}
+                    {/* Walls (server pre-cut solids when available, else CSG/dynamic wall mesh) */}
+                    {(useServerCuts ? serverWallSolids : data.walls)
+                        .filter((wall) => {
+                            const visibilityWallId = wall.source_wall_id ?? wall.id;
+                            return !visibleElements || visibleElements.has(getVisibilityKey('wall', visibilityWallId));
+                        })
+                        .map((wall, i) => (
+                            <WallSegment
+                                key={`wall-mesh-${i}-${wall.id}`}
+                                wall={wall}
+                                wallWindows={useServerCuts ? [] : (openingsByWall.windowsMap.get(String(wall.id)) || [])}
+                                wallDoors={useServerCuts ? [] : (openingsByWall.doorsMap.get(String(wall.id)) || [])}
+                                defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
+                                onSelect={onSelect}
+                                isWalkthrough={isWalkthrough}
+                                useCsg={useCsg}
+                                renderWallMesh={true}
+                                renderOpeningAssets={!useServerCuts}
+                            />
+                        ))}
+
+                    {/* In server pre-cut mode, render door/window assets once using original host walls */}
+                    {useServerCuts && data.walls
+                        .filter(w => !visibleElements || visibleElements.has(getVisibilityKey('wall', w.id)))
+                        .map((wall, i) => (
+                            <WallSegment
+                                key={`wall-openings-${i}-${wall.id}`}
+                                wall={wall}
+                                wallWindows={openingsByWall.windowsMap.get(String(wall.id)) || []}
+                                wallDoors={openingsByWall.doorsMap.get(String(wall.id)) || []}
+                                defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
+                                onSelect={onSelect}
+                                isWalkthrough={isWalkthrough}
+                                useCsg={false}
+                                renderWallMesh={false}
+                                renderOpeningAssets={true}
+                            />
+                        ))}
 
                     {/* Procedurally Generated Furniture / Decor */}
                     {data.furnitures?.map((furniture, i) => {

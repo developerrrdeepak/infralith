@@ -31,6 +31,7 @@ const AIAssetSchema = z.object({
 
 const summarizeReconstruction = (payload: GeometricReconstruction) => ({
   walls: payload?.walls?.length || 0,
+  wallSolids: payload?.wallSolids?.length || 0,
   rooms: payload?.rooms?.length || 0,
   doors: payload?.doors?.length || 0,
   windows: payload?.windows?.length || 0,
@@ -245,6 +246,106 @@ const convexHull = (points: [number, number][]): [number, number][] => {
   return [...lower, ...upper];
 };
 
+const snapPoint = (point: [number, number], tolerance = 0.12): [number, number] => {
+  const t = Math.max(0.01, tolerance);
+  return [
+    Number((Math.round(point[0] / t) * t).toFixed(3)),
+    Number((Math.round(point[1] / t) * t).toFixed(3)),
+  ];
+};
+
+const pointKey = (point: [number, number]) => `${point[0].toFixed(3)},${point[1].toFixed(3)}`;
+
+const extractConcaveBoundaryFromWalls = (
+  walls: Array<{ start: [number, number]; end: [number, number] }>,
+  tolerance = 0.12
+): [number, number][] | null => {
+  const adjacency = new Map<string, Set<string>>();
+  const keyToPoint = new Map<string, [number, number]>();
+
+  for (const wall of walls) {
+    if (!Array.isArray(wall?.start) || !Array.isArray(wall?.end)) continue;
+    const a = snapPoint([Number(wall.start[0]), Number(wall.start[1])], tolerance);
+    const b = snapPoint([Number(wall.end[0]), Number(wall.end[1])], tolerance);
+    const aKey = pointKey(a);
+    const bKey = pointKey(b);
+    if (aKey === bKey) continue;
+
+    keyToPoint.set(aKey, a);
+    keyToPoint.set(bKey, b);
+
+    if (!adjacency.has(aKey)) adjacency.set(aKey, new Set());
+    if (!adjacency.has(bKey)) adjacency.set(bKey, new Set());
+    adjacency.get(aKey)!.add(bKey);
+    adjacency.get(bKey)!.add(aKey);
+  }
+
+  if (adjacency.size < 3) return null;
+
+  const visited = new Set<string>();
+  const componentBestPolygons: [number, number][][] = [];
+
+  for (const startKey of adjacency.keys()) {
+    if (visited.has(startKey)) continue;
+
+    const queue = [startKey];
+    const component: string[] = [];
+    visited.add(startKey);
+
+    while (queue.length > 0) {
+      const key = queue.shift()!;
+      component.push(key);
+      for (const neighbor of adjacency.get(key) || []) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+
+    // For deterministic loop tracing, prefer components where every node has degree 2.
+    const hasNonCycleDegree = component.some((key) => (adjacency.get(key)?.size || 0) !== 2);
+    if (hasNonCycleDegree) continue;
+
+    const orderedStart = [...component].sort((a, b) => {
+      const pa = keyToPoint.get(a)!;
+      const pb = keyToPoint.get(b)!;
+      return pa[0] === pb[0] ? pa[1] - pb[1] : pa[0] - pb[0];
+    })[0];
+
+    const neighbors = [...(adjacency.get(orderedStart) || [])];
+    if (neighbors.length !== 2) continue;
+
+    const orderedKeys: string[] = [orderedStart];
+    let prevKey = orderedStart;
+    let currentKey = neighbors[0];
+    let guard = 0;
+    const guardLimit = component.length + 5;
+
+    while (guard++ < guardLimit) {
+      if (currentKey === orderedStart) break;
+      orderedKeys.push(currentKey);
+      const nextCandidates = [...(adjacency.get(currentKey) || [])];
+      if (nextCandidates.length !== 2) break;
+      const nextKey = nextCandidates[0] === prevKey ? nextCandidates[1] : nextCandidates[0];
+      prevKey = currentKey;
+      currentKey = nextKey;
+    }
+
+    if (currentKey !== orderedStart || orderedKeys.length < 3) continue;
+    const polygon = orderedKeys
+      .map((key) => keyToPoint.get(key))
+      .filter((p): p is [number, number] => Array.isArray(p));
+
+    if (polygon.length >= 3) {
+      componentBestPolygons.push(polygon);
+    }
+  }
+
+  if (componentBestPolygons.length === 0) return null;
+  componentBestPolygons.sort((a, b) => Math.abs(polygonArea(b)) - Math.abs(polygonArea(a)));
+  return componentBestPolygons[0];
+};
+
 const inferRoofFromWallFootprint = (payload: GeometricReconstruction): GeometricReconstruction => {
   if (payload.roof || !Array.isArray(payload.walls) || payload.walls.length < 3) {
     return payload;
@@ -257,7 +358,9 @@ const inferRoofFromWallFootprint = (payload: GeometricReconstruction): Geometric
   );
   if (footprintPoints.length < 3) return payload;
 
-  let polygon = convexHull(footprintPoints);
+  let polygon =
+    extractConcaveBoundaryFromWalls(sourceWalls.map((wall) => ({ start: wall.start, end: wall.end }))) ||
+    convexHull(footprintPoints);
   if (polygon.length < 3) return payload;
   if (polygonArea(polygon) < 0) {
     polygon = [...polygon].reverse();
@@ -286,6 +389,527 @@ const inferRoofFromWallFootprint = (payload: GeometricReconstruction): Geometric
     },
     conflicts: nextConflicts,
   };
+};
+
+const pointDistance = (a: [number, number], b: [number, number]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+const closestPointOnSegment = (
+  point: [number, number],
+  start: [number, number],
+  end: [number, number]
+): { point: [number, number]; t: number; distance: number } => {
+  const sx = start[0];
+  const sz = start[1];
+  const ex = end[0];
+  const ez = end[1];
+  const vx = ex - sx;
+  const vz = ez - sz;
+  const lenSq = vx * vx + vz * vz;
+  if (lenSq < 1e-9) {
+    const d = pointDistance(point, start);
+    return { point: start, t: 0, distance: d };
+  }
+  const tRaw = ((point[0] - sx) * vx + (point[1] - sz) * vz) / lenSq;
+  const t = Math.max(0, Math.min(1, tRaw));
+  const projected: [number, number] = [sx + vx * t, sz + vz * t];
+  return { point: projected, t, distance: pointDistance(point, projected) };
+};
+
+const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const applyWallMiterJoins = (
+  walls: GeometricReconstruction['walls'],
+  tolerance = 0.12
+): { walls: GeometricReconstruction['walls']; adjustedEndpointCount: number } => {
+  if (!Array.isArray(walls) || walls.length < 2) {
+    return { walls, adjustedEndpointCount: 0 };
+  }
+
+  type EndpointRef = {
+    wallIndex: number;
+    atStart: boolean;
+    directionAway: [number, number];
+    length: number;
+    thickness: number;
+  };
+
+  const endpointGroups = new Map<string, EndpointRef[]>();
+  const pushEndpoint = (key: string, endpoint: EndpointRef) => {
+    const group = endpointGroups.get(key) || [];
+    group.push(endpoint);
+    endpointGroups.set(key, group);
+  };
+
+  for (let idx = 0; idx < walls.length; idx += 1) {
+    const wall = walls[idx];
+    const dx = wall.end[0] - wall.start[0];
+    const dz = wall.end[1] - wall.start[1];
+    const length = Math.hypot(dx, dz);
+    if (!Number.isFinite(length) || length < 1e-6) continue;
+
+    const ux = dx / length;
+    const uz = dz / length;
+    const startKey = pointKey(snapPoint(wall.start, tolerance));
+    const endKey = pointKey(snapPoint(wall.end, tolerance));
+
+    pushEndpoint(startKey, {
+      wallIndex: idx,
+      atStart: true,
+      directionAway: [ux, uz],
+      length,
+      thickness: Math.max(0.08, Number(wall.thickness || 0.115)),
+    });
+    pushEndpoint(endKey, {
+      wallIndex: idx,
+      atStart: false,
+      directionAway: [-ux, -uz],
+      length,
+      thickness: Math.max(0.08, Number(wall.thickness || 0.115)),
+    });
+  }
+
+  const adjustedWalls: GeometricReconstruction['walls'] = walls.map((wall) => ({
+    ...wall,
+    start: [Number(wall.start[0].toFixed(3)), Number(wall.start[1].toFixed(3))],
+    end: [Number(wall.end[0].toFixed(3)), Number(wall.end[1].toFixed(3))],
+  }));
+
+  const MIN_JOIN_ANGLE = (15 * Math.PI) / 180;
+  const MAX_JOIN_ANGLE = (165 * Math.PI) / 180;
+  const MAX_ENDPOINT_TRIM = 0.35;
+  let adjustedEndpointCount = 0;
+
+  for (const endpoints of endpointGroups.values()) {
+    // Restrict to standard corner joins; skip T-junctions/crossings.
+    if (endpoints.length !== 2) continue;
+    const [a, b] = endpoints;
+    if (a.wallIndex === b.wallIndex) continue;
+
+    const dot = clampNumber(
+      a.directionAway[0] * b.directionAway[0] + a.directionAway[1] * b.directionAway[1],
+      -1,
+      1
+    );
+    const angle = Math.acos(dot);
+    if (!Number.isFinite(angle) || angle < MIN_JOIN_ANGLE || angle > MAX_JOIN_ANGLE) continue;
+
+    const tanHalf = Math.tan(angle / 2);
+    if (!Number.isFinite(tanHalf) || tanHalf < 1e-6) continue;
+
+    const trimFor = (self: EndpointRef, other: EndpointRef) => {
+      const halfThickness = Math.max(self.thickness / 2, other.thickness / 2);
+      const rawTrim = halfThickness / tanHalf;
+      if (!Number.isFinite(rawTrim) || rawTrim <= 0) return 0;
+      return Math.min(rawTrim, self.length * 0.45, MAX_ENDPOINT_TRIM);
+    };
+
+    const trimA = trimFor(a, b);
+    const trimB = trimFor(b, a);
+
+    if (trimA > 0.005) {
+      const wall = adjustedWalls[a.wallIndex];
+      const base = a.atStart ? wall.start : wall.end;
+      const moved: [number, number] = [
+        Number((base[0] + a.directionAway[0] * trimA).toFixed(3)),
+        Number((base[1] + a.directionAway[1] * trimA).toFixed(3)),
+      ];
+      if (a.atStart) wall.start = moved;
+      else wall.end = moved;
+      adjustedEndpointCount += 1;
+    }
+
+    if (trimB > 0.005) {
+      const wall = adjustedWalls[b.wallIndex];
+      const base = b.atStart ? wall.start : wall.end;
+      const moved: [number, number] = [
+        Number((base[0] + b.directionAway[0] * trimB).toFixed(3)),
+        Number((base[1] + b.directionAway[1] * trimB).toFixed(3)),
+      ];
+      if (b.atStart) wall.start = moved;
+      else wall.end = moved;
+      adjustedEndpointCount += 1;
+    }
+  }
+
+  const usableWalls = adjustedWalls.filter((wall) => {
+    const dx = wall.end[0] - wall.start[0];
+    const dz = wall.end[1] - wall.start[1];
+    return Math.hypot(dx, dz) >= 0.25;
+  });
+
+  return { walls: usableWalls, adjustedEndpointCount };
+};
+
+const buildServerCutWallSolids = (
+  walls: GeometricReconstruction['walls'],
+  doors: GeometricReconstruction['doors'],
+  windows: GeometricReconstruction['windows']
+): GeometricReconstruction['walls'] => {
+  if (!Array.isArray(walls) || walls.length === 0) return [];
+
+  const EPS = 1e-6;
+  const MIN_SOLID_LENGTH = 0.08;
+  const MIN_SOLID_HEIGHT = 0.08;
+  const DEFAULT_WINDOW_HEIGHT = 1.2;
+
+  const doorsByWall = new Map<string, GeometricReconstruction['doors']>();
+  const windowsByWall = new Map<string, GeometricReconstruction['windows']>();
+
+  for (const door of doors || []) {
+    const key = String(door.host_wall_id);
+    const list = doorsByWall.get(key) || [];
+    list.push(door);
+    doorsByWall.set(key, list);
+  }
+  for (const win of windows || []) {
+    const key = String(win.host_wall_id);
+    const list = windowsByWall.get(key) || [];
+    list.push(win);
+    windowsByWall.set(key, list);
+  }
+
+  type CutRange = { x0: number; x1: number; y0: number; y1: number };
+  let solidCounter = 0;
+  const solids: GeometricReconstruction['walls'] = [];
+
+  const mergeVerticalRanges = (ranges: Array<[number, number]>) => {
+    if (ranges.length === 0) return [] as Array<[number, number]>;
+    const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [sorted[0]];
+    for (let i = 1; i < sorted.length; i += 1) {
+      const [start, end] = sorted[i];
+      const last = merged[merged.length - 1];
+      if (start <= last[1] + EPS) {
+        last[1] = Math.max(last[1], end);
+      } else {
+        merged.push([start, end]);
+      }
+    }
+    return merged;
+  };
+
+  const uniqueSorted = (values: number[]) => {
+    values.sort((a, b) => a - b);
+    const out: number[] = [];
+    for (const value of values) {
+      if (out.length === 0 || Math.abs(out[out.length - 1] - value) > 1e-4) {
+        out.push(value);
+      }
+    }
+    return out;
+  };
+
+  for (const wall of walls) {
+    const sx = Number(wall.start[0]);
+    const sz = Number(wall.start[1]);
+    const ex = Number(wall.end[0]);
+    const ez = Number(wall.end[1]);
+    const dx = ex - sx;
+    const dz = ez - sz;
+    const length = Math.hypot(dx, dz);
+    const wallHeight = Math.max(0, Number(wall.height || 0));
+    if (!Number.isFinite(length) || length < MIN_SOLID_LENGTH || wallHeight < MIN_SOLID_HEIGHT) continue;
+
+    const ux = dx / length;
+    const uz = dz / length;
+    const wallDoors = doorsByWall.get(String(wall.id)) || [];
+    const wallWindows = windowsByWall.get(String(wall.id)) || [];
+    const cuts: CutRange[] = [];
+
+    const pushCut = (x0: number, x1: number, y0: number, y1: number) => {
+      const cx0 = clampNumber(Math.min(x0, x1), 0, length);
+      const cx1 = clampNumber(Math.max(x0, x1), 0, length);
+      const cy0 = clampNumber(Math.min(y0, y1), 0, wallHeight);
+      const cy1 = clampNumber(Math.max(y0, y1), 0, wallHeight);
+      if (cx1 - cx0 < MIN_SOLID_LENGTH || cy1 - cy0 < MIN_SOLID_HEIGHT) return;
+      cuts.push({ x0: cx0, x1: cx1, y0: cy0, y1: cy1 });
+    };
+
+    for (const door of wallDoors) {
+      const px = Number(door.position[0]);
+      const pz = Number(door.position[1]);
+      if (!Number.isFinite(px) || !Number.isFinite(pz)) continue;
+      const center = clampNumber((px - sx) * ux + (pz - sz) * uz, 0, length);
+      const halfWidth = Math.max(0.25, Number(door.width || 0.9) / 2);
+      const doorHeight = clampNumber(Number(door.height || 2.1), 0, wallHeight);
+      pushCut(center - halfWidth, center + halfWidth, 0, doorHeight);
+    }
+
+    for (const win of wallWindows) {
+      const px = Number(win.position[0]);
+      const pz = Number(win.position[1]);
+      if (!Number.isFinite(px) || !Number.isFinite(pz)) continue;
+      const center = clampNumber((px - sx) * ux + (pz - sz) * uz, 0, length);
+      const halfWidth = Math.max(0.2, Number(win.width || 1) / 2);
+      const sill = clampNumber(Number(win.sill_height || 0.9), 0, wallHeight);
+      const head = clampNumber(sill + DEFAULT_WINDOW_HEIGHT, 0, wallHeight);
+      pushCut(center - halfWidth, center + halfWidth, sill, head);
+    }
+
+    const addSolid = (x0: number, x1: number, y0: number, y1: number) => {
+      const segLength = x1 - x0;
+      const segHeight = y1 - y0;
+      if (segLength < MIN_SOLID_LENGTH || segHeight < MIN_SOLID_HEIGHT) return;
+      const wx0 = sx + ux * x0;
+      const wz0 = sz + uz * x0;
+      const wx1 = sx + ux * x1;
+      const wz1 = sz + uz * x1;
+      solidCounter += 1;
+      solids.push({
+        id: `${wall.id}-solid-${solidCounter}`,
+        source_wall_id: wall.id,
+        start: [Number(wx0.toFixed(3)), Number(wz0.toFixed(3))],
+        end: [Number(wx1.toFixed(3)), Number(wz1.toFixed(3))],
+        thickness: Number(wall.thickness || 0.115),
+        height: Number(segHeight.toFixed(3)),
+        base_offset: Number(y0.toFixed(3)),
+        color: wall.color,
+        is_exterior: wall.is_exterior,
+        floor_level: wall.floor_level,
+      });
+    };
+
+    if (cuts.length === 0) {
+      addSolid(0, length, 0, wallHeight);
+      continue;
+    }
+
+    const breakpoints = uniqueSorted([0, length, ...cuts.flatMap((cut) => [cut.x0, cut.x1])]);
+    for (let i = 0; i < breakpoints.length - 1; i += 1) {
+      const ix0 = breakpoints[i];
+      const ix1 = breakpoints[i + 1];
+      if (ix1 - ix0 < MIN_SOLID_LENGTH) continue;
+      const xMid = (ix0 + ix1) / 2;
+      const activeCuts = cuts.filter((cut) => xMid >= cut.x0 - EPS && xMid <= cut.x1 + EPS);
+      if (activeCuts.length === 0) {
+        addSolid(ix0, ix1, 0, wallHeight);
+        continue;
+      }
+
+      const mergedVerticalCuts = mergeVerticalRanges(
+        activeCuts.map((cut) => [cut.y0, cut.y1] as [number, number])
+      );
+
+      let cursor = 0;
+      for (const [cy0, cy1] of mergedVerticalCuts) {
+        if (cy0 - cursor >= MIN_SOLID_HEIGHT) {
+          addSolid(ix0, ix1, cursor, cy0);
+        }
+        cursor = Math.max(cursor, cy1);
+      }
+      if (wallHeight - cursor >= MIN_SOLID_HEIGHT) {
+        addSolid(ix0, ix1, cursor, wallHeight);
+      }
+    }
+  }
+
+  return solids;
+};
+
+const normalizeReconstructionGeometry = (payload: GeometricReconstruction): GeometricReconstruction => {
+  if (!Array.isArray(payload?.walls) || payload.walls.length === 0) return payload;
+
+  const snapTolerance = 0.12;
+  const axisSnapRatio = 0.2;
+
+  const cluster = new Map<string, { sx: number; sz: number; count: number }>();
+  const addToCluster = (point: [number, number]) => {
+    const snapped = snapPoint(point, snapTolerance);
+    const key = pointKey(snapped);
+    const slot = cluster.get(key) || { sx: 0, sz: 0, count: 0 };
+    slot.sx += point[0];
+    slot.sz += point[1];
+    slot.count += 1;
+    cluster.set(key, slot);
+  };
+
+  for (const wall of payload.walls) {
+    addToCluster(wall.start);
+    addToCluster(wall.end);
+  }
+
+  const resolvePoint = (point: [number, number]): [number, number] => {
+    const snapped = snapPoint(point, snapTolerance);
+    const key = pointKey(snapped);
+    const slot = cluster.get(key);
+    if (!slot || slot.count <= 0) {
+      return [Number(point[0].toFixed(3)), Number(point[1].toFixed(3))];
+    }
+    return [Number((slot.sx / slot.count).toFixed(3)), Number((slot.sz / slot.count).toFixed(3))];
+  };
+
+  const normalizedWalls: GeometricReconstruction['walls'] = [];
+  for (const wall of payload.walls) {
+    let start = resolvePoint(wall.start);
+    let end = resolvePoint(wall.end);
+    let dx = end[0] - start[0];
+    let dz = end[1] - start[1];
+
+    if (Math.abs(dx) <= Math.abs(dz) * axisSnapRatio) {
+      const alignedX = Number(((start[0] + end[0]) / 2).toFixed(3));
+      start = [alignedX, start[1]];
+      end = [alignedX, end[1]];
+    } else if (Math.abs(dz) <= Math.abs(dx) * axisSnapRatio) {
+      const alignedZ = Number(((start[1] + end[1]) / 2).toFixed(3));
+      start = [start[0], alignedZ];
+      end = [end[0], alignedZ];
+    }
+
+    dx = end[0] - start[0];
+    dz = end[1] - start[1];
+    if (Math.hypot(dx, dz) < 0.25) continue;
+
+    normalizedWalls.push({
+      ...wall,
+      start,
+      end,
+      thickness: Math.max(0.08, Number(wall.thickness || (wall.is_exterior ? 0.23 : 0.115))),
+      height: Math.max(2.2, Number(wall.height || 2.8)),
+    });
+  }
+
+  if (normalizedWalls.length === 0) return payload;
+  const miterResult = applyWallMiterJoins(normalizedWalls, snapTolerance);
+  const finalizedWalls = miterResult.walls;
+  if (finalizedWalls.length === 0) return payload;
+
+  const findNearestWallId = (position: [number, number]): string | number | null => {
+    let nearest: { id: string | number; distance: number } | null = null;
+    for (const wall of finalizedWalls) {
+      const projected = closestPointOnSegment(position, wall.start, wall.end);
+      if (!nearest || projected.distance < nearest.distance) {
+        nearest = { id: wall.id, distance: projected.distance };
+      }
+    }
+    return nearest?.id ?? null;
+  };
+
+  const wallIdSet = new Set(finalizedWalls.map((wall) => String(wall.id)));
+
+  const normalizedDoors = (payload.doors || []).map((door) => {
+    const hostKnown = wallIdSet.has(String(door.host_wall_id));
+    const fallbackHost = findNearestWallId(door.position);
+    return {
+      ...door,
+      host_wall_id: hostKnown ? door.host_wall_id : (fallbackHost ?? door.host_wall_id),
+      width: Math.max(0.75, Number(door.width || 0.9)),
+      height: Math.max(2.0, Number(door.height || 2.1)),
+    };
+  });
+
+  const normalizedWindows = (payload.windows || []).map((win) => {
+    const hostKnown = wallIdSet.has(String(win.host_wall_id));
+    const fallbackHost = findNearestWallId(win.position);
+    return {
+      ...win,
+      host_wall_id: hostKnown ? win.host_wall_id : (fallbackHost ?? win.host_wall_id),
+      width: Math.max(0.5, Number(win.width || 1)),
+      sill_height: Math.max(0.6, Number(win.sill_height || 0.9)),
+    };
+  });
+
+  const normalizedRooms = (payload.rooms || [])
+    .map((room) => {
+      const pts = Array.isArray(room.polygon) ? room.polygon : [];
+      const clean: [number, number][] = [];
+      for (const p of pts) {
+        if (!Array.isArray(p) || p.length < 2) continue;
+        const next: [number, number] = [Number(p[0].toFixed(3)), Number(p[1].toFixed(3))];
+        const prev = clean[clean.length - 1];
+        if (prev && pointDistance(prev, next) < 0.02) continue;
+        clean.push(next);
+      }
+      if (clean.length >= 2 && pointDistance(clean[0], clean[clean.length - 1]) < 0.02) {
+        clean.pop();
+      }
+      if (clean.length < 3) return null;
+      const ordered = polygonArea(clean) < 0 ? [...clean].reverse() : clean;
+      const area = Math.abs(polygonArea(ordered));
+      if (!Number.isFinite(area) || area < 1) return null;
+      return {
+        ...room,
+        polygon: ordered,
+        area: Number(area.toFixed(2)),
+      };
+    })
+    .filter((room): room is NonNullable<typeof room> => room != null);
+
+  const normalizedFurnitures = (payload.furnitures || []).map((item) => {
+    const initialPos: [number, number] = [Number(item.position[0]), Number(item.position[1])];
+    let best: { wallStart: [number, number]; wallEnd: [number, number]; closest: [number, number]; distance: number } | null = null;
+    for (const wall of finalizedWalls) {
+      const projected = closestPointOnSegment(initialPos, wall.start, wall.end);
+      if (!best || projected.distance < best.distance) {
+        best = { wallStart: wall.start, wallEnd: wall.end, closest: projected.point, distance: projected.distance };
+      }
+    }
+
+    if (!best) return item;
+    const clearance = Math.max(0.25, Math.min(0.9, Math.max(Number(item.width || 0.6), Number(item.depth || 0.6)) * 0.35));
+    if (best.distance >= clearance) return item;
+
+    let nx = initialPos[0] - best.closest[0];
+    let nz = initialPos[1] - best.closest[1];
+    const nLen = Math.hypot(nx, nz);
+    if (nLen < 1e-6) {
+      const wx = best.wallEnd[0] - best.wallStart[0];
+      const wz = best.wallEnd[1] - best.wallStart[1];
+      const wLen = Math.hypot(wx, wz) || 1;
+      nx = -wz / wLen;
+      nz = wx / wLen;
+    } else {
+      nx /= nLen;
+      nz /= nLen;
+    }
+
+    const delta = clearance - best.distance + 0.02;
+    return {
+      ...item,
+      position: [
+        Number((initialPos[0] + nx * delta).toFixed(3)),
+        Number((initialPos[1] + nz * delta).toFixed(3)),
+      ] as [number, number],
+    };
+  });
+
+  const wallSolids = buildServerCutWallSolids(finalizedWalls, normalizedDoors, normalizedWindows);
+
+  const normalized: GeometricReconstruction = {
+    ...payload,
+    walls: finalizedWalls,
+    wallSolids: wallSolids.length > 0 ? wallSolids : undefined,
+    doors: normalizedDoors,
+    windows: normalizedWindows,
+    rooms: normalizedRooms,
+    furnitures: normalizedFurnitures,
+  };
+
+  const droppedWalls = payload.walls.length - normalizedWalls.length;
+  if (droppedWalls > 0) {
+    normalized.conflicts = [
+      ...(normalized.conflicts || []),
+      {
+        type: 'code',
+        severity: 'low',
+        description: `Dropped ${droppedWalls} degenerate wall segment(s) during geometric normalization.`,
+        location: normalizedWalls[0].start,
+      },
+    ];
+  }
+
+  if (miterResult.adjustedEndpointCount > 0 && normalized.walls.length > 0) {
+    normalized.conflicts = [
+      ...(normalized.conflicts || []),
+      {
+        type: 'code',
+        severity: 'low',
+        description: `Applied miter corner normalization on ${miterResult.adjustedEndpointCount} wall endpoint(s) to reduce overlap artifacts.`,
+        location: normalized.walls[0].start,
+      },
+    ];
+  }
+
+  return normalized;
 };
 
 const convertPixelsToMeters = (x: number, y: number, minX: number, minY: number, scale: number): [number, number] => {
@@ -327,21 +951,32 @@ const buildVectorFallbackReconstruction = (vectorHints: any, layoutHints: Bluepr
 
   // Default normalization keeps footprint in a realistic 25m envelope.
   let metersPerPixel = 25 / maxDimPx;
-  const firstAnchor = layoutHints?.dimensionAnchors?.[0];
-  if (firstAnchor?.text && Array.isArray(firstAnchor.polygon) && firstAnchor.polygon.length >= 6) {
-    const anchorMeters = parseDimensionMeters(firstAnchor.text);
-    const poly = firstAnchor.polygon;
-    const ax1 = Number(poly[0]);
-    const ay1 = Number(poly[1]);
-    const ax2 = Number(poly[2]);
-    const ay2 = Number(poly[3]);
-    const anchorPx = Math.hypot(ax2 - ax1, ay2 - ay1);
-    if (anchorMeters && anchorPx > 5) {
-      const candidateScale = anchorMeters / anchorPx;
-      if (Number.isFinite(candidateScale) && candidateScale > 0.001 && candidateScale < 2) {
-        metersPerPixel = candidateScale;
-      }
+  const anchorScales: number[] = [];
+  for (const anchor of layoutHints?.dimensionAnchors || []) {
+    if (!anchor?.text || !Array.isArray(anchor?.polygon) || anchor.polygon.length < 6) continue;
+    const anchorMeters = parseDimensionMeters(anchor.text);
+    if (!anchorMeters || !Number.isFinite(anchorMeters) || anchorMeters <= 0) continue;
+    const coords = anchor.polygon;
+    const pairs: Array<[number, number]> = [];
+    for (let i = 0; i + 3 < coords.length; i += 2) {
+      const x1 = Number(coords[i]);
+      const y1 = Number(coords[i + 1]);
+      const x2 = Number(coords[(i + 2) % coords.length]);
+      const y2 = Number(coords[(i + 3) % coords.length]);
+      const d = Math.hypot(x2 - x1, y2 - y1);
+      if (Number.isFinite(d) && d > 1) pairs.push([d, anchorMeters / d]);
     }
+    if (pairs.length === 0) continue;
+    pairs.sort((a, b) => b[0] - a[0]);
+    const candidateScale = pairs[0][1];
+    if (candidateScale > 0.001 && candidateScale < 2) {
+      anchorScales.push(candidateScale);
+    }
+    if (anchorScales.length >= 12) break;
+  }
+  if (anchorScales.length > 0) {
+    anchorScales.sort((a, b) => a - b);
+    metersPerPixel = anchorScales[Math.floor(anchorScales.length / 2)];
   }
 
   const walls: GeometricReconstruction['walls'] = [];
@@ -477,10 +1112,8 @@ function contourMatToPoints(mat: any): Array<[number, number]> {
 
 async function loadOpenCvModule(): Promise<any> {
   if (!openCvModulePromise) {
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (
-      specifier: string
-    ) => Promise<any>;
-    openCvModulePromise = dynamicImport('@techstark/opencv-js');
+    // Keep this as a standard dynamic import so Next output tracing includes the package in standalone builds.
+    openCvModulePromise = import('@techstark/opencv-js');
   }
 
   const mod = await openCvModulePromise;
@@ -601,9 +1234,51 @@ async function runOpenCvJsVectorizationScript(base64Image: string, traceId = 'n/
     const dilateKernel = track(cv.Mat.ones(2, 2, cv.CV_8U));
     cv.dilate(wallsIsolated, wallsIsolated, dilateKernel, new cv.Point(-1, -1), 1);
 
+    // Remove tiny text-like blobs before contour and line extraction.
+    const cleanedWalls = track(cv.Mat.zeros(wallsIsolated.rows, wallsIsolated.cols, cv.CV_8UC1));
+    const noiseContours = track(new cv.MatVector());
+    const noiseHierarchy = track(new cv.Mat());
+    cv.findContours(wallsIsolated, noiseContours, noiseHierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
+    const minKeepArea = Math.max(20, Math.floor(0.00004 * width * height));
+    const smallBlock = Math.max(40, Math.floor(Math.min(width, height) * 0.06));
+    const textishArea = Math.max(180, Math.floor(0.0002 * width * height));
+    for (let i = 0; i < noiseContours.size(); i++) {
+      const cnt = noiseContours.get(i);
+      disposable.push(cnt);
+      const area = Number(cv.contourArea(cnt, false));
+      if (!Number.isFinite(area) || area <= 0) continue;
+      const rect = cv.boundingRect(cnt);
+      const rw = Number(rect?.width || 0);
+      const rh = Number(rect?.height || 0);
+      if (rw <= 0 || rh <= 0) continue;
+      const aspect = Math.max(rw, rh) / Math.max(1, Math.min(rw, rh));
+      const density = area / Math.max(1, rw * rh);
+      const tinyBlob = area < minKeepArea && Math.max(rw, rh) < smallBlock;
+      const likelyTextBlob = area < textishArea && aspect < 12 && density > 0.12 && rw < smallBlock && rh < smallBlock;
+      if (tinyBlob || likelyTextBlob) continue;
+      cv.drawContours(cleanedWalls, noiseContours, i, new cv.Scalar(255), -1);
+    }
+
+    // Morphological skeletonization to reduce double-edge wall detections.
+    const centerline = track(cv.Mat.zeros(cleanedWalls.rows, cleanedWalls.cols, cv.CV_8UC1));
+    const skeletonKernel = track(cv.getStructuringElement(cv.MORPH_CROSS, new cv.Size(3, 3)));
+    const skeletonWorking = track(cleanedWalls.clone());
+    const eroded = track(new cv.Mat());
+    const opened = track(new cv.Mat());
+    const temp = track(new cv.Mat());
+    let skeletonGuard = 0;
+    while (skeletonGuard++ < 1024) {
+      cv.erode(skeletonWorking, eroded, skeletonKernel);
+      cv.dilate(eroded, opened, skeletonKernel);
+      cv.subtract(skeletonWorking, opened, temp);
+      cv.bitwise_or(centerline, temp, centerline);
+      eroded.copyTo(skeletonWorking);
+      if (cv.countNonZero(skeletonWorking) === 0) break;
+    }
+
     const contours = track(new cv.MatVector());
     const hierarchy = track(new cv.Mat());
-    cv.findContours(wallsIsolated, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(cleanedWalls, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
     const polygons: Array<Array<[number, number]>> = [];
     const minArea = Math.max(24, Math.floor(0.00003 * width * height));
@@ -632,7 +1307,7 @@ async function runOpenCvJsVectorizationScript(base64Image: string, traceId = 'n/
 
     const minLineLength = Math.max(12, Math.floor(Math.min(width, height) * 0.03));
     const houghLines = track(new cv.Mat());
-    cv.HoughLinesP(wallsIsolated, houghLines, 1, Math.PI / 180, 60, minLineLength, 8);
+    cv.HoughLinesP(centerline, houghLines, 1, Math.PI / 180, 60, minLineLength, 8);
 
     const rawSegments: Array<[number, number, number, number, number]> = [];
     const lineData: Int32Array | undefined = houghLines?.data32S;
@@ -2129,6 +2804,7 @@ HARD CONSTRAINTS FOR THIS RETRY:
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
 
+    result = normalizeReconstructionGeometry(result);
     result = inferRoofFromWallFootprint(result);
 
     // Apply strict deterministic architectural building code checks
@@ -2241,9 +2917,10 @@ export async function generateBuildingFromDescription(description: string): Prom
     if (!result || !result.walls || result.walls.length === 0) {
       throw new Error("Architectural Generation Failed: The AI was unable to synthesize a valid structure from the given description.");
     }
+    const normalized = applyBuildingCodes(inferRoofFromWallFootprint(normalizeReconstructionGeometry(result)));
     const durationMs = Date.now() - startedAt;
-    traceLog('Infralith Architect Engine', traceId, '2/2', `Structured generation completed in ${durationMs}ms`, summarizeReconstruction(result));
-    return result;
+    traceLog('Infralith Architect Engine', traceId, '2/2', `Structured generation completed in ${durationMs}ms`, summarizeReconstruction(normalized));
+    return normalized;
   } catch (e) {
     traceLog('Infralith Architect Engine', traceId, 'error', 'Text-to-3D Pipeline Error', { error: String(e) }, 'error');
     throw e;

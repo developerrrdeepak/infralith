@@ -7,6 +7,8 @@ export interface WallGeometry {
     color?: string; // hex color for the wall
     is_exterior?: boolean;
     floor_level?: number; // 0 for Ground, 1 for First Floor, etc.
+    base_offset?: number; // vertical offset from floor base (used by pre-cut wall solids)
+    source_wall_id?: string | number; // source wall id when this wall is a derived solid segment
 }
 
 export interface DoorGeometry {
@@ -81,6 +83,7 @@ export interface AIAsset {
 
 export interface GeometricReconstruction {
     walls: WallGeometry[];
+    wallSolids?: WallGeometry[]; // pre-cut solids generated server-side to avoid client CSG
     doors: DoorGeometry[];
     windows: WindowGeometry[];
     rooms: RoomGeometry[];
