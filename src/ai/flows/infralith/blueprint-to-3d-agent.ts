@@ -60,6 +60,62 @@ const asBool = (value: string | undefined, fallback: boolean): boolean => {
   return fallback;
 };
 
+const VERBOSE_LOGS = asBool(process.env.INFRALITH_VERBOSE_LOGS, true);
+const VERBOSE_LOG_PAYLOADS = asBool(process.env.INFRALITH_VERBOSE_LOG_PAYLOADS, false);
+
+const createTraceId = (prefix: string) =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const sanitizeLogData = (value: unknown): unknown => {
+  if (VERBOSE_LOG_PAYLOADS) return value;
+  if (value == null) return value;
+  if (typeof value === 'string') {
+    return value.length > 220 ? `${value.slice(0, 220)}... (${value.length} chars)` : value;
+  }
+  if (Array.isArray(value)) {
+    return `Array(${value.length})`;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === 'string') {
+        out[k] = v.length > 140 ? `${v.slice(0, 140)}... (${v.length} chars)` : v;
+      } else if (Array.isArray(v)) {
+        out[k] = `Array(${v.length})`;
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+  return value;
+};
+
+type LogLevel = 'log' | 'warn' | 'error';
+
+const traceLog = (
+  component: string,
+  traceId: string,
+  step: string,
+  message: string,
+  data?: unknown,
+  level: LogLevel = 'log'
+) => {
+  if (!VERBOSE_LOGS && level === 'log') return;
+  const stamp = new Date().toISOString();
+  const prefix = `[${component}] [trace:${traceId}] [${step}] ${stamp} ${message}`;
+  const payload = data === undefined ? undefined : sanitizeLogData(data);
+  if (level === 'warn') {
+    payload === undefined ? console.warn(prefix) : console.warn(prefix, payload);
+    return;
+  }
+  if (level === 'error') {
+    payload === undefined ? console.error(prefix) : console.error(prefix, payload);
+    return;
+  }
+  payload === undefined ? console.log(prefix) : console.log(prefix, payload);
+};
+
 const getLayoutHintMode = (): LayoutHintMode => {
   const raw = (process.env.INFRALITH_LAYOUT_HINT_MODE || 'auto').trim().toLowerCase();
   if (raw === 'azure' || raw === 'local' || raw === 'hybrid' || raw === 'auto') {
@@ -477,9 +533,11 @@ function decodeImageWithOpenCv(cv: any, bytes: Uint8Array): any {
   }
 }
 
-async function runOpenCvJsVectorizationScript(base64Image: string): Promise<VectorizationResult> {
+async function runOpenCvJsVectorizationScript(base64Image: string, traceId = 'n/a'): Promise<VectorizationResult> {
   const startedAt = Date.now();
-  console.log(`[Vectorization/OpenCV.js] Step 1/4 loading OpenCV.js runtime. payloadChars=${base64Image.length}`);
+  traceLog('Vectorization/OpenCV.js', traceId, '1/4', 'loading OpenCV.js runtime', {
+    payloadChars: base64Image.length,
+  });
   const cv = await loadOpenCvModule();
   const bytes = decodeBase64ImageBytes(base64Image);
 
@@ -593,9 +651,12 @@ async function runOpenCvJsVectorizationScript(base64Image: string): Promise<Vect
     rawSegments.sort((a, b) => b[4] - a[4]);
     const segments = dedupeVectorSegments(rawSegments).slice(0, MAX_VECTOR_SEGMENTS);
     const durationMs = Date.now() - startedAt;
-    console.log(
-      `[Vectorization/OpenCV.js] Step 4/4 success in ${durationMs}ms. line_count=${lines.length}, segment_count=${segments.length}`
-    );
+    traceLog('Vectorization/OpenCV.js', traceId, '4/4', `success in ${durationMs}ms`, {
+      lineCount: lines.length,
+      segmentCount: segments.length,
+      width,
+      height,
+    });
 
     return {
       width,
@@ -636,18 +697,21 @@ async function resolvePythonBinary(): Promise<string | null> {
   return null;
 }
 
-async function runPythonVectorizationScript(base64Image: string): Promise<VectorizationResult> {
+async function runPythonVectorizationScript(base64Image: string, traceId = 'n/a'): Promise<VectorizationResult> {
   const pythonBinary = await resolvePythonBinary();
   if (!pythonBinary) {
-    console.warn("[Vectorization/Python] Python executable not found in path. Falling back to AI Vision only.");
+    traceLog('Vectorization/Python', traceId, '0/4', 'python executable not found, falling back', undefined, 'warn');
     throw new Error("Python not installed or in PATH.");
   }
 
   return new Promise<VectorizationResult>((resolve, reject) => {
     const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
     const startedAt = Date.now();
-    console.log(`[Vectorization/Python] Step 1/4 launching Python script: ${scriptPath} (bin=${pythonBinary})`);
-    console.log(`[Vectorization/Python] Input image payload chars=${base64Image.length}`);
+    traceLog('Vectorization/Python', traceId, '1/4', 'launching python script', {
+      scriptPath,
+      pythonBinary,
+      payloadChars: base64Image.length,
+    });
     const pythonProcess = spawn(pythonBinary, [scriptPath]);
 
     let output = '';
@@ -678,7 +742,7 @@ async function runPythonVectorizationScript(base64Image: string): Promise<Vector
       if (settled) return;
       if (code !== 0) {
         const details = errorOutput.trim() || `exit code ${code}`;
-        console.error(`[Vectorization/Python] Python script error: ${details}`);
+        traceLog('Vectorization/Python', traceId, '4/4', 'python script exited with error', { details, code }, 'error');
         rejectOnce(new Error(`Python script exited with code ${code}: ${details}`));
         return;
       }
@@ -690,12 +754,15 @@ async function runPythonVectorizationScript(base64Image: string): Promise<Vector
           return;
         }
         const durationMs = Date.now() - startedAt;
-        console.log(
-          `[Vectorization/Python] Step 4/4 success in ${durationMs}ms. line_count=${result.line_count || 0}, segment_count=${result.segment_count || 0}`
-        );
+        traceLog('Vectorization/Python', traceId, '4/4', `success in ${durationMs}ms`, {
+          lineCount: result.line_count || 0,
+          segmentCount: result.segment_count || 0,
+          width: result.width || 0,
+          height: result.height || 0,
+        });
         resolveOnce(result as VectorizationResult);
       } catch {
-        console.error("[Vectorization/Python] Failed to parse Python script output:", output);
+        traceLog('Vectorization/Python', traceId, '4/4', 'failed to parse python output', { output }, 'error');
         rejectOnce(new Error('Failed to parse vectorization output.'));
       }
     });
@@ -703,35 +770,44 @@ async function runPythonVectorizationScript(base64Image: string): Promise<Vector
     pythonProcess.on('error', (err: any) => {
       if (settled) return;
       if (err.code === 'ENOENT') {
-        console.warn("[Vectorization/Python] Python executable not found in path. Falling back to AI Vision only.");
+        traceLog('Vectorization/Python', traceId, '2/4', 'python ENOENT during spawn', undefined, 'warn');
         rejectOnce(new Error("Python not installed or in PATH."));
       } else {
-        console.error("[Vectorization/Python] Python spawn error:", err);
+        traceLog('Vectorization/Python', traceId, '2/4', 'python spawn error', { err: String(err) }, 'error');
         rejectOnce(err instanceof Error ? err : new Error(String(err)));
       }
     });
 
-    console.log("[Vectorization/Python] Step 2/4 streaming image payload to Python process.");
+    traceLog('Vectorization/Python', traceId, '2/4', 'streaming payload to python process', {
+      payloadChars: base64Image.length,
+    });
     pythonProcess.stdin.write(base64Image);
     pythonProcess.stdin.end();
-    console.log("[Vectorization/Python] Step 3/4 waiting for vectorization response.");
+    traceLog('Vectorization/Python', traceId, '3/4', 'waiting for python vectorization response');
   });
 }
 
-async function runVectorizationScript(base64Image: string): Promise<VectorizationResult> {
+async function runVectorizationScript(base64Image: string, traceId = 'n/a'): Promise<VectorizationResult> {
   const preference = (process.env.INFRALITH_VECTOR_ENGINE || 'opencvjs').trim().toLowerCase();
   const isCloudRuntime = !!process.env.WEBSITE_SITE_NAME || !!process.env.WEBSITE_INSTANCE_ID;
   const allowOpenCvJs = preference !== 'python';
   const allowPython = preference === 'python' || (preference === 'auto' && !isCloudRuntime);
 
+  traceLog('Vectorization', traceId, 'select', 'selecting vectorization engine', {
+    preference,
+    isCloudRuntime,
+    allowOpenCvJs,
+    allowPython,
+  });
+
   let openCvError: unknown = null;
   if (allowOpenCvJs) {
     try {
-      return await runOpenCvJsVectorizationScript(base64Image);
+      return await runOpenCvJsVectorizationScript(base64Image, traceId);
     } catch (error) {
       openCvError = error;
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[Vectorization] OpenCV.js path unavailable: ${message}`);
+      traceLog('Vectorization', traceId, 'opencvjs', 'OpenCV.js path unavailable', { message }, 'warn');
       if (!allowPython) {
         throw error;
       }
@@ -740,7 +816,7 @@ async function runVectorizationScript(base64Image: string): Promise<Vectorizatio
 
   if (allowPython) {
     try {
-      return await runPythonVectorizationScript(base64Image);
+      return await runPythonVectorizationScript(base64Image, traceId);
     } catch (pythonError) {
       const message = pythonError instanceof Error ? pythonError.message : String(pythonError);
       const cvMessage = openCvError
@@ -892,9 +968,13 @@ const isLocalLayoutStrong = (hints: BlueprintLayoutHints | null) => {
   return dimensionSignals >= 2 || polygonSignals >= 40;
 };
 
-async function preprocessBlueprintImage(base64Image: string): Promise<BlueprintPreprocessResult> {
+async function preprocessBlueprintImage(base64Image: string, traceId = 'n/a'): Promise<BlueprintPreprocessResult> {
   const useSharp = asBool(process.env.INFRALITH_USE_SHARP_PREPROCESS, true);
   if (!useSharp || sharpUnsupported) {
+    traceLog('Preprocess', traceId, 'skip', 'sharp preprocessing skipped', {
+      useSharp,
+      sharpUnsupported,
+    });
     return { image: base64Image, source: 'original', width: 0, height: 0 };
   }
 
@@ -929,6 +1009,14 @@ async function preprocessBlueprintImage(base64Image: string): Promise<BlueprintP
 
     const { data, info } = await pipeline.png({ compressionLevel: 9 }).toBuffer({ resolveWithObject: true });
     const payload = ensureDataUrlPng(data.toString('base64'));
+    traceLog('Preprocess', traceId, 'sharp', 'sharp preprocessing complete', {
+      sourceBytes: inputBuffer.length,
+      outputBytes: data.length,
+      width: Number(info?.width || 0),
+      height: Number(info?.height || 0),
+      threshold: threshold ?? 'none',
+      maxDim,
+    });
     return {
       image: payload,
       source: 'sharp',
@@ -943,10 +1031,11 @@ async function preprocessBlueprintImage(base64Image: string): Promise<BlueprintP
         sharpWarned = true;
         console.warn('[Infralith Vision Engine] Sharp not installed. Skipping local image pre-processing.');
       }
+      traceLog('Preprocess', traceId, 'sharp', 'sharp package missing, fallback to original', undefined, 'warn');
       return { image: base64Image, source: 'original', width: 0, height: 0 };
     }
 
-    console.warn(`[Infralith Vision Engine] Sharp pre-processing failed: ${message}. Using original image.`);
+    traceLog('Preprocess', traceId, 'sharp', 'sharp preprocessing failed, fallback to original', { message }, 'warn');
     return { image: base64Image, source: 'original', width: 0, height: 0 };
   }
 }
@@ -954,7 +1043,8 @@ async function preprocessBlueprintImage(base64Image: string): Promise<BlueprintP
 async function runLocalOcrLayoutHints(
   base64Image: string,
   widthHint = 0,
-  heightHint = 0
+  heightHint = 0,
+  traceId = 'n/a'
 ): Promise<BlueprintLayoutHints | null> {
   const enableLocalOcr = asBool(process.env.INFRALITH_ENABLE_LOCAL_OCR, true);
   if (!enableLocalOcr || tesseractUnsupported) return null;
@@ -969,6 +1059,11 @@ async function runLocalOcrLayoutHints(
 
     const startedAt = Date.now();
     const imageBuffer = Buffer.from(stripDataUrl(base64Image), 'base64');
+    traceLog('Local OCR', traceId, '1/3', 'starting tesseract OCR', {
+      imageBytes: imageBuffer.length,
+      widthHint,
+      heightHint,
+    });
     const result = await recognize(imageBuffer, 'eng', {
       logger: () => { /* quiet server logs */ },
     });
@@ -1013,9 +1108,11 @@ async function runLocalOcrLayoutHints(
     const durationMs = Date.now() - startedAt;
     const width = Number(widthHint || data?.width || 0);
     const height = Number(heightHint || data?.height || 0);
-    console.log(
-      `[Local OCR] Parsed in ${durationMs}ms. lines=${linePolygons.length}, dimensionAnchors=${dimensionAnchors.length}`
-    );
+    traceLog('Local OCR', traceId, '3/3', `parsed in ${durationMs}ms`, {
+      linePolygons: linePolygons.length,
+      dimensionAnchors: dimensionAnchors.length,
+      words: words.length,
+    });
 
     return {
       pageCount: 1,
@@ -1038,15 +1135,16 @@ async function runLocalOcrLayoutHints(
         tesseractWarned = true;
         console.warn('[Infralith Vision Engine] tesseract.js not installed. Local OCR layout hints disabled.');
       }
+      traceLog('Local OCR', traceId, '0/3', 'tesseract.js package missing', undefined, 'warn');
       return null;
     }
 
-    console.warn(`[Local OCR] Failed to extract hints: ${message}`);
+    traceLog('Local OCR', traceId, 'error', 'failed to extract OCR layout hints', { message }, 'warn');
     return null;
   }
 }
 
-async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls']): Promise<string | undefined> {
+async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls'], traceId = 'n/a'): Promise<string | undefined> {
   const enablePreview = asBool(process.env.INFRALITH_DXF_DEBUG_CANVAS, false);
   if (!enablePreview || canvasUnsupported || walls.length === 0) return undefined;
 
@@ -1091,6 +1189,11 @@ async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls']): 
     }
 
     const pngBuffer: Buffer = canvas.toBuffer('image/png');
+    traceLog('DXF Canvas', traceId, 'render', 'generated dxf debug image', {
+      wallCount: walls.length,
+      canvasSize: size,
+      pngBytes: pngBuffer.length,
+    });
     return ensureDataUrlPng(pngBuffer.toString('base64'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1100,10 +1203,11 @@ async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls']): 
         canvasWarned = true;
         console.warn('[Infralith CAD Engine] canvas not installed. DXF preview rasterization disabled.');
       }
+      traceLog('DXF Canvas', traceId, 'render', 'canvas package missing', undefined, 'warn');
       return undefined;
     }
 
-    console.warn(`[Infralith CAD Engine] DXF preview rasterization failed: ${message}`);
+    traceLog('DXF Canvas', traceId, 'render', 'dxf preview rasterization failed', { message }, 'warn');
     return undefined;
   }
 }
@@ -1337,7 +1441,11 @@ const flattenDxfEntities = (parsed: any): FlattenedDxfEntity[] => {
 };
 
 export async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
+  const traceId = createTraceId('dxf');
   const startedAt = Date.now();
+  traceLog('Infralith CAD Engine', traceId, '0/5', 'DXF parse request received', {
+    contentChars: dxfContent?.length || 0,
+  });
   if (!dxfContent || !dxfContent.trim()) {
     throw new Error('DXF file is empty.');
   }
@@ -1455,7 +1563,7 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
     if (rooms.length >= 150) break;
   }
 
-  const dxfDebugImage = await renderDxfPreviewCanvas(walls);
+  const dxfDebugImage = await renderDxfPreviewCanvas(walls, traceId);
 
   const reconstruction: GeometricReconstruction = {
     building_name: 'DXF Reconstruction',
@@ -1495,7 +1603,12 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
 
   const validated = applyBuildingCodes(reconstruction);
   const durationMs = Date.now() - startedAt;
-  console.log(`[Infralith CAD Engine] DXF conversion complete in ${durationMs}ms.`, summarizeReconstruction(validated));
+  traceLog('Infralith CAD Engine', traceId, '5/5', `DXF conversion complete in ${durationMs}ms`, {
+    ...summarizeReconstruction(validated),
+    segmentCount: allSegments.length,
+    inferredScale: isInferredScale,
+    hasDebugImage: !!dxfDebugImage,
+  });
   return validated;
 }
 
@@ -1789,12 +1902,15 @@ async function convertDwgToDxfString(dwgBase64: string): Promise<string> {
 }
 
 export async function processDwgTo3D(dwgBase64: string): Promise<GeometricReconstruction> {
+  const traceId = createTraceId('dwg');
   const startedAt = Date.now();
-  console.log('[Infralith CAD Engine] Starting DWG conversion pipeline.');
+  traceLog('Infralith CAD Engine', traceId, '0/2', 'Starting DWG conversion pipeline', {
+    payloadChars: dwgBase64?.length || 0,
+  });
   const dxfContent = await convertDwgToDxfString(dwgBase64);
   const result = await processDxfTo3D(dxfContent);
   const durationMs = Date.now() - startedAt;
-  console.log(`[Infralith CAD Engine] DWG conversion + parsing completed in ${durationMs}ms.`);
+  traceLog('Infralith CAD Engine', traceId, '2/2', `DWG conversion + parsing completed in ${durationMs}ms`, summarizeReconstruction(result));
   return result;
 }
 
@@ -1805,9 +1921,12 @@ export async function processDwgTo3D(dwgBase64: string): Promise<GeometricRecons
  * Uses a hybrid approach: OpenCV for vectorization and Azure GPT-4o Vision for semantic understanding.
  */
 export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricReconstruction> {
+  const traceId = createTraceId('vision');
   const startedAt = Date.now();
-  console.log(`[Infralith Vision Engine] Step 0/9 request received. payloadChars=${imageUrl.length}`);
-  console.log("[Infralith Vision Engine] Routing blueprint to Azure OpenAI Vision...");
+  traceLog('Infralith Vision Engine', traceId, '0/9', 'request received', {
+    payloadChars: imageUrl.length,
+  });
+  traceLog('Infralith Vision Engine', traceId, '0/9', 'Routing blueprint to Azure OpenAI Vision');
 
   // STAGE 1: Pre-process with OpenCV vectorization to get structural hints
   let vectorizationHints = null;
@@ -1815,13 +1934,13 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   let layoutHints: BlueprintLayoutHints | null = null;
 
   const layoutHintMode = getLayoutHintMode();
-  console.log("[Infralith Vision Engine] Step 1/9 running structural pre-processing (OpenCV + OCR/layout hints).", {
+  traceLog('Infralith Vision Engine', traceId, '1/9', 'running structural pre-processing (OpenCV + OCR/layout hints)', {
     layoutHintMode,
   });
 
-  const preprocessed = await preprocessBlueprintImage(imageUrl);
+  const preprocessed = await preprocessBlueprintImage(imageUrl, traceId);
   const structuralInputImage = preprocessed.image;
-  console.log('[Infralith Vision Engine] Pre-process result:', {
+  traceLog('Infralith Vision Engine', traceId, '1/9', 'pre-process result', {
     source: preprocessed.source,
     width: preprocessed.width,
     height: preprocessed.height,
@@ -1830,9 +1949,9 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
 
   let localLayoutHints: BlueprintLayoutHints | null = null;
   if (layoutHintMode !== 'azure') {
-    localLayoutHints = await runLocalOcrLayoutHints(structuralInputImage, preprocessed.width, preprocessed.height);
+    localLayoutHints = await runLocalOcrLayoutHints(structuralInputImage, preprocessed.width, preprocessed.height, traceId);
     if (localLayoutHints) {
-      console.log('[Infralith Vision Engine] Local OCR layout hints:', summarizeLayoutHints(localLayoutHints));
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'local OCR layout hints extracted', summarizeLayoutHints(localLayoutHints));
     }
   }
 
@@ -1842,33 +1961,38 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     (layoutHintMode === 'auto' && !isLocalLayoutStrong(localLayoutHints));
 
   const [vectorizationAttempt, layoutAttempt] = await Promise.allSettled([
-    runVectorizationScript(structuralInputImage),
+    runVectorizationScript(structuralInputImage, traceId),
     shouldCallAzureLayout ? analyzeBlueprintLayoutFromBase64(structuralInputImage) : Promise.resolve(null),
   ]);
 
   if (vectorizationAttempt.status === "fulfilled") {
     vectorizationHints = buildVectorizationHints(vectorizationAttempt.value);
     debugImage = vectorizationAttempt.value.debug_image;
-    console.log("[Infralith Vision Engine] Vectorization output:", {
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'vectorization output', {
       ...summarizeVectorizationHints(vectorizationHints),
       hasDebugImage: !!debugImage,
     });
   } else {
     const e: any = vectorizationAttempt.reason;
-    console.warn(`[Infralith Vision Engine] Vectorization pre - processing failed: ${e?.message || e}. Falling back to pure vision analysis.`);
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'vectorization pre-processing failed, falling back to vision-only', {
+      reason: e?.message || String(e),
+    }, 'warn');
   }
 
   if (layoutAttempt.status === "fulfilled") {
     const azureLayoutHints = layoutAttempt.value;
     layoutHints = mergeLayoutHintSources(localLayoutHints, azureLayoutHints);
-    console.log("[Infralith Vision Engine] Layout hint output:", {
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'layout hint output', {
       source: shouldCallAzureLayout ? (localLayoutHints ? 'merged-local-azure' : 'azure') : (localLayoutHints ? 'local' : 'none'),
       ...summarizeLayoutHints(layoutHints),
     });
   } else {
     const e: any = layoutAttempt.reason;
     layoutHints = localLayoutHints;
-    console.warn(`[Infralith Vision Engine] Layout hint extraction failed: ${e?.message || e}.`);
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'layout hint extraction failed, continuing', {
+      reason: e?.message || String(e),
+      hasLocalHints: !!localLayoutHints,
+    }, 'warn');
   }
 
   // STAGE 2: Send image and vector hints to the AI Vision model
@@ -1962,9 +2086,9 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   `;
 
   try {
-    console.log("[Infralith Vision Engine] Step 2/9 sending blueprint + hybrid hints to Azure Vision.");
+    traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
-    console.log("[Infralith Vision Engine] Step 3/9 AI reconstruction received.", summarizeReconstruction(result));
+    traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
 
     if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints)) {
       const strictPrompt = `${prompt}
@@ -1979,17 +2103,17 @@ HARD CONSTRAINTS FOR THIS RETRY:
 - If the plan indicates multiple enclosed spaces, output corresponding room polygons.
 - Respect line and segment geometry from OPENCV VECTOR HINTS and OCR anchors from LAYOUT HINTS.
 `;
-      console.warn("[Infralith Vision Engine] Step 4/9 underfit detected. Retrying once with stricter anti-generic constraints.");
+      traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', undefined, 'warn');
       result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
-      console.log("[Infralith Vision Engine] Retry reconstruction summary:", summarizeReconstruction(result));
+      traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', summarizeReconstruction(result));
     }
 
     if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints) && vectorizationHints) {
       const vectorFallback = buildVectorFallbackReconstruction(vectorizationHints, layoutHints);
       if (vectorFallback) {
-        console.warn("[Infralith Vision Engine] Step 5/9 applying deterministic vector fallback reconstruction.");
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'applying deterministic vector fallback reconstruction', undefined, 'warn');
         result = vectorFallback;
-        console.log("[Infralith Vision Engine] Vector fallback summary:", summarizeReconstruction(result));
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'vector fallback summary', summarizeReconstruction(result));
       }
     }
 
@@ -2000,9 +2124,9 @@ HARD CONSTRAINTS FOR THIS RETRY:
     result = inferRoofFromWallFootprint(result);
 
     // Apply strict deterministic architectural building code checks
-    console.log("[Infralith Vision Engine] Step 6/9 applying deterministic building-code validation.");
+    traceLog('Infralith Vision Engine', traceId, '6/9', 'applying deterministic building-code validation');
     const validatedResult = applyBuildingCodes(result);
-    console.log("[Infralith Vision Engine] Step 7/9 validation complete.", summarizeReconstruction(validatedResult));
+    traceLog('Infralith Vision Engine', traceId, '7/9', 'validation complete', summarizeReconstruction(validatedResult));
 
     const finalPayload: GeometricReconstruction = {
       ...validatedResult,
@@ -2010,7 +2134,7 @@ HARD CONSTRAINTS FOR THIS RETRY:
       is_vision_only: !vectorizationHints // Flag if vectorization failed and we fell back
     };
 
-    console.log("[Infralith Vision Engine] Step 8/9 final payload assembled.", {
+    traceLog('Infralith Vision Engine', traceId, '8/9', 'final payload assembled', {
       is_vision_only: finalPayload.is_vision_only,
       hasDebugImage: !!finalPayload.debug_image,
       vectorHints: summarizeVectorizationHints(vectorizationHints),
@@ -2018,10 +2142,13 @@ HARD CONSTRAINTS FOR THIS RETRY:
     });
 
     const durationMs = Date.now() - startedAt;
-    console.log(`[Infralith Vision Engine] Step 9/9 returning reconstruction in ${durationMs}ms. is_vision_only=${finalPayload.is_vision_only}`);
+    traceLog('Infralith Vision Engine', traceId, '9/9', `returning reconstruction in ${durationMs}ms`, {
+      is_vision_only: finalPayload.is_vision_only,
+      ...summarizeReconstruction(finalPayload),
+    });
     return finalPayload;
   } catch (e) {
-    console.error("[Infralith Vision Engine] Azure Vision Pipeline Error:", e);
+    traceLog('Infralith Vision Engine', traceId, 'error', 'Azure Vision Pipeline Error', { error: String(e) }, 'error');
     throw e;
   }
 }
@@ -2031,8 +2158,11 @@ HARD CONSTRAINTS FOR THIS RETRY:
  * Uses Azure OpenAI to generate complete parametric geometry with luxury finishes.
  */
 export async function generateBuildingFromDescription(description: string): Promise<GeometricReconstruction> {
+  const traceId = createTraceId('text2bim');
   const startedAt = Date.now();
-  console.log(`[Infralith Architect Engine] Generating parametric building from description. promptSeedChars=${description.length}`);
+  traceLog('Infralith Architect Engine', traceId, '0/2', 'Generating parametric building from description', {
+    promptSeedChars: description.length,
+  });
 
   const prompt = `
     You are the Infralith Architect AI—the world's most advanced parametric architectural modeling engine.
@@ -2091,15 +2221,16 @@ export async function generateBuildingFromDescription(description: string): Prom
   `;
 
   try {
+    traceLog('Infralith Architect Engine', traceId, '1/2', 'sending text-to-bim request');
     const result = await generateAzureObject<GeometricReconstruction>(prompt);
     if (!result || !result.walls || result.walls.length === 0) {
       throw new Error("Architectural Generation Failed: The AI was unable to synthesize a valid structure from the given description.");
     }
     const durationMs = Date.now() - startedAt;
-    console.log(`[Infralith Architect Engine] Structured generation completed in ${durationMs}ms.`, summarizeReconstruction(result));
+    traceLog('Infralith Architect Engine', traceId, '2/2', `Structured generation completed in ${durationMs}ms`, summarizeReconstruction(result));
     return result;
   } catch (e) {
-    console.error("[Infralith Architect Engine] Text-to-3D Pipeline Error:", e);
+    traceLog('Infralith Architect Engine', traceId, 'error', 'Text-to-3D Pipeline Error', { error: String(e) }, 'error');
     throw e;
   }
 }
@@ -2110,7 +2241,12 @@ export async function generateBuildingFromDescription(description: string): Prom
  * This guarantees the models are completely unique and not predefined templates.
  */
 export async function generateRealTimeAsset(description: string): Promise<AIAsset> {
-  console.log(`[Procedural Voxel Engine] Generating asset: ${description} `);
+  const traceId = createTraceId('voxel');
+  const startedAt = Date.now();
+  traceLog('Procedural Voxel Engine', traceId, '0/3', 'Generating asset request received', {
+    promptChars: description?.length || 0,
+    description,
+  });
 
   const prompt = `
     You are an expert technical 3D voxel modeler.Generate a precise, detailed procedural 3D asset for: "${description}".
@@ -2141,6 +2277,7 @@ export async function generateRealTimeAsset(description: string): Promise<AIAsse
   `;
 
   try {
+    traceLog('Procedural Voxel Engine', traceId, '1/3', 'sending text-to-object request');
     let result = await generateAzureObject<AIAsset>(prompt, AIAssetSchema);
     if (!result || !Array.isArray(result.parts) || result.parts.length === 0) {
       throw new Error("Asset Generation Failed.");
@@ -2154,20 +2291,23 @@ CORRECTION:
 - Return at least 4 distinct parts.
 - Each part must have unique position and size.
 `;
-      console.warn("[Procedural Voxel Engine] Under-detailed asset detected. Retrying with stricter part-count constraints.");
+      traceLog('Procedural Voxel Engine', traceId, '2/3', 'under-detailed asset detected, retrying', {
+        initialPartCount: result.parts.length,
+      }, 'warn');
       const retried = await generateAzureObject<AIAsset>(retryPrompt, AIAssetSchema);
       if (retried && Array.isArray(retried.parts) && retried.parts.length >= result.parts.length) {
         result = retried;
       }
     }
 
-    console.log("[Procedural Voxel Engine] Asset summary:", {
+    const durationMs = Date.now() - startedAt;
+    traceLog('Procedural Voxel Engine', traceId, '3/3', `asset ready in ${durationMs}ms`, {
       name: result.name,
       partCount: result.parts.length,
     });
     return result;
   } catch (e) {
-    console.error("[Procedural Voxel Engine] Error calling Azure OpenAI for asset:", e);
+    traceLog('Procedural Voxel Engine', traceId, 'error', 'Error calling Azure OpenAI for asset', { error: String(e) }, 'error');
     throw e;
   }
 }

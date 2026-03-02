@@ -3,6 +3,13 @@ import { GeometricReconstruction } from "@/ai/flows/infralith/reconstruction-typ
 
 const DATABASE_ID = process.env.AZURE_COSMOS_DATABASE_ID || "InfralithDB";
 const CONTAINER_ID = process.env.AZURE_COSMOS_CONTAINER_ID || "BIMModels";
+const PLACEHOLDER_MARKERS = [
+    "replace_with_real_key",
+    "replace_with_key",
+    "your_key_here",
+    "<key>",
+    "changeme",
+];
 
 let client: CosmosClient | null = null;
 
@@ -21,32 +28,68 @@ function hasLocalHost(value: string | undefined): boolean {
     return normalized.includes("localhost") || normalized.includes("127.0.0.1");
 }
 
-function getCosmosClient(): CosmosClient {
-    if (client) return client;
+function hasPlaceholderValue(value: string | undefined): boolean {
+    if (!value) return false;
+    const normalized = value.toLowerCase();
+    return PLACEHOLDER_MARKERS.some((marker) => normalized.includes(marker));
+}
 
+type CosmosConfig =
+    | { mode: "connectionString"; connectionString: string }
+    | { mode: "endpointKey"; endpoint: string; key: string };
+
+function resolveCosmosConfig(): CosmosConfig {
     const connectionString = process.env.AZURE_COSMOS_CONNECTION_STRING?.trim();
     const endpoint = process.env.COSMOS_ENDPOINT?.trim();
     const key = process.env.COSMOS_KEY?.trim();
 
     if (connectionString) {
-        if (hasLocalHost(connectionString)) {
-            throw new Error("Cloud Cosmos DB required: AZURE_COSMOS_CONNECTION_STRING points to localhost.");
-        }
-        client = new CosmosClient(connectionString);
-        return client;
+        return { mode: "connectionString", connectionString };
     }
 
     if (endpoint && key) {
-        if (hasLocalHost(endpoint)) {
-            throw new Error("Cloud Cosmos DB required: COSMOS_ENDPOINT points to localhost.");
-        }
-        client = new CosmosClient({ endpoint, key });
-        return client;
+        return { mode: "endpointKey", endpoint, key };
     }
 
     throw new Error(
         "Cloud Cosmos DB is not configured. Set AZURE_COSMOS_CONNECTION_STRING or COSMOS_ENDPOINT + COSMOS_KEY."
     );
+}
+
+function assertCloudCosmosConfig(config: CosmosConfig): void {
+    if (config.mode === "connectionString") {
+        if (hasLocalHost(config.connectionString)) {
+            throw new Error("Cloud Cosmos DB required: AZURE_COSMOS_CONNECTION_STRING points to localhost.");
+        }
+        if (hasPlaceholderValue(config.connectionString)) {
+            throw new Error(
+                "Cloud Cosmos DB required: AZURE_COSMOS_CONNECTION_STRING uses a placeholder key. Replace it with a real Cosmos key."
+            );
+        }
+        return;
+    }
+
+    if (hasLocalHost(config.endpoint)) {
+        throw new Error("Cloud Cosmos DB required: COSMOS_ENDPOINT points to localhost.");
+    }
+    if (hasPlaceholderValue(config.key)) {
+        throw new Error("Cloud Cosmos DB required: COSMOS_KEY uses a placeholder value.");
+    }
+}
+
+const cosmosConfig = resolveCosmosConfig();
+assertCloudCosmosConfig(cosmosConfig);
+
+function getCosmosClient(): CosmosClient {
+    if (client) return client;
+
+    if (cosmosConfig.mode === "connectionString") {
+        client = new CosmosClient(cosmosConfig.connectionString);
+        return client;
+    }
+
+    client = new CosmosClient({ endpoint: cosmosConfig.endpoint, key: cosmosConfig.key });
+    return client;
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -68,8 +111,9 @@ async function ensureContainer() {
             partitionKey: { paths: ["/id"] }
         });
         return container;
-    } catch (e) {
-        throw new Error("Cosmos DB connection failed.");
+    } catch (e: unknown) {
+        const details = e instanceof Error ? e.message : String(e);
+        throw new Error(`Cosmos DB connection failed: ${details}`);
     }
 }
 

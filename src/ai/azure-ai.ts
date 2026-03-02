@@ -9,6 +9,7 @@ const routerDeploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process
 const topDeploymentName = process.env.AZURE_OPENAI_TOP_DEPLOYMENT || process.env.AZURE_OPENAI_TOP_MODEL_DEPLOYMENT || "gpt-5";
 const preferTopModel = (process.env.AZURE_OPENAI_PREFER_TOP_MODEL || "true").toLowerCase() !== "false";
 const azureResourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwuryls-eastus2";
+const VERBOSE_LOGS = (process.env.INFRALITH_VERBOSE_LOGS || "true").toLowerCase() !== "false";
 
 // Azure Document Intelligence Configuration
 const docIntelEndpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || "";
@@ -57,6 +58,33 @@ const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
 const DIMENSION_TEXT_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 const DEPLOYMENT_ERROR_PATTERN = /(deployment|model|404|not found|does not exist|unknown deployment|resource not found)/i;
+
+const createTraceId = (prefix: string) =>
+    `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+type LogLevel = "log" | "warn" | "error";
+
+const traceLog = (
+    component: string,
+    traceId: string,
+    step: string,
+    message: string,
+    data?: unknown,
+    level: LogLevel = "log"
+) => {
+    if (!VERBOSE_LOGS && level === "log") return;
+    const stamp = new Date().toISOString();
+    const prefix = `[${component}] [trace:${traceId}] [${step}] ${stamp} ${message}`;
+    if (level === "warn") {
+        data === undefined ? console.warn(prefix) : console.warn(prefix, data);
+        return;
+    }
+    if (level === "error") {
+        data === undefined ? console.error(prefix) : console.error(prefix, data);
+        return;
+    }
+    data === undefined ? console.log(prefix) : console.log(prefix, data);
+};
 
 const toFlatPolygon = (polygon: any): number[] => {
     if (!Array.isArray(polygon)) return [];
@@ -192,9 +220,10 @@ export const getDocumentClient = () => {
 };
 
 export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Promise<BlueprintLayoutHints | null> {
+    const traceId = createTraceId("layout");
     const client = getDocumentClient();
     if (!client) {
-        console.warn("[Azure Document Intelligence] Layout analysis skipped: credentials missing.");
+        traceLog("Azure Document Intelligence", traceId, "0/3", "Layout analysis skipped: credentials missing", undefined, "warn");
         return null;
     }
 
@@ -205,14 +234,16 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
             cleanedBase64 = base64Image.split('base64,')[1];
         }
 
-        console.log(`[Azure Document Intelligence] Step 1/3 preparing prebuilt-layout request. imageChars=${cleanedBase64.length}`);
+        traceLog("Azure Document Intelligence", traceId, "1/3", "preparing prebuilt-layout request", {
+            imageChars: cleanedBase64.length,
+        });
         const imageBuffer = Buffer.from(cleanedBase64, "base64");
         const poller = await client.beginAnalyzeDocument("prebuilt-layout", imageBuffer);
-        console.log("[Azure Document Intelligence] Step 2/3 request submitted, waiting for analysis.");
+        traceLog("Azure Document Intelligence", traceId, "2/3", "request submitted, waiting for analysis");
         const result: any = await poller.pollUntilDone();
 
         if (!result?.pages?.length) {
-            console.warn("[Azure Document Intelligence] No pages detected in layout result.");
+            traceLog("Azure Document Intelligence", traceId, "3/3", "no pages detected in layout result", undefined, "warn");
             return null;
         }
 
@@ -248,7 +279,11 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
         });
 
         const durationMs = Date.now() - startedAt;
-        console.log(`[Azure Document Intelligence] Step 3/3 layout analysis complete in ${durationMs}ms. pages=${pages.length}, polygons=${linePolygons.length}, dimensionAnchors=${dimensionAnchors.length}`);
+        traceLog("Azure Document Intelligence", traceId, "3/3", `layout analysis complete in ${durationMs}ms`, {
+            pages: pages.length,
+            polygons: linePolygons.length,
+            dimensionAnchors: dimensionAnchors.length,
+        });
 
         return {
             pageCount: pages.length,
@@ -257,12 +292,15 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
             dimensionAnchors,
         };
     } catch (e: any) {
-        console.warn(`[Azure Document Intelligence] Layout analysis failed: ${e?.message || e}`);
+        traceLog("Azure Document Intelligence", traceId, "error", "layout analysis failed", {
+            error: e?.message || String(e),
+        }, "warn");
         return null;
     }
 }
 
 export async function generateAzureVisionObject<T>(prompt: string, base64Image: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
+    const traceId = createTraceId("vision");
     if (!azureKey) {
         throw new Error("Azure OpenAI credentials (AZURE_OPENAI_KEY) are not configured. Vision synthesis requires a production key.");
     }
@@ -271,26 +309,32 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
     const startedAt = Date.now();
 
     try {
-        console.log(`[AI] Deployment preference order: ${deploymentOrder.join(" -> ")}`);
-        console.log(`[Azure Vision via AI SDK] Step 1/4 preparing request.`);
+        traceLog("Azure Vision via AI SDK", traceId, "1/4", "preparing request", {
+            deploymentOrder,
+            promptChars: prompt.length,
+            hasCustomSchema: !!dynamicSchema,
+        });
 
         let cleanedBase64 = base64Image;
         if (base64Image.includes('data:image')) {
             cleanedBase64 = base64Image.split('base64,')[1];
         }
 
-        console.log(`[Azure Vision via AI SDK] Request metadata: imageChars=${cleanedBase64.length}, hasCustomSchema=${!!dynamicSchema}`);
-        console.log(`[Azure Vision via AI SDK] Step 2/4 sending vision request to Azure.`);
+        traceLog("Azure Vision via AI SDK", traceId, "2/4", "sending vision request to Azure", {
+            imageChars: cleanedBase64.length,
+            hasCustomSchema: !!dynamicSchema,
+        });
 
         let lastError: unknown = null;
         for (let i = 0; i < deploymentOrder.length; i++) {
             const deployment = deploymentOrder[i];
             const isRouter = deployment === routerDeploymentName;
-            if (isRouter) {
-                console.log(`[AI] Using Azure Model Router: ${deployment}`);
-            } else {
-                console.log(`[AI] Using preferred top deployment: ${deployment}`);
-            }
+            traceLog("Azure Vision via AI SDK", traceId, "2/4", "attempting deployment", {
+                attempt: i + 1,
+                totalAttempts: deploymentOrder.length,
+                deployment,
+                mode: isRouter ? "router" : "top-model",
+            });
 
             try {
                 const result = await generateObject({
@@ -310,21 +354,25 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
                 });
 
                 const durationMs = Date.now() - startedAt;
-                console.log(`[Azure Vision via AI SDK] Step 3/4 response received in ${durationMs}ms.`);
-                console.log(`[Azure Vision via AI SDK] Structured result summary:`, summarizeStructured(result.object));
-                console.log(`[Azure Vision via AI SDK] Step 4/4 returning structured object.`);
+                traceLog("Azure Vision via AI SDK", traceId, "3/4", `response received in ${durationMs}ms`, summarizeStructured(result.object));
+                traceLog("Azure Vision via AI SDK", traceId, "4/4", "returning structured object");
                 return result.object as unknown as T;
             } catch (error: any) {
                 lastError = error;
                 const canRetry = i < deploymentOrder.length - 1 && isDeploymentLookupError(error);
                 if (!canRetry) throw error;
-                console.warn(`[Azure Vision via AI SDK] Deployment "${deployment}" failed (${error?.message || error}). Retrying next deployment.`);
+                traceLog("Azure Vision via AI SDK", traceId, "2/4", "deployment failed; retrying next deployment", {
+                    deployment,
+                    error: error?.message || String(error),
+                }, "warn");
             }
         }
 
         throw lastError || new Error("Azure Vision request failed for all deployments.");
     } catch (e: any) {
-        console.error(`[Azure Vision via AI SDK] Failed: ${e?.message || e}`);
+        traceLog("Azure Vision via AI SDK", traceId, "error", "vision request failed", {
+            error: e?.message || String(e),
+        }, "error");
         throw e;
     }
 }
@@ -333,6 +381,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
  * Text-only Generation for 3D buildings from description
  */
 export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.ZodType<any>): Promise<T> {
+    const traceId = createTraceId("text");
     if (!azureKey) {
         throw new Error("Azure OpenAI credentials (AZURE_OPENAI_KEY) are not configured. Text-to-BIM generation requires a production key.");
     }
@@ -341,19 +390,22 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
     const startedAt = Date.now();
 
     try {
-        console.log(`[AI] Deployment preference order: ${deploymentOrder.join(" -> ")}`);
-        console.log(`[Azure AI SDK] Step 1/3 preparing text-to-object request.`);
-        console.log(`[Azure AI SDK] Request metadata: promptChars=${prompt.length}, hasCustomSchema=${!!dynamicSchema}`);
+        traceLog("Azure AI SDK", traceId, "1/3", "preparing text-to-object request", {
+            deploymentOrder,
+            promptChars: prompt.length,
+            hasCustomSchema: !!dynamicSchema,
+        });
 
         let lastError: unknown = null;
         for (let i = 0; i < deploymentOrder.length; i++) {
             const deployment = deploymentOrder[i];
             const isRouter = deployment === routerDeploymentName;
-            if (isRouter) {
-                console.log(`[AI] Using Azure Model Router: ${deployment}`);
-            } else {
-                console.log(`[AI] Using preferred top deployment: ${deployment}`);
-            }
+            traceLog("Azure AI SDK", traceId, "1/3", "attempting deployment", {
+                attempt: i + 1,
+                totalAttempts: deploymentOrder.length,
+                deployment,
+                mode: isRouter ? "router" : "top-model",
+            });
 
             try {
                 const result = await generateObject({
@@ -365,21 +417,25 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
                 });
 
                 const durationMs = Date.now() - startedAt;
-                console.log(`[Azure AI SDK] Step 2/3 response received in ${durationMs}ms.`);
-                console.log(`[Azure AI SDK] Structured result summary:`, summarizeStructured(result.object));
-                console.log(`[Azure AI SDK] Step 3/3 returning structured object.`);
+                traceLog("Azure AI SDK", traceId, "2/3", `response received in ${durationMs}ms`, summarizeStructured(result.object));
+                traceLog("Azure AI SDK", traceId, "3/3", "returning structured object");
                 return result.object as unknown as T;
             } catch (error: any) {
                 lastError = error;
                 const canRetry = i < deploymentOrder.length - 1 && isDeploymentLookupError(error);
                 if (!canRetry) throw error;
-                console.warn(`[Azure AI SDK] Deployment "${deployment}" failed (${error?.message || error}). Retrying next deployment.`);
+                traceLog("Azure AI SDK", traceId, "1/3", "deployment failed; retrying next deployment", {
+                    deployment,
+                    error: error?.message || String(error),
+                }, "warn");
             }
         }
 
         throw lastError || new Error("Azure text request failed for all deployments.");
     } catch (e: any) {
-        console.error(`[Azure AI SDK] Failed: ${e?.message || e}`);
+        traceLog("Azure AI SDK", traceId, "error", "text request failed", {
+            error: e?.message || String(e),
+        }, "error");
         throw e;
     }
 }

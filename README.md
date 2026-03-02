@@ -37,11 +37,13 @@ This repository has been cleaned and reorganized for maintainability, with expli
 - Document Intelligence: `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`, `AZURE_DOCUMENT_INTELLIGENCE_KEY`
 - DevOps agent (optional): `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`
 - Storage and backend: `AZURE_COSMOS_CONNECTION_STRING`, `USER_LOOKUP_URL`, `GNEWS_API_KEY`
+  - Cosmos is enforced as cloud-only. `localhost` endpoints and placeholder keys (for example `REPLACE_WITH_REAL_KEY`) hard-fail at startup.
 - CAD conversion (optional for DWG): `INFRALITH_DWG_TO_DXF_COMMAND`
 - Vectorization (optional): `INFRALITH_VECTOR_ENGINE` (`auto|opencvjs|python`), `INFRALITH_PYTHON_BIN`
 - Layout/OCR mode (optional): `INFRALITH_LAYOUT_HINT_MODE` (`auto|azure|local|hybrid`), `INFRALITH_ENABLE_LOCAL_OCR`
 - Image pre-processing (optional): `INFRALITH_USE_SHARP_PREPROCESS`, `INFRALITH_PREPROCESS_MAX_DIM`, `INFRALITH_PREPROCESS_THRESHOLD`
 - DXF debug rasterization (optional): `INFRALITH_DXF_DEBUG_CANVAS`, `INFRALITH_DXF_DEBUG_CANVAS_SIZE`
+- Verbose tracing (optional): `INFRALITH_VERBOSE_LOGS`, `INFRALITH_VERBOSE_LOG_PAYLOADS`
 
 ## Optional Local Processing Stack
 
