@@ -120,7 +120,7 @@ export interface BlueprintLayoutHints {
 }
 
 /** Helper to get the model with correct deployment name and settings */
-export const getAzureModel = (isVision = false, deploymentOverride?: string) => {
+export const getAzureModel = (_isVision = false, deploymentOverride?: string) => {
     // For production stability, we explicitly define the model to avoid SDK version appending
     // Must use .chat() because the default goes to the unsupported /responses endpoint
     return azureFixed.chat(deploymentOverride || routerDeploymentName);
@@ -445,7 +445,7 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
 /**
  * Analyze Document using Document Intelligence (OCR)
  */
-export async function analyzeBlueprintDocument(file: string | File | ArrayBuffer): Promise<string> {
+export async function analyzeBlueprintDocument(_file: string | File | ArrayBuffer): Promise<string> {
     const client = getDocumentClient();
     if (!client) {
         console.warn("Azure Document Intelligence credentials missing. Returning simulated OCR text.");

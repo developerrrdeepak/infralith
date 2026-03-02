@@ -2017,6 +2017,13 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     ${layoutHints ? JSON.stringify(layoutHints, null, 2) : "Not available."}
 
     CORE VISION ANALYSIS PROTOCOL:
+0. STRUCTURE-FIRST PHASED EXECUTION (MANDATORY):
+- PHASE 1 (FULL BUILDING SHELL FIRST): Build the full structural shell first across all detected floors:
+  exterior perimeter, interior/load-bearing walls, floor_level assignment, and vertical alignment.
+- PHASE 2 (OPENINGS): After shell completion, place doors/windows and bind each to a valid host_wall_id.
+- PHASE 3 (SPACES + DETAIL): After openings, compute rooms and furnitures.
+- If detail conflicts with structure, preserve structure and adjust/remove the conflicting detail.
+
 1. EXACT VISUAL WALL TRACING: Scan the image systematically.Identify every dark continuous line segment as a wall.
        - Thick lines = Exterior walls(0.23m thickness)
   - Thin lines = Interior partition walls(0.115m thickness)
@@ -2063,11 +2070,12 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
 
     THINKING PROCESS(reason step - by - step before generating output):
 - Step 1: Identify the scale factor from dimension labels or standard ratios.
-    - Step 2: Trace all wall segments from the image and convert to metric coordinates.
-    - Step 3: Detect all door and window openings.Link each to its host wall.
+    - Step 2: Complete full structural shell first for every detected floor (walls + floor_level).
+    - Step 3: Detect all door and window openings and link each to its host wall.
     - Step 4: Define all enclosed room polygons in CCW order.
     - Step 5: Validate the building core alignment across all floors.
-    - Step 6: Perform a structural audit.Generate 2 - 5 specific, actionable conflict reports.
+    - Step 6: Place furnitures after rooms are finalized.
+    - Step 7: Perform a structural audit.Generate 2 - 5 specific, actionable conflict reports.
 
   OUTPUT — Respond ONLY with a valid JSON object matching this schema exactly:
 {
@@ -2180,10 +2188,17 @@ export async function generateBuildingFromDescription(description: string): Prom
        - Maintain a consistent(0, 0) building core origin across all levels.
        - Include staircase space(approx 3m x 1.5m) connecting floors.
     5. WINDOW PLACEMENT: Windows on exterior walls only.Minimum 1 window per habitable room.
+    6. STRUCTURE-FIRST PHASING (MANDATORY):
+- First generate the complete building shell (all floors + all walls) before any detail.
+- Then generate openings (doors/windows) anchored to shell walls.
+- Then generate rooms and furnitures.
+- If detail conflicts with shell, keep shell and fix detail.
 
     ROOM POLYGON RULE: All room polygons MUST be Counter - Clockwise(CCW) ordered.
 
     STRUCTURAL THINKING PROCESS:
+- Step 0: Complete full structural shell first (all floors, all walls, aligned core).
+- Step 0.5: Validate shell continuity before adding details.
 - Step 1: Sketch the floor plan mentally.Define the exterior perimeter first.
     - Step 2: Partition the interior into logical rooms.Validate no wall gaps exist.
     - Step 3: Place doors at room boundaries.Ensure all rooms accessible.

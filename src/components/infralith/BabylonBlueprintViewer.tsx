@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { animate } from 'animejs';
 import {
   ArcRotateCamera,
@@ -8,7 +8,6 @@ import {
   Color4,
   Engine,
   HemisphericLight,
-  Mesh,
   MeshBuilder,
   Scene,
   StandardMaterial,

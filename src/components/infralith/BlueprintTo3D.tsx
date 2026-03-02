@@ -8,7 +8,6 @@ import {
     ContactShadows,
     Html,
     Edges,
-    MeshDistortMaterial,
     PointerLockControls,
     Sky,
     Stars,
@@ -18,7 +17,7 @@ import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postp
 import { Geometry, Base, Subtraction } from '@react-three/csg';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
-import { AlertTriangle, ShieldAlert, PenLine, Image as ImageIcon, Sparkles, Footprints } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, Sparkles, Footprints } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
     Upload,
@@ -26,7 +25,6 @@ import {
     Wand2,
     CheckCircle2,
     RefreshCw,
-    Download,
     Calculator,
     Sun,
     Moon,
@@ -39,14 +37,10 @@ import {
     Layers,
     Maximize2,
     Minimize2,
-    ArrowUpRight,
     ChevronRight,
     ChevronLeft,
-    ChevronUp,
     FileCode,
     FileBox,
-    PanelLeft,
-    PanelRight,
     MousePointer2,
     Move,
     Scaling,
@@ -58,8 +52,6 @@ import {
     Camera,
     User,
     DoorOpen,
-    Square,
-    AppWindow as WindowIcon
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -75,14 +67,11 @@ import {
     processBlueprintTo3D,
     generateBuildingFromDescription,
     generateRealTimeAsset,
-    processDxfTo3D,
-    processDwgTo3D,
-    getCadPipelineCapabilities,
 } from '@/ai/flows/infralith/blueprint-to-3d-agent';
 
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
-import { estimateConstructionCost, CostEstimate } from '@/lib/cost-estimator';
+import { estimateConstructionCost } from '@/lib/cost-estimator';
 import BabylonBlueprintViewer from '@/components/infralith/BabylonBlueprintViewer';
 
 // -- Optional custom human model (GLB) for walkthrough --
@@ -489,8 +478,6 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
     const defaultExterior = data.exterior_color || '#f5e6d3';
     const defaultInterior = '#faf7f2';
     const defaultFloor = '#e8d5b7';
-    const defaultDoor = '#8B4513';
-    const defaultWindow = '#87CEEB';
 
     // Calculate building bounds for boundary wall
     const allX = data.walls.flatMap(w => [w.start[0], w.end[0]]);
@@ -544,8 +531,6 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                             else shape.lineTo(pt[0], pt[1]);
                         });
                         shape.closePath();
-                        const cx = room.polygon.reduce((s, p) => s + p[0], 0) / room.polygon.length;
-                        const cz = room.polygon.reduce((s, p) => s + p[1], 0) / room.polygon.length;
                         const zPos = (room.floor_level || 0) * 2.8;
 
                         return (
@@ -626,7 +611,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
 
 // -- Walkthrough First Person Controller --
 
-function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] }) {
+function WalkthroughController({ bounds }: { bounds?: any }) {
     const { camera } = useThree();
     const [moveForward, setMoveForward] = useState(false);
     const [moveBackward, setMoveBackward] = useState(false);
@@ -671,7 +656,7 @@ function WalkthroughController({ bounds, walls }: { bounds?: any; walls?: any[] 
     }, []);
 
     // A simple function to check collision with walls (2D line segments)
-    const checkCollision = (position: THREE.Vector3, radius: number) => {
+    const checkCollision = (_position: THREE.Vector3, _radius: number) => {
         // Disabled rigid wall collision so the player can walk through doors.
         // True CSG collision requires complex navmeshes. For now, free-roam is best!
         return false;
@@ -947,7 +932,6 @@ function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
 function BlueprintWorkspace() {
     const { toast } = useToast();
     const [mode, setMode] = useState<'upload' | 'describe'>('upload');
-    const [file, setFile] = useState<File | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     const [description, setDescription] = useState('');
     const [status, setStatus] = useState<'idle' | 'preprocessing' | 'analyzing' | 'generating' | 'complete'>('idle');
@@ -966,11 +950,6 @@ function BlueprintWorkspace() {
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
-    const [dwgSupport, setDwgSupport] = useState<{
-        checked: boolean;
-        enabled: boolean;
-        message: string | null;
-    }>({ checked: false, enabled: true, message: null });
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
 
@@ -992,38 +971,6 @@ function BlueprintWorkspace() {
         }
         console.log(`[Blueprint Flow][${runId}] ${step}`);
     };
-
-    React.useEffect(() => {
-        let active = true;
-        (async () => {
-            try {
-                const capabilities = await getCadPipelineCapabilities();
-                if (!active) return;
-
-                if (capabilities.dwgSupported) {
-                    setDwgSupport({ checked: true, enabled: true, message: null });
-                    return;
-                }
-
-                setDwgSupport({
-                    checked: true,
-                    enabled: false,
-                    message: 'DWG converter is not configured on the server. Upload DXF or image files, or configure INFRALITH_DWG_TO_DXF_COMMAND.',
-                });
-            } catch (error) {
-                if (!active) return;
-                setDwgSupport({
-                    checked: true,
-                    enabled: false,
-                    message: 'Could not verify DWG converter availability. Upload DXF or image files.',
-                });
-            }
-        })();
-
-        return () => {
-            active = false;
-        };
-    }, []);
 
     // Initialize visibility
     React.useEffect(() => {
@@ -1110,31 +1057,19 @@ function BlueprintWorkspace() {
         'image/jpeg',
         'image/jpg',
         'image/webp',
-        'application/dxf',
-        'image/vnd.dxf',
-        'application/acad',
-        'application/dwg',
-        'application/x-dwg',
-        'image/vnd.dwg',
-        'image/x-dwg',
     ];
 
     const isAcceptedFile = (f: File) => {
         if (ACCEPTED_TYPES.includes(f.type)) return true;
         const name = f.name.toLowerCase();
-        return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp') || name.endsWith('.dxf') || name.endsWith('.dwg');
+        return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files?.[0]) {
             const f = e.target.files[0];
-            const isDwg = f.name.toLowerCase().endsWith('.dwg');
             if (!isAcceptedFile(f)) {
-                toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, WEBP, DXF, or DWG.', variant: 'destructive' });
-                return;
-            }
-            if (isDwg && dwgSupport.checked && !dwgSupport.enabled) {
-                toast({ title: 'DWG Unavailable', description: dwgSupport.message || 'DWG converter is not configured.', variant: 'destructive' });
+                toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, JPEG, or WEBP.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -1145,13 +1080,8 @@ function BlueprintWorkspace() {
         e.preventDefault();
         if (e.dataTransfer.files?.[0]) {
             const f = e.dataTransfer.files[0];
-            const isDwg = f.name.toLowerCase().endsWith('.dwg');
             if (!isAcceptedFile(f)) {
-                toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, WEBP, DXF, or DWG.', variant: 'destructive' });
-                return;
-            }
-            if (isDwg && dwgSupport.checked && !dwgSupport.enabled) {
-                toast({ title: 'DWG Unavailable', description: dwgSupport.message || 'DWG converter is not configured.', variant: 'destructive' });
+                toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, JPEG, or WEBP.', variant: 'destructive' });
                 return;
             }
             await startFileGeneration(f);
@@ -1174,7 +1104,7 @@ function BlueprintWorkspace() {
     });
 
     const resetState = useCallback(() => {
-        setFile(null); setPreview(null); setDescription('');
+        setPreview(null); setDescription('');
         setStatus('idle'); setProgress(0); setElements(null);
     }, [setElements]);
 
@@ -1207,21 +1137,12 @@ function BlueprintWorkspace() {
             type: f.type || 'unknown',
             sizeBytes: f.size,
         });
-        setFile(f); setStatus('preprocessing'); setProgress(0);
+        setStatus('preprocessing'); setProgress(0);
 
         try {
-            const fileName = f.name.toLowerCase();
-            const isDxf = fileName.endsWith('.dxf');
-            const isDwg = fileName.endsWith('.dwg');
-
-            if (isDxf || isDwg) {
-                setPreview(null);
-                logBlueprintFlow('Step 2/9 CAD file detected, skipping image preview.', { isDxf, isDwg });
-            } else {
-                const previewUrl = URL.createObjectURL(f);
-                setPreview(previewUrl);
-                logBlueprintFlow('Step 2/9 preview URL created.');
-            }
+            const previewUrl = URL.createObjectURL(f);
+            setPreview(previewUrl);
+            logBlueprintFlow('Step 2/9 preview URL created.');
         } catch (previewError) {
             console.warn('[Blueprint Flow] Preview creation failed.', previewError);
         }
@@ -1229,38 +1150,18 @@ function BlueprintWorkspace() {
         let cur = 0;
         const iv = setInterval(() => { cur += 0.02; if (cur <= 0.20) setProgress(cur); }, 80);
         try {
-            const fileName = f.name.toLowerCase();
-            const isDwg = fileName.endsWith('.dwg');
-            const isDxf = fileName.endsWith('.dxf');
-            let result;
-            logBlueprintFlow('Step 5/9 selecting processing pipeline.', { isDxf, isDwg });
+            logBlueprintFlow('Step 5/9 selecting processing pipeline.', { mode: 'vision-image' });
             setStatus('analyzing');
 
-            if (isDwg) {
-                if (dwgSupport.checked && !dwgSupport.enabled) {
-                    throw new Error(dwgSupport.message || 'DWG conversion is unavailable on this server.');
-                }
-                toast({ title: "DWG Model Detected", description: "Converting DWG to DXF and parsing CAD geometry...", duration: 5000 });
-                const dwgBase64 = await fileToBase64(f);
-                logBlueprintFlow('Step 6/9 executing DWG conversion pipeline.', { base64Chars: dwgBase64.length });
-                result = await processDwgTo3D(dwgBase64);
-            }
-            else if (isDxf) {
-                toast({ title: "DXF Model Detected", description: "Parsing CAD vector entities and constructing BIM geometry...", duration: 5000 });
-                const dxfText = await f.text();
-                logBlueprintFlow('Step 6/9 executing DXF CAD pipeline.', { textChars: dxfText.length });
-                result = await processDxfTo3D(dxfText);
-            } else {
-                const b64 = await fileToBase64(f);
-                logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', { base64Chars: b64.length });
-                result = await processBlueprintTo3D(b64);
-            }
+            const b64 = await fileToBase64(f);
+            logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', { base64Chars: b64.length });
+            const result = await processBlueprintTo3D(b64);
 
             clearInterval(iv);
             logBlueprintFlow('Step 7/9 structured geometry received from AI pipeline.', summarizeReconstruction(result));
             animateProgress(result);
         } catch (error: unknown) {
-            clearInterval(iv); setStatus('idle'); setFile(null); setPreview(null);
+            clearInterval(iv); setStatus('idle'); setPreview(null);
             console.error('[Blueprint Flow] Generation failed.', error);
             const message = error instanceof Error
                 ? error.message
@@ -1764,7 +1665,6 @@ function BlueprintWorkspace() {
                                             minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                             maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
                                         } : undefined}
-                                        walls={elements?.walls}
                                     />
                                 )}
 
@@ -2057,21 +1957,16 @@ function BlueprintWorkspace() {
                                         >
                                             <Upload className="h-10 w-10 text-[#f97316] mb-3" strokeWidth={2.5} />
                                             <h3 className="text-lg font-black text-foreground tracking-tight mb-1">Upload Blueprint</h3>
-                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image, DXF, or DWG file</p>
+                                            <p className="text-[13px] text-muted-foreground mb-5">Drop your floor plan image file</p>
                                             <div className="flex items-center gap-2">
-                                                {["PNG", "JPG", "JPEG", "WEBP", "DXF", "DWG"].map(ext => (
+                                                {["PNG", "JPG", "JPEG", "WEBP"].map(ext => (
                                                     <span key={ext} className="px-3.5 py-1 rounded-full border border-[#f97316]/30 text-[#f97316] text-[10px] font-black uppercase bg-background">
                                                         {ext}
                                                     </span>
                                                 ))}
                                             </div>
-                                            {dwgSupport.checked && !dwgSupport.enabled && (
-                                                <div className="mt-4 w-full rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-700 text-center">
-                                                    DWG conversion is unavailable on this server. Upload DXF or image files instead.
-                                                </div>
-                                            )}
                                         </div>
-                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".png,.jpg,.jpeg,.webp,.dxf,.dwg,image/*" onChange={handleFileUpload} />
+                                        <input type="file" id="blueprint-upload-centered" className="hidden" accept=".png,.jpg,.jpeg,.webp,image/*" onChange={handleFileUpload} />
                                         <Button
                                             onClick={() => document.getElementById('blueprint-upload-centered')?.click()}
                                             className="w-full bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-12 rounded-[16px] text-[14px] shadow-lg shadow-[#f97316]/20 transition-all hover:-translate-y-0.5"
