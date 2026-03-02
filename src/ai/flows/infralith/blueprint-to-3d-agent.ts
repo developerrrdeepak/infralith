@@ -147,6 +147,91 @@ const polygonArea = (points: [number, number][]) => {
   return sum / 2;
 };
 
+const dedupe2DPoints = (points: [number, number][], precision = 3): [number, number][] => {
+  const seen = new Set<string>();
+  const unique: [number, number][] = [];
+  for (const [x, y] of points) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const key = `${x.toFixed(precision)},${y.toFixed(precision)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push([Number(x.toFixed(precision)), Number(y.toFixed(precision))]);
+  }
+  return unique;
+};
+
+const convexHull = (points: [number, number][]): [number, number][] => {
+  const pts = [...points].sort((a, b) => (a[0] === b[0] ? a[1] - b[1] : a[0] - b[0]));
+  if (pts.length <= 1) return pts;
+
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  const lower: [number, number][] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+
+  const upper: [number, number][] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+};
+
+const inferRoofFromWallFootprint = (payload: GeometricReconstruction): GeometricReconstruction => {
+  if (payload.roof || !Array.isArray(payload.walls) || payload.walls.length < 3) {
+    return payload;
+  }
+
+  const exteriorWalls = payload.walls.filter((w) => w?.is_exterior);
+  const sourceWalls = exteriorWalls.length >= 3 ? exteriorWalls : payload.walls;
+  const footprintPoints = dedupe2DPoints(
+    sourceWalls.flatMap((wall) => [wall.start, wall.end]).filter((pt): pt is [number, number] => Array.isArray(pt) && pt.length >= 2)
+  );
+  if (footprintPoints.length < 3) return payload;
+
+  let polygon = convexHull(footprintPoints);
+  if (polygon.length < 3) return payload;
+  if (polygonArea(polygon) < 0) {
+    polygon = [...polygon].reverse();
+  }
+
+  const area = Math.abs(polygonArea(polygon));
+  if (area < 4) return payload;
+
+  const maxWallHeight = Math.max(...payload.walls.map((w) => Number(w?.height || 2.8)));
+  const nextConflicts = [...(payload.conflicts || [])];
+  nextConflicts.push({
+    type: 'code',
+    severity: 'low',
+    description: 'Roof was inferred deterministically from outer wall footprint.',
+    location: polygon[0],
+  });
+
+  return {
+    ...payload,
+    roof: {
+      type: 'flat',
+      polygon,
+      height: 1.2,
+      base_height: Number(maxWallHeight.toFixed(2)),
+      color: '#a0522d',
+    },
+    conflicts: nextConflicts,
+  };
+};
+
 const convertPixelsToMeters = (x: number, y: number, minX: number, minY: number, scale: number): [number, number] => {
   const mx = (x - minX) * scale;
   // Flip Y so blueprint top-down image maps to 3D +Z direction consistently.
@@ -1848,6 +1933,8 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     - SNAP all adjacent wall endpoints within 0.15m to nearest shared point.
     - Every room MUST have a fully closed polygon forming its floor slab.
     - Room polygons MUST be Counter - Clockwise(CCW) ordered to prevent "bow-tie" rendering in Three.js.
+    - Identify the outermost building boundary and ALWAYS map it into roof.polygon.
+    - If roof style is unclear, set roof.type="flat" and still return roof.polygon from that outer boundary.
 
     THINKING PROCESS(reason step - by - step before generating output):
 - Step 1: Identify the scale factor from dimension labels or standard ratios.
@@ -1908,6 +1995,8 @@ HARD CONSTRAINTS FOR THIS RETRY:
     if (!result || !result.walls || result.walls.length === 0) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
+
+    result = inferRoofFromWallFootprint(result);
 
     // Apply strict deterministic architectural building code checks
     console.log("[Infralith Vision Engine] Step 6/9 applying deterministic building-code validation.");
