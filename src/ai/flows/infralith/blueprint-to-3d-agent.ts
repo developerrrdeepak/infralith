@@ -634,7 +634,7 @@ async function runPythonVectorizationScript(base64Image: string): Promise<Vector
 }
 
 async function runVectorizationScript(base64Image: string): Promise<VectorizationResult> {
-  const preference = (process.env.INFRALITH_VECTOR_ENGINE || 'auto').trim().toLowerCase();
+  const preference = (process.env.INFRALITH_VECTOR_ENGINE || 'opencvjs').trim().toLowerCase();
   const allowOpenCvJs = preference !== 'python';
   const allowPython = preference !== 'opencvjs';
 

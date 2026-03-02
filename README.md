@@ -61,7 +61,7 @@ This repository has been cleaned and reorganized for maintainability, with expli
   ```bash
   npm install canvas
   ```
-- With `INFRALITH_VECTOR_ENGINE=auto` (default), the server tries OpenCV.js first, then Python, then vision-only fallback.
+- Default vector engine is `opencvjs` (no Python dependency). Set `INFRALITH_VECTOR_ENGINE=auto` to allow Python fallback when OpenCV.js is unavailable.
 - With `INFRALITH_LAYOUT_HINT_MODE=auto` (default), local OCR is used first (if installed), and Azure layout calls are used only when local hints are weak.
 
 ## Repository Layout
