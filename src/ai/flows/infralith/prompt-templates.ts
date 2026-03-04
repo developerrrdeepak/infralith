@@ -2,7 +2,6 @@ import type { BlueprintLayoutHints } from "@/ai/azure-ai";
 
 const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
 const PROMPT_LINE_BBOX_LIMIT = 48;
-const PROMPT_LINE_TEXT_LIMIT = 48;
 
 const toFinite = (value: unknown): number | null => {
   const n = Number(value);
@@ -29,84 +28,6 @@ const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, nu
   ];
 };
 
-const FLOOR_LABEL_PATTERNS: Array<{ key: string; regex: RegExp; floorKey?: string; }> = [
-  { key: "BASEMENT", regex: /\b(basement|cellar|lower\s*ground|b\/?f)\b/i, floorKey: "L-1" },
-  { key: "STILT", regex: /\b(stilt\s*floor)\b/i, floorKey: "L0" },
-  { key: "GROUND", regex: /\b(ground\s*floor|ground\b|g\/?f\b)\b/i, floorKey: "L0" },
-  { key: "FIRST", regex: /\b(first\s*floor|1st\s*floor|ff\b|f\/?f\b)\b/i, floorKey: "L1" },
-  { key: "SECOND", regex: /\b(second\s*floor|2nd\s*floor)\b/i, floorKey: "L2" },
-  { key: "THIRD", regex: /\b(third\s*floor|3rd\s*floor)\b/i, floorKey: "L3" },
-  { key: "FOURTH", regex: /\b(fourth\s*floor|4th\s*floor)\b/i, floorKey: "L4" },
-  { key: "TERRACE", regex: /\b(terrace\s*floor|roof\s*floor|terrace\b)\b/i },
-];
-
-const FLOOR_LEVEL_CAPTURE_PATTERNS: RegExp[] = [
-  /\b(?:level|lvl|floor|flr|storey|story)\s*[-_:]?\s*([a-z0-9]+)\b/gi,
-  /\b([a-z0-9]+)\s*(?:level|lvl|floor|flr|storey|story)\b/gi,
-  /\b(?:l|f)\s*[-_:]?\s*(\d{1,2})\b/gi,
-];
-
-const ROMAN_TO_INT: Record<string, number> = {
-  i: 1,
-  ii: 2,
-  iii: 3,
-  iv: 4,
-  v: 5,
-  vi: 6,
-  vii: 7,
-  viii: 8,
-  ix: 9,
-  x: 10,
-};
-
-const parseFloorToken = (tokenRaw: string): string | null => {
-  const token = String(tokenRaw || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9+-]/g, "");
-  if (!token) return null;
-  if (token === "g" || token === "gf" || token === "ground") return "L0";
-  if (token === "b" || token === "bf" || token === "basement" || token === "cellar") return "L-1";
-  const roman = ROMAN_TO_INT[token];
-  if (Number.isFinite(roman)) return `L${roman}`;
-  const numeric = Number(token);
-  if (Number.isFinite(numeric) && numeric >= -3 && numeric <= 30) return `L${Math.trunc(numeric)}`;
-  return null;
-};
-
-const collectFloorKeysFromText = (rawText: string): string[] => {
-  const text = String(rawText || "").replace(/\s+/g, " ").trim();
-  if (!text) return [];
-  const detected = new Set<string>();
-  for (const pattern of FLOOR_LABEL_PATTERNS) {
-    if (pattern.regex.test(text)) detected.add(pattern.floorKey || pattern.key);
-  }
-  for (const baseRegex of FLOOR_LEVEL_CAPTURE_PATTERNS) {
-    const regex = new RegExp(baseRegex.source, baseRegex.flags);
-    for (const match of text.matchAll(regex)) {
-      const floorKey = parseFloorToken(match?.[1] || "");
-      if (floorKey) detected.add(floorKey);
-    }
-  }
-  return [...detected];
-};
-
-const inferFloorLabelsFromHints = (layoutHints: BlueprintLayoutHints | null): string[] => {
-  if (!layoutHints) return [];
-  const sourceTexts = [
-    ...(layoutHints.lineTexts || []),
-    ...(layoutHints.floorLabelAnchors || []).map((anchor) => String(anchor?.text || "")),
-    ...(layoutHints.dimensionAnchors || []).map((anchor) => String(anchor?.text || "")),
-  ];
-  const detected = new Set<string>();
-  for (const rawText of sourceTexts) {
-    for (const floorKey of collectFloorKeysFromText(rawText)) {
-      detected.add(floorKey);
-    }
-  }
-  return [...detected];
-};
-
 const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null) => {
   if (!layoutHints) return "Not available.";
 
@@ -127,42 +48,24 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     }))
     .filter((anchor) => Array.isArray(anchor.bbox));
 
-  const floorLabelAnchors = (layoutHints.floorLabelAnchors || [])
-    .slice(0, PROMPT_DIMENSION_ANCHOR_LIMIT)
-    .map((anchor) => ({
-      text: String(anchor?.text || "").slice(0, 80),
-      bbox: polygonToBoundingBox(anchor?.polygon || []),
-    }))
-    .filter((anchor) => Array.isArray(anchor.bbox));
-
   const lineBBoxes = (layoutHints.linePolygons || [])
     .slice(0, PROMPT_LINE_BBOX_LIMIT)
     .map((polygon) => polygonToBoundingBox(polygon))
     .filter((bbox): bbox is [number, number, number, number] => Array.isArray(bbox));
-
-  const lineTexts = (layoutHints.lineTexts || [])
-    .slice(0, PROMPT_LINE_TEXT_LIMIT)
-    .map((text) => String(text || "").replace(/\s+/g, " ").trim().slice(0, 120))
-    .filter(Boolean);
 
   return JSON.stringify({
     pageCount: layoutHints.pageCount || pageSummary.length,
     pages: pageSummary,
     linePolygonCount: layoutHints.linePolygons?.length || 0,
     sampledLineBBoxes: lineBBoxes,
-    sampledLineTexts: lineTexts,
     dimensionAnchorCount: layoutHints.dimensionAnchors?.length || 0,
     sampledDimensionAnchors: dimensionAnchors,
-    floorLabelAnchorCount: layoutHints.floorLabelAnchors?.length || 0,
-    sampledFloorLabelAnchors: floorLabelAnchors,
   }, null, 2);
 };
 
 export const buildBlueprintVisionPrompt = (layoutHints: BlueprintLayoutHints | null): string => `
 You are Infralith Blueprint Reconstruction Engine v5.
 Goal: convert a 2D floorplan image into a metrically consistent, topologically valid geometric reconstruction for BIM pre-processing.
-
-DETECTED_FLOOR_LABELS_FROM_LAYOUT_HINTS: ${JSON.stringify(inferFloorLabelsFromHints(layoutHints))}
 
 PRIORITY ORDER:
 1) Geometric correctness and topology validity.
@@ -196,17 +99,13 @@ MANDATORY PIPELINE:
 - Separate distinct floor blocks and assign integer floor_level from 0.
 - Keep floor-local geometry consistent in a shared global frame.
 - If vertical alignment between floors is uncertain, add conflict instead of guessing hidden structure.
-- If line texts include labels like "GROUND FLOOR", "FIRST FLOOR", "SECOND FLOOR", "TERRACE", "STILT", "BASEMENT", map each detected floor to a distinct floor_level.
-- Do not collapse all entities to floor_level=0 when multiple floor labels are present.
-- meta.floor_count MUST equal the count of distinct floor_level values present across walls/rooms/doors/windows.
-- Every detected floor_level must contain a non-trivial wall graph (not just 1-2 isolated walls).
 
 4) OPENINGS AFTER STABLE WALLS
 - Detect doors/windows only after walls are stable.
 - Every opening must reference an existing host_wall_id on the same floor_level.
 - If host wall is ambiguous, omit opening and record conflict.
-- If an opening dimension is unreadable, omit that opening and record conflict.
-- If evidence clearly indicates openings (symbols/labels), output non-zero openings for those floors.
+- Use conservative defaults only if symbol is clearly detected but size text is unreadable:
+  door width 0.9m, door height 2.1m, window sill_height 0.9m.
 
 5) ROOM POLYGONS
 - Build room polygons only from enclosed wall regions.
@@ -215,8 +114,9 @@ MANDATORY PIPELINE:
 - Use visible labels when available; otherwise use deterministic names ("Room 1", "Room 2", ...).
 
 6) ROOF FOOTPRINT
-- Only include roof when roof evidence is explicit in the blueprint.
-- If roof geometry/type is unclear, return roof as null and add a conflict.
+- Set roof polygon from the outer building shell.
+- Keep roof aligned with shell geometry.
+- If roof type is unclear, use "flat".
 
 7) FURNITURE POLICY
 - Furniture is optional and conservative.
@@ -238,42 +138,41 @@ OUTPUT CONTRACT:
 Return ONLY one valid JSON object matching exactly this structure:
 {
   "meta": {
-    "unit": "m|cm|mm|ft|in|unknown|null",
-    "scale_m_per_px": <number|null>,
-    "scale_confidence": <number|null>,
-    "rotation_deg": <number|null>,
-    "floor_count": <integer|null>
+    "unit": "m|cm|mm|ft|in|unknown",
+    "scale_m_per_px": 0.001,
+    "scale_confidence": 0.0,
+    "rotation_deg": 0,
+    "floor_count": 1
   },
-  "building_name": <string|null>,
-  "exterior_color": <string|null>,
+  "building_name": "Project Name",
+  "exterior_color": "#hex",
   "walls": [
-    { "id": <string|number>, "start": [x, y], "end": [x, y], "thickness": <number>, "height": <number>, "confidence": <number|null>, "color": <string|null>, "is_exterior": <boolean>, "floor_level": <integer> }
+    { "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "confidence": 0.0, "color": "#hex", "is_exterior": true, "floor_level": 0 }
   ],
   "doors": [
-    { "id": <string|number>, "host_wall_id": <string|number>, "position": [x, y], "width": <number>, "height": <number>, "swing": "left|right|unknown|null", "confidence": <number|null>, "color": <string|null>, "floor_level": <integer> }
+    { "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "swing": "left|right|unknown", "confidence": 0.0, "color": "#hex", "floor_level": 0 }
   ],
   "windows": [
-    { "id": <string|number>, "host_wall_id": <string|number>, "position": [x, y], "width": <number>, "sill_height": <number>, "confidence": <number|null>, "color": <string|null>, "floor_level": <integer> }
+    { "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "confidence": 0.0, "color": "#hex", "floor_level": 0 }
   ],
   "rooms": [
-    { "id": <string|number>, "name": <string>, "polygon": [[x, y], [x, y], [x, y]], "area": <number>, "confidence": <number|null>, "floor_color": <string|null>, "floor_level": <integer> }
+    { "id": "r1", "name": "Room Name", "polygon": [[x, y], [x, y], [x, y]], "area": 0.0, "confidence": 0.0, "floor_color": "#hex", "floor_level": 0 }
   ],
   "furnitures": [
-    { "id": <string|number>, "room_id": <string|number>, "type": <string>, "position": [x, y], "width": <number>, "depth": <number>, "height": <number>, "color": <string|null>, "description": <string>, "floor_level": <integer> }
+    { "id": "f1", "room_id": "r1", "type": "table", "position": [x, y], "width": 1.2, "depth": 0.8, "height": 0.75, "color": "#hex", "description": "Simple table", "floor_level": 0 }
   ],
-  "roof": { "type": "flat|gable|hip", "polygon": [[x, y], [x, y], [x, y]], "height": <number>, "base_height": <number>, "color": <string|null> } | null,
+  "roof": { "type": "flat", "polygon": [[x, y], [x, y], [x, y]], "height": 1.5, "base_height": 2.8, "color": "#hex" },
   "topology_checks": {
-    "closed_wall_loops": <boolean|null>,
-    "self_intersections": <integer|null>,
-    "dangling_walls": <integer|null>,
-    "unhosted_openings": <integer|null>,
-    "room_polygon_validity_pass": <boolean|null>
-  } | null,
+    "closed_wall_loops": true,
+    "self_intersections": 0,
+    "dangling_walls": 0,
+    "unhosted_openings": 0,
+    "room_polygon_validity_pass": true
+  },
   "conflicts": [
-    { "type": "structural|safety|code", "severity": "low|medium|high", "description": <string>, "location": [x, y] }
+    { "type": "structural", "severity": "medium", "description": "Conflict text", "location": [x, y] }
   ]
 }
-- The placeholder tokens above (<number>, <string>, <integer>, etc.) are schema guides, not literal output values.
 
 STRICT OUTPUT RULE:
 - Output JSON object only.
@@ -297,67 +196,66 @@ RETRY HARD GATES:
 `;
 
 export const buildTextToBuildingPrompt = (description: string): string => `
-You are Infralith Architect Engine.
-Task: generate production-grade building geometry from the user description.
+You are the Infralith Architect AI - the world's most advanced parametric architectural modeling engine.
+Your task: Generate a COMPLETE, REALISTIC, and STRUCTURALLY SOUND 3D building from the user's description.
 
-User Description: "${description}"
+User's Vision: "${description}"
 
-MANDATORY RULES:
-- No canned templates, mock layouts, or hardcoded showcase examples.
-- Derive structure directly from the user description.
-- If a required detail is missing, use conservative assumptions and record each assumption as a conflict.
-- Keep all coordinates in meters.
+CORE DESIGN PRINCIPLES:
+1. METRIC PRECISION: Use real-world dimensions.
+   - Standard bedroom: 12 - 16 sqm | Living room: 20 - 30 sqm | Kitchen: 10 - 15 sqm | WC: 3 - 5 sqm | Foyer: 4 - 6 sqm
+2. TOPOLOGICAL INTEGRITY: All exterior walls must form a 100% closed perimeter. Absolutely no gaps.
+3. ACCESSIBLE LAYOUT: Every room must be reachable via at least one door. No "sealed rooms".
+4. MULTI-LEVEL LOGIC: For multi-floor buildings:
+   - Floor 1 load-bearing walls must align above Floor 0 walls.
+   - Maintain a consistent (0, 0) building core origin across all levels.
+   - Include staircase space (approx 3m x 1.5m) connecting floors.
+5. WINDOW PLACEMENT: Windows on exterior walls only. Minimum 1 window per habitable room.
+6. STRUCTURE-FIRST PHASING (MANDATORY):
+   - First generate the complete building shell (all floors + all walls) before any detail.
+   - Then generate openings (doors/windows) anchored to shell walls.
+   - Then generate rooms and furnitures.
+   - If detail conflicts with shell, keep shell and fix detail.
 
-STRUCTURAL QUALITY GATES:
-1. Build structural shell first: all floors + exterior/interior walls.
-2. Keep walls topologically valid: no zero-length walls, no duplicate wall IDs, no disconnected shells.
-3. Then add openings: every door/window must have a valid host_wall_id on the same floor_level.
-4. Then add rooms: enclosed, non-self-intersecting polygons only (CCW ordering).
-5. Multi-floor integrity:
-   - Keep distinct floor_level partitions.
-   - Keep vertical alignment of load-bearing structure where feasible.
-   - Set meta.floor_count to number of distinct floor_level values in output.
-6. Roof policy:
-   - Include roof only if user description clearly asks for it.
-   - If uncertain, return roof as null and add a conflict.
+ROOM POLYGON RULE: All room polygons MUST be Counter-Clockwise (CCW) ordered.
 
-OUTPUT CONTRACT:
-Return JSON only using this schema shape:
+STRUCTURAL THINKING PROCESS:
+- Step 0: Complete full structural shell first (all floors, all walls, aligned core).
+- Step 0.5: Validate shell continuity before adding details.
+- Step 1: Sketch the floor plan mentally. Define the exterior perimeter first.
+- Step 2: Partition the interior into logical rooms. Validate no wall gaps exist.
+- Step 3: Place doors at room boundaries. Ensure all rooms accessible.
+- Step 4: Place windows on exterior walls only.
+- Step 5: For multi-floor: Verify Floor 1 aligns with Floor 0's load-bearing structure.
+- Step 6: Final audit - list any structural concerns in "conflicts".
+
+FURNISHING (MANDATORY AND UNIQUE):
+- Fully furnish every room using the 'furnitures' array. Include beds, wardrobes, TVs, kitchen islands, sofas, rugs, plants, dining tables, toilets, etc.
+- Do not limit yourself to a few assets. Fill the space logically.
+- Provide a completely UNIQUE 'description' for each item so the Procedural Voxel Engine builds distinct assets.
+
+LUXURY MATERIAL PALETTE (CRITICAL: RANDOMIZE AND VARY THESE):
+- Do NOT use a fixed set of colors.
+- Output random but beautiful HEX colors for exterior walls, interior walls, floors (varying by room), doors, windows, and roof.
+
+GEOMETRIC REQUIREMENTS:
+- Wall thickness: 0.23m (exterior) or 0.115m (interior). Height: 2.8m per floor.
+- All coordinates in METERS. Building core at (0, 0).
+
+OUTPUT - Respond ONLY with a valid JSON object:
 {
-  "meta": {
-    "unit": "m|cm|mm|ft|in|unknown|null",
-    "scale_m_per_px": <number|null>,
-    "scale_confidence": <number|null>,
-    "rotation_deg": <number|null>,
-    "floor_count": <integer|null>
-  },
-  "building_name": <string|null>,
-  "exterior_color": <string|null>,
-  "walls": [
-    { "id": <string|number>, "start": [x, y], "end": [x, y], "thickness": <number>, "height": <number>, "confidence": <number|null>, "color": <string|null>, "is_exterior": <boolean>, "floor_level": <integer> }
-  ],
-  "doors": [
-    { "id": <string|number>, "host_wall_id": <string|number>, "position": [x, y], "width": <number>, "height": <number>, "swing": "left|right|unknown|null", "confidence": <number|null>, "color": <string|null>, "floor_level": <integer> }
-  ],
-  "windows": [
-    { "id": <string|number>, "host_wall_id": <string|number>, "position": [x, y], "width": <number>, "sill_height": <number>, "confidence": <number|null>, "color": <string|null>, "floor_level": <integer> }
-  ],
-  "rooms": [
-    { "id": <string|number>, "name": <string>, "polygon": [[x, y], [x, y], [x, y]], "area": <number>, "confidence": <number|null>, "floor_color": <string|null>, "floor_level": <integer> }
-  ],
-  "furnitures": [
-    { "id": <string|number>, "room_id": <string|number>, "type": <string>, "position": [x, y], "width": <number>, "depth": <number>, "height": <number>, "color": <string|null>, "description": <string>, "floor_level": <integer> }
-  ],
-  "roof": { "type": "flat|gable|hip", "polygon": [[x, y], [x, y], [x, y]], "height": <number>, "base_height": <number>, "color": <string|null> } | null,
-  "conflicts": [
-    { "type": "structural|safety|code", "severity": "low|medium|high", "description": <string>, "location": [x, y] }
-  ]
+  "building_name": "Premium Project Name",
+  "exterior_color": "#f8f1e7",
+  "walls": [{ "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "color": "#f8f1e7", "is_exterior": true, "floor_level": 0 }],
+  "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
+  "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#2c3e50", "floor_level": 0 }],
+  "rooms": [{ "id": "r1", "name": "Space Name", "polygon": [[x, y], [x, y], [x, y]], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }],
+  "furnitures": [{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
+  "roof": { "type": "flat", "polygon": [[x, y], [x, y], [x, y]], "height": 1.5, "base_height": 2.8, "color": "#a0522d" },
+  "conflicts": []
 }
-- Placeholder tokens (<number>, <string>, etc.) are guides, not literal values.
 
-STRICT OUTPUT:
-- JSON object only.
-- No markdown, no prose, no code fences.
+STRICT RULE: Output the JSON object ONLY. No markdown, no prose, no code fences.
 `;
 
 export const buildAssetPrompt = (description: string): string => `
