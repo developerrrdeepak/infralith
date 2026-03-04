@@ -52,14 +52,83 @@ const summarizeLayoutHints = (payload: BlueprintLayoutHints | null) => ({
   pages: payload?.pageCount || 0,
   linePolygons: payload?.linePolygons?.length || 0,
   dimensionAnchors: payload?.dimensionAnchors?.length || 0,
+  lineTexts: payload?.lineTexts?.length || 0,
 });
 
 const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
+const LAYOUT_LINE_TEXT_LIMIT = 140;
 const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 
 type LayoutHintMode = 'auto' | 'azure' | 'local' | 'hybrid';
 const MIN_LAYOUT_SIGNALS_REQUIRED = 1;
+
+const FLOOR_LABEL_PATTERNS: Array<{ key: string; regex: RegExp; floorKey?: string; }> = [
+  { key: 'BASEMENT', regex: /\b(basement|cellar|lower\s*ground|b\/?f)\b/i, floorKey: 'L-1' },
+  { key: 'STILT', regex: /\b(stilt\s*floor)\b/i, floorKey: 'L0' },
+  { key: 'GROUND', regex: /\b(ground\s*floor|ground\b|g\/?f\b)\b/i, floorKey: 'L0' },
+  { key: 'FIRST', regex: /\b(first\s*floor|1st\s*floor|ff\b|f\/?f\b)\b/i, floorKey: 'L1' },
+  { key: 'SECOND', regex: /\b(second\s*floor|2nd\s*floor)\b/i, floorKey: 'L2' },
+  { key: 'THIRD', regex: /\b(third\s*floor|3rd\s*floor)\b/i, floorKey: 'L3' },
+  { key: 'FOURTH', regex: /\b(fourth\s*floor|4th\s*floor)\b/i, floorKey: 'L4' },
+  { key: 'TERRACE', regex: /\b(terrace\s*floor|roof\s*floor|terrace\b)\b/i },
+];
+
+const FLOOR_LEVEL_CAPTURE_PATTERNS: RegExp[] = [
+  /\b(?:level|lvl|floor|flr|storey|story)\s*[-_:]?\s*([a-z0-9]+)\b/gi,
+  /\b([a-z0-9]+)\s*(?:level|lvl|floor|flr|storey|story)\b/gi,
+  /\b(?:l|f)\s*[-_:]?\s*(\d{1,2})\b/gi,
+];
+
+const ROMAN_TO_INT: Record<string, number> = {
+  i: 1,
+  ii: 2,
+  iii: 3,
+  iv: 4,
+  v: 5,
+  vi: 6,
+  vii: 7,
+  viii: 8,
+  ix: 9,
+  x: 10,
+};
+
+const parseFloorToken = (tokenRaw: string): string | null => {
+  const token = String(tokenRaw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9+-]/g, '');
+  if (!token) return null;
+  if (token === 'g' || token === 'gf' || token === 'ground') return 'L0';
+  if (token === 'b' || token === 'bf' || token === 'basement' || token === 'cellar') return 'L-1';
+  const roman = ROMAN_TO_INT[token];
+  if (Number.isFinite(roman)) return `L${roman}`;
+  const numeric = Number(token);
+  if (Number.isFinite(numeric) && numeric >= -3 && numeric <= 30) {
+    return `L${Math.trunc(numeric)}`;
+  }
+  return null;
+};
+
+const collectFloorKeysFromText = (rawText: string): string[] => {
+  const text = String(rawText || '').replace(/\s+/g, ' ').trim();
+  if (!text) return [];
+  const detected = new Set<string>();
+  for (const pattern of FLOOR_LABEL_PATTERNS) {
+    if (pattern.regex.test(text)) {
+      detected.add(pattern.floorKey || pattern.key);
+    }
+  }
+  for (const baseRegex of FLOOR_LEVEL_CAPTURE_PATTERNS) {
+    const regex = new RegExp(baseRegex.source, baseRegex.flags);
+    for (const match of text.matchAll(regex)) {
+      const token = match?.[1];
+      const floorKey = parseFloorToken(token);
+      if (floorKey) detected.add(floorKey);
+    }
+  }
+  return [...detected];
+};
 
 const asBool = (value: string | undefined, fallback: boolean): boolean => {
   if (value == null || value.trim() === '') return fallback;
@@ -81,6 +150,12 @@ const parseTimeoutMs = (
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
+};
+
+const parsePositiveEnvNumber = (value: string | undefined): number | null => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
 };
 
 const STAGE_HEARTBEAT_MS = parseTimeoutMs(process.env.INFRALITH_STAGE_HEARTBEAT_MS, 20_000, 5_000, 120_000);
@@ -232,6 +307,37 @@ const shouldRetryForUnderfit = (
   if (signalStrength >= 40 && wallCount <= 8) return true;
   if (signalStrength >= 60 && roomCount <= 2) return true;
   return false;
+};
+
+const inferExpectedFloorCountFromHints = (layoutHints: BlueprintLayoutHints | null): number => {
+  if (!layoutHints) return 0;
+  const texts = [
+    ...(layoutHints.lineTexts || []),
+    ...(layoutHints.dimensionAnchors || []).map((anchor) => String(anchor?.text || '')),
+  ];
+  const detected = new Set<string>();
+  for (const rawText of texts) {
+    for (const floorKey of collectFloorKeysFromText(String(rawText || ''))) {
+      detected.add(floorKey);
+    }
+  }
+  return detected.size;
+};
+
+const getObservedFloorCount = (result: GeometricReconstruction): number => {
+  const levels = new Set<number>();
+  const addLevel = (value: unknown) => {
+    const n = Number(value);
+    if (Number.isFinite(n)) levels.add(Math.round(n));
+  };
+
+  for (const wall of result?.walls || []) addLevel(wall?.floor_level);
+  for (const room of result?.rooms || []) addLevel(room?.floor_level);
+  for (const door of result?.doors || []) addLevel(door?.floor_level);
+  for (const win of result?.windows || []) addLevel(win?.floor_level);
+  for (const item of result?.furnitures || []) addLevel(item?.floor_level);
+
+  return Math.max(1, levels.size || 0);
 };
 
 const hasNonEmptyWalls = (
@@ -391,74 +497,9 @@ const extractConcaveBoundaryFromWalls = (
   return componentBestPolygons[0];
 };
 
-const inferRoofFromWallFootprint = (payload: GeometricReconstruction): GeometricReconstruction => {
-  if (payload.roof || !Array.isArray(payload.walls) || payload.walls.length < 3) {
-    return payload;
-  }
-
-  const exteriorWalls = payload.walls.filter((w) => w?.is_exterior);
-  const sourceWalls = exteriorWalls.length >= 3 ? exteriorWalls : payload.walls;
-  const footprintPoints = dedupe2DPoints(
-    sourceWalls.flatMap((wall) => [wall.start, wall.end]).filter((pt): pt is [number, number] => Array.isArray(pt) && pt.length >= 2)
-  );
-  if (footprintPoints.length < 3) return payload;
-
-  let polygon =
-    extractConcaveBoundaryFromWalls(sourceWalls.map((wall) => ({ start: wall.start, end: wall.end }))) ||
-    convexHull(footprintPoints);
-  if (polygon.length < 3) return payload;
-  if (polygonArea(polygon) < 0) {
-    polygon = [...polygon].reverse();
-  }
-
-  const area = Math.abs(polygonArea(polygon));
-  if (area < 4) return payload;
-
-  const maxWallHeight = Math.max(...payload.walls.map((w) => Number(w?.height || 2.8)));
-  const nextConflicts = [...(payload.conflicts || [])];
-  nextConflicts.push({
-    type: 'code',
-    severity: 'low',
-    description: 'Roof was inferred deterministically from outer wall footprint.',
-    location: polygon[0],
-  });
-
-  return {
-    ...payload,
-    roof: {
-      type: 'flat',
-      polygon,
-      height: 1.2,
-      base_height: Number(maxWallHeight.toFixed(2)),
-      color: '#a0522d',
-    },
-    conflicts: nextConflicts,
-  };
-};
+const inferRoofFromWallFootprint = (payload: GeometricReconstruction): GeometricReconstruction => payload;
 
 const pointDistance = (a: [number, number], b: [number, number]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-
-const closestPointOnSegment = (
-  point: [number, number],
-  start: [number, number],
-  end: [number, number]
-): { point: [number, number]; t: number; distance: number } => {
-  const sx = start[0];
-  const sz = start[1];
-  const ex = end[0];
-  const ez = end[1];
-  const vx = ex - sx;
-  const vz = ez - sz;
-  const lenSq = vx * vx + vz * vz;
-  if (lenSq < 1e-9) {
-    const d = pointDistance(point, start);
-    return { point: start, t: 0, distance: d };
-  }
-  const tRaw = ((point[0] - sx) * vx + (point[1] - sz) * vz) / lenSq;
-  const t = Math.max(0, Math.min(1, tRaw));
-  const projected: [number, number] = [sx + vx * t, sz + vz * t];
-  return { point: projected, t, distance: pointDistance(point, projected) };
-};
 
 const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -696,6 +737,8 @@ const applyWallMiterJoins = (
     const dz = wall.end[1] - wall.start[1];
     const length = Math.hypot(dx, dz);
     if (!Number.isFinite(length) || length < 1e-6) continue;
+    const thickness = Number(wall.thickness);
+    if (!Number.isFinite(thickness) || thickness <= 0) continue;
 
     const ux = dx / length;
     const uz = dz / length;
@@ -707,14 +750,14 @@ const applyWallMiterJoins = (
       atStart: true,
       directionAway: [ux, uz],
       length,
-      thickness: Math.max(0.08, Number(wall.thickness || 0.115)),
+      thickness,
     });
     pushEndpoint(endKey, {
       wallIndex: idx,
       atStart: false,
       directionAway: [-ux, -uz],
       length,
-      thickness: Math.max(0.08, Number(wall.thickness || 0.115)),
+      thickness,
     });
   }
 
@@ -800,7 +843,6 @@ const buildServerCutWallSolids = (
   const EPS = 1e-6;
   const MIN_SOLID_LENGTH = 0.08;
   const MIN_SOLID_HEIGHT = 0.08;
-  const DEFAULT_WINDOW_HEIGHT = 1.2;
 
   const doorsByWall = new Map<string, GeometricReconstruction['doors']>();
   const windowsByWall = new Map<string, GeometricReconstruction['windows']>();
@@ -879,22 +921,19 @@ const buildServerCutWallSolids = (
       const px = Number(door.position[0]);
       const pz = Number(door.position[1]);
       if (!Number.isFinite(px) || !Number.isFinite(pz)) continue;
+      const width = Number(door.width);
+      const height = Number(door.height);
+      if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) continue;
       const center = clampNumber((px - sx) * ux + (pz - sz) * uz, 0, length);
-      const halfWidth = Math.max(0.25, Number(door.width || 0.9) / 2);
-      const doorHeight = clampNumber(Number(door.height || 2.1), 0, wallHeight);
+      const halfWidth = width / 2;
+      const doorHeight = clampNumber(height, 0, wallHeight);
+      if (halfWidth <= 0) continue;
       pushCut(center - halfWidth, center + halfWidth, 0, doorHeight);
     }
 
-    for (const win of wallWindows) {
-      const px = Number(win.position[0]);
-      const pz = Number(win.position[1]);
-      if (!Number.isFinite(px) || !Number.isFinite(pz)) continue;
-      const center = clampNumber((px - sx) * ux + (pz - sz) * uz, 0, length);
-      const halfWidth = Math.max(0.2, Number(win.width || 1) / 2);
-      const sill = clampNumber(Number(win.sill_height || 0.9), 0, wallHeight);
-      const head = clampNumber(sill + DEFAULT_WINDOW_HEIGHT, 0, wallHeight);
-      pushCut(center - halfWidth, center + halfWidth, sill, head);
-    }
+    // No synthetic window head-height inference. If blueprint does not provide window
+    // height explicitly, we avoid fabricating vertical cuts in wall solids.
+    void wallWindows;
 
     const addSolid = (x0: number, x1: number, y0: number, y1: number) => {
       const segLength = x1 - x0;
@@ -910,7 +949,7 @@ const buildServerCutWallSolids = (
         source_wall_id: wall.id,
         start: [Number(wx0.toFixed(3)), Number(wz0.toFixed(3))],
         end: [Number(wx1.toFixed(3)), Number(wz1.toFixed(3))],
-        thickness: Number(wall.thickness || 0.115),
+        thickness: Number(wall.thickness),
         height: Number(segHeight.toFixed(3)),
         base_offset: Number(y0.toFixed(3)),
         color: wall.color,
@@ -1018,13 +1057,17 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     dx = end[0] - start[0];
     dz = end[1] - start[1];
     if (Math.hypot(dx, dz) < 0.25) continue;
+    const thickness = Number(wall.thickness);
+    const height = Number(wall.height);
+    if (!Number.isFinite(thickness) || thickness <= 0) continue;
+    if (!Number.isFinite(height) || height <= 0) continue;
 
     normalizedWalls.push({
       ...wall,
       start,
       end,
-      thickness: Math.max(0.08, Number(wall.thickness || (wall.is_exterior ? 0.23 : 0.115))),
-      height: Math.max(2.2, Number(wall.height || 2.8)),
+      thickness: Number(thickness.toFixed(3)),
+      height: Number(height.toFixed(3)),
     });
   }
 
@@ -1053,40 +1096,47 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     };
   }
 
-  const findNearestWallId = (position: [number, number]): string | number | null => {
-    let nearest: { id: string | number; distance: number } | null = null;
-    for (const wall of finalizedWalls) {
-      const projected = closestPointOnSegment(position, wall.start, wall.end);
-      if (!nearest || projected.distance < nearest.distance) {
-        nearest = { id: wall.id, distance: projected.distance };
-      }
-    }
-    return nearest?.id ?? null;
-  };
-
   const wallIdSet = new Set(finalizedWalls.map((wall) => String(wall.id)));
 
-  const normalizedDoors = (payload.doors || []).map((door) => {
-    const hostKnown = wallIdSet.has(String(door.host_wall_id));
-    const fallbackHost = findNearestWallId(door.position);
-    return {
-      ...door,
-      host_wall_id: hostKnown ? door.host_wall_id : (fallbackHost ?? door.host_wall_id),
-      width: Math.max(0.75, Number(door.width || 0.9)),
-      height: Math.max(2.0, Number(door.height || 2.1)),
-    };
-  });
+  const normalizedDoors = (payload.doors || [])
+    .map((door) => {
+      const hostKnown = wallIdSet.has(String(door.host_wall_id));
+      const width = Number(door.width);
+      const height = Number(door.height);
+      const x = Number(door.position?.[0]);
+      const z = Number(door.position?.[1]);
+      if (!hostKnown) return null;
+      if (!Number.isFinite(width) || width <= 0) return null;
+      if (!Number.isFinite(height) || height <= 0) return null;
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+      return {
+        ...door,
+        position: [Number(x.toFixed(3)), Number(z.toFixed(3))] as [number, number],
+        width: Number(width.toFixed(3)),
+        height: Number(height.toFixed(3)),
+      };
+    })
+    .filter((door): door is NonNullable<typeof door> => door != null);
 
-  const normalizedWindows = (payload.windows || []).map((win) => {
-    const hostKnown = wallIdSet.has(String(win.host_wall_id));
-    const fallbackHost = findNearestWallId(win.position);
-    return {
-      ...win,
-      host_wall_id: hostKnown ? win.host_wall_id : (fallbackHost ?? win.host_wall_id),
-      width: Math.max(0.5, Number(win.width || 1)),
-      sill_height: Math.max(0.6, Number(win.sill_height || 0.9)),
-    };
-  });
+  const normalizedWindows = (payload.windows || [])
+    .map((win) => {
+      const hostKnown = wallIdSet.has(String(win.host_wall_id));
+      const width = Number(win.width);
+      const sill = Number(win.sill_height);
+      const x = Number(win.position?.[0]);
+      const z = Number(win.position?.[1]);
+      if (!hostKnown) return null;
+      if (!Number.isFinite(width) || width <= 0) return null;
+      if (!Number.isFinite(sill) || sill < 0) return null;
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+      return {
+        ...win,
+        position: [Number(x.toFixed(3)), Number(z.toFixed(3))] as [number, number],
+        width: Number(width.toFixed(3)),
+        sill_height: Number(sill.toFixed(3)),
+      };
+    })
+    .filter((win): win is NonNullable<typeof win> => win != null);
 
   const normalizedRooms = (payload.rooms || [])
     .map((room) => {
@@ -1114,43 +1164,26 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     })
     .filter((room): room is NonNullable<typeof room> => room != null);
 
-  const normalizedFurnitures = (payload.furnitures || []).map((item) => {
-    const initialPos: [number, number] = [Number(item.position[0]), Number(item.position[1])];
-    let best: { wallStart: [number, number]; wallEnd: [number, number]; closest: [number, number]; distance: number } | null = null;
-    for (const wall of finalizedWalls) {
-      const projected = closestPointOnSegment(initialPos, wall.start, wall.end);
-      if (!best || projected.distance < best.distance) {
-        best = { wallStart: wall.start, wallEnd: wall.end, closest: projected.point, distance: projected.distance };
-      }
-    }
-
-    if (!best) return item;
-    const clearance = Math.max(0.25, Math.min(0.9, Math.max(Number(item.width || 0.6), Number(item.depth || 0.6)) * 0.35));
-    if (best.distance >= clearance) return item;
-
-    let nx = initialPos[0] - best.closest[0];
-    let nz = initialPos[1] - best.closest[1];
-    const nLen = Math.hypot(nx, nz);
-    if (nLen < 1e-6) {
-      const wx = best.wallEnd[0] - best.wallStart[0];
-      const wz = best.wallEnd[1] - best.wallStart[1];
-      const wLen = Math.hypot(wx, wz) || 1;
-      nx = -wz / wLen;
-      nz = wx / wLen;
-    } else {
-      nx /= nLen;
-      nz /= nLen;
-    }
-
-    const delta = clearance - best.distance + 0.02;
-    return {
-      ...item,
-      position: [
-        Number((initialPos[0] + nx * delta).toFixed(3)),
-        Number((initialPos[1] + nz * delta).toFixed(3)),
-      ] as [number, number],
-    };
-  });
+  const normalizedFurnitures = (payload.furnitures || [])
+    .map((item) => {
+      const x = Number(item.position?.[0]);
+      const z = Number(item.position?.[1]);
+      const width = Number(item.width);
+      const depth = Number(item.depth);
+      const height = Number(item.height);
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+      if (!Number.isFinite(width) || width <= 0) return null;
+      if (!Number.isFinite(depth) || depth <= 0) return null;
+      if (!Number.isFinite(height) || height <= 0) return null;
+      return {
+        ...item,
+        position: [Number(x.toFixed(3)), Number(z.toFixed(3))] as [number, number],
+        width: Number(width.toFixed(3)),
+        depth: Number(depth.toFixed(3)),
+        height: Number(height.toFixed(3)),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null);
 
   const wallSolids = buildServerCutWallSolids(finalizedWalls, normalizedDoors, normalizedWindows);
   const topologyChecks = computeDeterministicTopologyChecks(
@@ -1191,6 +1224,32 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
         type: 'code',
         severity: 'low',
         description: `Applied miter corner normalization on ${miterResult.adjustedEndpointCount} wall endpoint(s) to reduce overlap artifacts.`,
+        location: normalized.walls[0].start,
+      },
+    ];
+  }
+
+  const droppedDoors = (payload.doors || []).length - normalizedDoors.length;
+  if (droppedDoors > 0 && normalized.walls.length > 0) {
+    normalized.conflicts = [
+      ...(normalized.conflicts || []),
+      {
+        type: 'code',
+        severity: 'medium',
+        description: `Dropped ${droppedDoors} door(s) due to missing host wall or invalid dimensions/position.`,
+        location: normalized.walls[0].start,
+      },
+    ];
+  }
+
+  const droppedWindows = (payload.windows || []).length - normalizedWindows.length;
+  if (droppedWindows > 0 && normalized.walls.length > 0) {
+    normalized.conflicts = [
+      ...(normalized.conflicts || []),
+      {
+        type: 'code',
+        severity: 'medium',
+        description: `Dropped ${droppedWindows} window(s) due to missing host wall or invalid dimensions/position.`,
         location: normalized.walls[0].start,
       },
     ];
@@ -1338,12 +1397,25 @@ const mergeLayoutHintSources = (
     if (mergedAnchors.length >= LAYOUT_DIMENSION_ANCHOR_LIMIT) break;
   }
 
+  const lineTextSeen = new Set<string>();
+  const mergedLineTexts: string[] = [];
+  for (const text of [...(azureHints?.lineTexts || []), ...(localHints?.lineTexts || [])]) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (lineTextSeen.has(key)) continue;
+    lineTextSeen.add(key);
+    mergedLineTexts.push(normalized.slice(0, 160));
+    if (mergedLineTexts.length >= LAYOUT_LINE_TEXT_LIMIT) break;
+  }
+
   const basePages = (azureHints?.pages?.length || 0) > 0 ? azureHints?.pages : localHints?.pages;
   return {
     pageCount: Math.max(localHints?.pageCount || 0, azureHints?.pageCount || 0, basePages?.length || 0),
     pages: basePages || [],
     linePolygons: mergedLinePolygons,
     dimensionAnchors: mergedAnchors,
+    lineTexts: mergedLineTexts,
   };
 };
 
@@ -1457,6 +1529,7 @@ async function runLocalOcrLayoutHints(
     const words = Array.isArray(data?.words) ? data.words : [];
     const linePolygons: number[][] = [];
     const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
+    const lineTexts: string[] = [];
 
     for (const line of lines) {
       if (linePolygons.length >= LAYOUT_POLYGON_LIMIT) break;
@@ -1466,6 +1539,9 @@ async function runLocalOcrLayoutHints(
       }
 
       const text = String(line?.text || '').trim();
+      if (text && lineTexts.length < LAYOUT_LINE_TEXT_LIMIT) {
+        lineTexts.push(text.slice(0, 160));
+      }
       if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
         if (polygon.length >= 6) {
           dimensionAnchors.push({ text, polygon });
@@ -1481,6 +1557,9 @@ async function runLocalOcrLayoutHints(
           linePolygons.push(polygon);
         }
         const text = String(word?.text || '').trim();
+        if (text && lineTexts.length < LAYOUT_LINE_TEXT_LIMIT) {
+          lineTexts.push(text.slice(0, 160));
+        }
         if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
           if (polygon.length >= 6) {
             dimensionAnchors.push({ text, polygon });
@@ -1510,6 +1589,7 @@ async function runLocalOcrLayoutHints(
       }],
       linePolygons,
       dimensionAnchors,
+      lineTexts,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1869,6 +1949,13 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
   const rawHeight = Math.max(1, maxY - minY);
 
   const { scale: metersPerUnit, inferred: isInferredScale } = getDxfScaleMeters(parsed, rawWidth, rawHeight);
+  const configuredWallThicknessM = parsePositiveEnvNumber(process.env.INFRALITH_DXF_WALL_THICKNESS_M);
+  const configuredWallHeightM = parsePositiveEnvNumber(process.env.INFRALITH_DXF_WALL_HEIGHT_M);
+  if (configuredWallThicknessM == null || configuredWallHeightM == null) {
+    throw new Error(
+      'DXF reconstruction requires explicit wall extrusion settings. Set INFRALITH_DXF_WALL_THICKNESS_M and INFRALITH_DXF_WALL_HEIGHT_M to production values for your project.'
+    );
+  }
   const boundaryTolerance = Math.max(rawWidth, rawHeight) * 0.03;
 
   const maxWallCount = 1800;
@@ -1899,11 +1986,9 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
       id: `dxf-w-${wallCounter++}`,
       start: toMetersFromDxf(segment.start, minX, minY, metersPerUnit),
       end: toMetersFromDxf(segment.end, minX, minY, metersPerUnit),
-      thickness: nearBoundary ? 0.23 : 0.115,
-      height: 2.8,
-      color: nearBoundary ? '#f5e6d3' : '#faf7f2',
+      thickness: Number(configuredWallThicknessM.toFixed(3)),
+      height: Number(configuredWallHeightM.toFixed(3)),
       is_exterior: nearBoundary,
-      floor_level: 0,
     });
     if (walls.length >= maxWallCount) break;
   }
@@ -1939,8 +2024,6 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
       name: `Room ${roomCounter}`,
       polygon: ordered,
       area: Number(signedArea.toFixed(2)),
-      floor_color: '#e8d5b7',
-      floor_level: 0,
     });
     roomCounter++;
     if (rooms.length >= 150) break;
@@ -1948,9 +2031,11 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
 
   const dxfDebugImage = await renderDxfPreviewCanvas(walls, traceId);
 
+  const headerProjectName = typeof parsed?.header?.$PROJECTNAME === 'string' ? parsed.header.$PROJECTNAME.trim() : '';
+  const headerDrawingName = typeof parsed?.header?.$DWGNAME === 'string' ? parsed.header.$DWGNAME.trim() : '';
+
   const reconstruction: GeometricReconstruction = {
-    building_name: 'DXF Reconstruction',
-    exterior_color: '#f5e6d3',
+    building_name: headerProjectName || headerDrawingName || undefined,
     walls,
     doors: [],
     windows: [],
@@ -2377,20 +2462,49 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   // STAGE 2: Send image + layout hints to the AI Vision model
   const prompt = buildBlueprintVisionPrompt(layoutHints);
   try {
+    const expectedFloorCount = inferExpectedFloorCountFromHints(layoutHints);
     traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
-    traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
-    if (shouldRetryForUnderfit(result, layoutHints)) {
-      const strictPrompt = buildBlueprintRetryPrompt(prompt);
-      traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', undefined, 'warn');
+    let observedFloorCount = getObservedFloorCount(result);
+    traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', {
+      ...summarizeReconstruction(result),
+      expectedFloorCount,
+      observedFloorCount,
+    });
+
+    const underfitDetected = shouldRetryForUnderfit(result, layoutHints);
+    const floorCollapseDetected = expectedFloorCount >= 2 && observedFloorCount < expectedFloorCount;
+    if (underfitDetected || floorCollapseDetected) {
+      let strictPrompt = buildBlueprintRetryPrompt(prompt);
+      if (floorCollapseDetected) {
+        strictPrompt = `${strictPrompt}
+
+CRITICAL MULTI-FLOOR ENFORCEMENT (MANDATORY):
+- Layout hints indicate at least ${expectedFloorCount} floor label(s). Do not collapse to a single floor.
+- Use distinct floor_level values and set meta.floor_count >= ${expectedFloorCount}.
+- If any floor is uncertain, still preserve separate floor_level partitions and add explicit conflicts.`;
+      }
+      traceLog('Infralith Vision Engine', traceId, '4/9', 'retrying reconstruction with stricter constraints', {
+        underfitDetected,
+        floorCollapseDetected,
+        expectedFloorCount,
+        observedFloorCount,
+      }, 'warn');
       result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
-      traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', summarizeReconstruction(result));
+      observedFloorCount = getObservedFloorCount(result);
+      traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', {
+        ...summarizeReconstruction(result),
+        expectedFloorCount,
+        observedFloorCount,
+      });
+    }
+    if (expectedFloorCount >= 2 && observedFloorCount < expectedFloorCount) {
+      throw new Error(`Multi-floor collapse detected: layout hints indicate at least ${expectedFloorCount} floor labels, but reconstruction returned ${observedFloorCount} floor level(s). Upload a clearer multi-floor plan sheet or split each floor into separate images.`);
     }
     if (!hasNonEmptyWalls(result)) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
     result = normalizeReconstructionGeometry(result);
-    result = inferRoofFromWallFootprint(result);
     traceLog('Infralith Vision Engine', traceId, '6/9', 'applying deterministic building-code validation');
     const validatedResult = applyBuildingCodes(result);
     traceLog('Infralith Vision Engine', traceId, '7/9', 'validation complete', summarizeReconstruction(validatedResult));
@@ -2431,7 +2545,7 @@ export async function generateBuildingFromDescription(description: string): Prom
     if (!hasNonEmptyWalls(result)) {
       throw new Error("Architectural Generation Failed: The AI was unable to synthesize a valid structure from the given description.");
     }
-    const normalized = applyBuildingCodes(inferRoofFromWallFootprint(normalizeReconstructionGeometry(result)));
+    const normalized = applyBuildingCodes(normalizeReconstructionGeometry(result));
     const durationMs = Date.now() - startedAt;
     traceLog('Infralith Architect Engine', traceId, '2/2', `Structured generation completed in ${durationMs}ms`, summarizeReconstruction(normalized));
     return normalized;

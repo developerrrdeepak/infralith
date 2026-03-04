@@ -56,6 +56,7 @@ const summarizeStructured = (payload: any) => {
 
 const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
+const LAYOUT_LINE_TEXT_LIMIT = 140;
 const DIMENSION_TEXT_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 const DEPLOYMENT_ERROR_PATTERN = /(deployment|model|404|not found|does not exist|unknown deployment|resource not found)/i;
 
@@ -117,6 +118,7 @@ export interface BlueprintLayoutHints {
         text: string;
         polygon: number[];
     }>;
+    lineTexts: string[];
 }
 
 /** Helper to get the model with correct deployment name and settings */
@@ -152,7 +154,7 @@ const GeometricReconstructionSchema = z.object({
         scale_confidence: confidenceScoreSchema.nullable(),
         rotation_deg: z.number().nullable(),
         floor_count: z.number().int().nullable(),
-    }).nullable(),
+    }).strict(),
     walls: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         start: z.array(z.number()),
@@ -160,7 +162,7 @@ const GeometricReconstructionSchema = z.object({
         thickness: z.number(),
         height: z.number(),
         confidence: confidenceScoreSchema.nullable(),
-        color: z.string(),
+        color: z.string().nullable(),
         is_exterior: z.boolean(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of walls"),
@@ -172,7 +174,7 @@ const GeometricReconstructionSchema = z.object({
         height: z.number(),
         swing: z.enum(["left", "right", "unknown"]).nullable(),
         confidence: confidenceScoreSchema.nullable(),
-        color: z.string(),
+        color: z.string().nullable(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of doors"),
     windows: z.array(z.object({
@@ -182,7 +184,7 @@ const GeometricReconstructionSchema = z.object({
         width: z.number(),
         sill_height: z.number(),
         confidence: confidenceScoreSchema.nullable(),
-        color: z.string(),
+        color: z.string().nullable(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of windows"),
     rooms: z.array(z.object({
@@ -191,7 +193,7 @@ const GeometricReconstructionSchema = z.object({
         polygon: z.array(z.array(z.number())),
         area: z.number(),
         confidence: confidenceScoreSchema.nullable(),
-        floor_color: z.string(),
+        floor_color: z.string().nullable(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of rooms"),
     furnitures: z.array(z.object({
@@ -202,7 +204,7 @@ const GeometricReconstructionSchema = z.object({
         width: z.number(),
         depth: z.number(),
         height: z.number(),
-        color: z.string(),
+        color: z.string().nullable(),
         description: z.string(),
         floor_level: z.number()
     })).describe("Interior furniture or equipment elements"),
@@ -211,7 +213,7 @@ const GeometricReconstructionSchema = z.object({
         polygon: z.array(z.array(z.number())),
         height: z.number(),
         base_height: z.number(),
-        color: z.string(),
+        color: z.string().nullable(),
     }).nullable().describe("Building roof structure (null if no roof)"),
     topology_checks: z.object({
         closed_wall_loops: z.boolean().nullable(),
@@ -226,8 +228,8 @@ const GeometricReconstructionSchema = z.object({
         description: z.string(),
         location: z.array(z.number()),
     })).describe("Potential construction issues"),
-    building_name: z.string().describe("Descriptive name of the project"),
-    exterior_color: z.string().describe("Main color of the building exterior"),
+    building_name: z.string().nullable().describe("Descriptive name of the project"),
+    exterior_color: z.string().nullable().describe("Main color of the building exterior"),
 });
 
 // GeometricReconstruction type is imported from reconstruction-types.ts in the consumer files
@@ -270,6 +272,7 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
 
         const linePolygons: number[][] = [];
         const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
+        const lineTexts: string[] = [];
         const pages = result.pages.map((page: any) => {
             const lines = Array.isArray(page?.lines) ? page.lines : [];
             const words = Array.isArray(page?.words) ? page.words : [];
@@ -281,6 +284,9 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
                 }
 
                 const text = typeof line?.content === "string" ? line.content.trim() : "";
+                if (text && lineTexts.length < LAYOUT_LINE_TEXT_LIMIT) {
+                    lineTexts.push(text.slice(0, 160));
+                }
                 if (text && DIMENSION_TEXT_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
                     const polygon = toFlatPolygon(line?.polygon);
                     if (polygon.length >= 6) {
@@ -311,6 +317,7 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
             pages,
             linePolygons,
             dimensionAnchors,
+            lineTexts,
         };
     } catch (e: any) {
         traceLog("Azure Document Intelligence", traceId, "error", "layout analysis failed", {
