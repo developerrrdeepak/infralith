@@ -95,6 +95,7 @@ const inferFloorLabelsFromHints = (layoutHints: BlueprintLayoutHints | null): st
   if (!layoutHints) return [];
   const sourceTexts = [
     ...(layoutHints.lineTexts || []),
+    ...(layoutHints.floorLabelAnchors || []).map((anchor) => String(anchor?.text || "")),
     ...(layoutHints.dimensionAnchors || []).map((anchor) => String(anchor?.text || "")),
   ];
   const detected = new Set<string>();
@@ -126,6 +127,14 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     }))
     .filter((anchor) => Array.isArray(anchor.bbox));
 
+  const floorLabelAnchors = (layoutHints.floorLabelAnchors || [])
+    .slice(0, PROMPT_DIMENSION_ANCHOR_LIMIT)
+    .map((anchor) => ({
+      text: String(anchor?.text || "").slice(0, 80),
+      bbox: polygonToBoundingBox(anchor?.polygon || []),
+    }))
+    .filter((anchor) => Array.isArray(anchor.bbox));
+
   const lineBBoxes = (layoutHints.linePolygons || [])
     .slice(0, PROMPT_LINE_BBOX_LIMIT)
     .map((polygon) => polygonToBoundingBox(polygon))
@@ -144,6 +153,8 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     sampledLineTexts: lineTexts,
     dimensionAnchorCount: layoutHints.dimensionAnchors?.length || 0,
     sampledDimensionAnchors: dimensionAnchors,
+    floorLabelAnchorCount: layoutHints.floorLabelAnchors?.length || 0,
+    sampledFloorLabelAnchors: floorLabelAnchors,
   }, null, 2);
 };
 
@@ -188,12 +199,14 @@ MANDATORY PIPELINE:
 - If line texts include labels like "GROUND FLOOR", "FIRST FLOOR", "SECOND FLOOR", "TERRACE", "STILT", "BASEMENT", map each detected floor to a distinct floor_level.
 - Do not collapse all entities to floor_level=0 when multiple floor labels are present.
 - meta.floor_count MUST equal the count of distinct floor_level values present across walls/rooms/doors/windows.
+- Every detected floor_level must contain a non-trivial wall graph (not just 1-2 isolated walls).
 
 4) OPENINGS AFTER STABLE WALLS
 - Detect doors/windows only after walls are stable.
 - Every opening must reference an existing host_wall_id on the same floor_level.
 - If host wall is ambiguous, omit opening and record conflict.
 - If an opening dimension is unreadable, omit that opening and record conflict.
+- If evidence clearly indicates openings (symbols/labels), output non-zero openings for those floors.
 
 5) ROOM POLYGONS
 - Build room polygons only from enclosed wall regions.

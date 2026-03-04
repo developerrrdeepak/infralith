@@ -57,7 +57,9 @@ const summarizeStructured = (payload: any) => {
 const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
 const LAYOUT_LINE_TEXT_LIMIT = 140;
+const LAYOUT_FLOOR_LABEL_LIMIT = 36;
 const DIMENSION_TEXT_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
+const FLOOR_LABEL_HINT_REGEX = /\b((?:basement|cellar|lower\s*ground|stilt|ground|first|second|third|fourth|fifth|terrace|roof)\s*floor|(?:level|lvl|floor|flr)\s*[-_:]?\s*[a-z0-9]+|(?:g|b|l|f)\s*[-_:]?\s*\d{1,2})\b/i;
 const DEPLOYMENT_ERROR_PATTERN = /(deployment|model|404|not found|does not exist|unknown deployment|resource not found)/i;
 
 const createTraceId = (prefix: string) =>
@@ -119,6 +121,10 @@ export interface BlueprintLayoutHints {
         polygon: number[];
     }>;
     lineTexts: string[];
+    floorLabelAnchors: Array<{
+        text: string;
+        polygon: number[];
+    }>;
 }
 
 /** Helper to get the model with correct deployment name and settings */
@@ -273,13 +279,14 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
         const linePolygons: number[][] = [];
         const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
         const lineTexts: string[] = [];
+        const floorLabelAnchors: Array<{ text: string; polygon: number[]; }> = [];
         const pages = result.pages.map((page: any) => {
             const lines = Array.isArray(page?.lines) ? page.lines : [];
             const words = Array.isArray(page?.words) ? page.words : [];
 
             for (const line of lines) {
+                const polygon = toFlatPolygon(line?.polygon);
                 if (linePolygons.length < LAYOUT_POLYGON_LIMIT) {
-                    const polygon = toFlatPolygon(line?.polygon);
                     if (polygon.length >= 6) linePolygons.push(polygon);
                 }
 
@@ -288,9 +295,13 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
                     lineTexts.push(text.slice(0, 160));
                 }
                 if (text && DIMENSION_TEXT_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
-                    const polygon = toFlatPolygon(line?.polygon);
                     if (polygon.length >= 6) {
                         dimensionAnchors.push({ text, polygon });
+                    }
+                }
+                if (text && FLOOR_LABEL_HINT_REGEX.test(text) && floorLabelAnchors.length < LAYOUT_FLOOR_LABEL_LIMIT) {
+                    if (polygon.length >= 6) {
+                        floorLabelAnchors.push({ text: text.slice(0, 96), polygon });
                     }
                 }
             }
@@ -318,6 +329,7 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
             linePolygons,
             dimensionAnchors,
             lineTexts,
+            floorLabelAnchors,
         };
     } catch (e: any) {
         traceLog("Azure Document Intelligence", traceId, "error", "layout analysis failed", {

@@ -53,12 +53,15 @@ const summarizeLayoutHints = (payload: BlueprintLayoutHints | null) => ({
   linePolygons: payload?.linePolygons?.length || 0,
   dimensionAnchors: payload?.dimensionAnchors?.length || 0,
   lineTexts: payload?.lineTexts?.length || 0,
+  floorLabelAnchors: payload?.floorLabelAnchors?.length || 0,
 });
 
 const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
 const LAYOUT_LINE_TEXT_LIMIT = 140;
+const LAYOUT_FLOOR_LABEL_LIMIT = 36;
 const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
+const OPENING_TEXT_REGEX = /\b(door|doors|dr|d\d+|window|windows|win|w\d+)\b/i;
 
 type LayoutHintMode = 'auto' | 'azure' | 'local' | 'hybrid';
 const MIN_LAYOUT_SIGNALS_REQUIRED = 1;
@@ -140,6 +143,7 @@ const asBool = (value: string | undefined, fallback: boolean): boolean => {
 
 const VERBOSE_LOGS = asBool(process.env.INFRALITH_VERBOSE_LOGS, true);
 const VERBOSE_LOG_PAYLOADS = asBool(process.env.INFRALITH_VERBOSE_LOG_PAYLOADS, false);
+const ENFORCE_MULTI_FLOOR_COVERAGE = asBool(process.env.INFRALITH_ENFORCE_MULTI_FLOOR_COVERAGE, true);
 
 const parseTimeoutMs = (
   value: string | undefined,
@@ -302,10 +306,13 @@ const shouldRetryForUnderfit = (
   const roomCount = result?.rooms?.length || 0;
   const layoutLines = layoutHints?.linePolygons?.length || 0;
   const signalStrength = layoutLines;
+  const openingSignals = inferOpeningSignalCountFromHints(layoutHints);
+  const openingCount = (result?.doors?.length || 0) + (result?.windows?.length || 0);
 
   // If hints show complex blueprint but output is too simple, force one stricter retry.
   if (signalStrength >= 40 && wallCount <= 8) return true;
   if (signalStrength >= 60 && roomCount <= 2) return true;
+  if (openingSignals >= 2 && openingCount === 0) return true;
   return false;
 };
 
@@ -313,6 +320,7 @@ const inferExpectedFloorCountFromHints = (layoutHints: BlueprintLayoutHints | nu
   if (!layoutHints) return 0;
   const texts = [
     ...(layoutHints.lineTexts || []),
+    ...(layoutHints.floorLabelAnchors || []).map((anchor) => String(anchor?.text || '')),
     ...(layoutHints.dimensionAnchors || []).map((anchor) => String(anchor?.text || '')),
   ];
   const detected = new Set<string>();
@@ -322,6 +330,21 @@ const inferExpectedFloorCountFromHints = (layoutHints: BlueprintLayoutHints | nu
     }
   }
   return detected.size;
+};
+
+const inferOpeningSignalCountFromHints = (layoutHints: BlueprintLayoutHints | null): number => {
+  if (!layoutHints) return 0;
+  const texts = [
+    ...(layoutHints.lineTexts || []),
+    ...(layoutHints.dimensionAnchors || []).map((anchor) => String(anchor?.text || '')),
+  ];
+  const matches = new Set<string>();
+  for (const rawText of texts) {
+    const text = String(rawText || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    if (OPENING_TEXT_REGEX.test(text)) matches.add(text.toLowerCase());
+  }
+  return matches.size;
 };
 
 const getObservedFloorCount = (result: GeometricReconstruction): number => {
@@ -338,6 +361,87 @@ const getObservedFloorCount = (result: GeometricReconstruction): number => {
   for (const item of result?.furnitures || []) addLevel(item?.floor_level);
 
   return Math.max(1, levels.size || 0);
+};
+
+type FloorCoverage = {
+  level: number;
+  walls: number;
+  rooms: number;
+  doors: number;
+  windows: number;
+  furnitures: number;
+};
+
+type FloorCoverageQuality = {
+  perFloor: FloorCoverage[];
+  weakLevels: number[];
+  minWallsThreshold: number;
+};
+
+const buildFloorCoverage = (result: GeometricReconstruction): FloorCoverage[] => {
+  const byLevel = new Map<number, FloorCoverage>();
+  const ensureLevel = (level: number) => {
+    const existing = byLevel.get(level);
+    if (existing) return existing;
+    const next: FloorCoverage = { level, walls: 0, rooms: 0, doors: 0, windows: 0, furnitures: 0 };
+    byLevel.set(level, next);
+    return next;
+  };
+  const levelOf = (value: unknown): number | null => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n);
+  };
+
+  for (const wall of result?.walls || []) {
+    const level = levelOf(wall?.floor_level);
+    if (level == null) continue;
+    ensureLevel(level).walls += 1;
+  }
+  for (const room of result?.rooms || []) {
+    const level = levelOf(room?.floor_level);
+    if (level == null) continue;
+    ensureLevel(level).rooms += 1;
+  }
+  for (const door of result?.doors || []) {
+    const level = levelOf(door?.floor_level);
+    if (level == null) continue;
+    ensureLevel(level).doors += 1;
+  }
+  for (const win of result?.windows || []) {
+    const level = levelOf(win?.floor_level);
+    if (level == null) continue;
+    ensureLevel(level).windows += 1;
+  }
+  for (const item of result?.furnitures || []) {
+    const level = levelOf(item?.floor_level);
+    if (level == null) continue;
+    ensureLevel(level).furnitures += 1;
+  }
+
+  return [...byLevel.values()].sort((a, b) => a.level - b.level);
+};
+
+const assessFloorCoverageQuality = (
+  result: GeometricReconstruction,
+  expectedFloorCount: number
+): FloorCoverageQuality => {
+  const perFloor = buildFloorCoverage(result);
+  if (expectedFloorCount < 2 || perFloor.length === 0) {
+    return { perFloor, weakLevels: [], minWallsThreshold: 0 };
+  }
+
+  const maxWalls = Math.max(...perFloor.map((f) => f.walls), 0);
+  const minWallsThreshold = Math.max(2, Math.floor(maxWalls * 0.35));
+  const weakLevels = perFloor
+    .filter((f) => f.walls < minWallsThreshold)
+    .map((f) => f.level);
+
+  return {
+    perFloor,
+    weakLevels,
+    minWallsThreshold,
+  };
 };
 
 const hasNonEmptyWalls = (
@@ -1409,6 +1513,19 @@ const mergeLayoutHintSources = (
     if (mergedLineTexts.length >= LAYOUT_LINE_TEXT_LIMIT) break;
   }
 
+  const floorAnchorSeen = new Set<string>();
+  const mergedFloorAnchors: Array<{ text: string; polygon: number[]; }> = [];
+  for (const anchor of [...(azureHints?.floorLabelAnchors || []), ...(localHints?.floorLabelAnchors || [])]) {
+    const text = String(anchor?.text || '').trim();
+    const polygon = Array.isArray(anchor?.polygon) ? anchor.polygon.map((v) => Number(v.toFixed(2))) : [];
+    if (!text || polygon.length < 6) continue;
+    const key = `${text.toLowerCase()}|${polygon.join(',')}`;
+    if (floorAnchorSeen.has(key)) continue;
+    floorAnchorSeen.add(key);
+    mergedFloorAnchors.push({ text, polygon });
+    if (mergedFloorAnchors.length >= LAYOUT_FLOOR_LABEL_LIMIT) break;
+  }
+
   const basePages = (azureHints?.pages?.length || 0) > 0 ? azureHints?.pages : localHints?.pages;
   return {
     pageCount: Math.max(localHints?.pageCount || 0, azureHints?.pageCount || 0, basePages?.length || 0),
@@ -1416,6 +1533,7 @@ const mergeLayoutHintSources = (
     linePolygons: mergedLinePolygons,
     dimensionAnchors: mergedAnchors,
     lineTexts: mergedLineTexts,
+    floorLabelAnchors: mergedFloorAnchors,
   };
 };
 
@@ -1530,6 +1648,7 @@ async function runLocalOcrLayoutHints(
     const linePolygons: number[][] = [];
     const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
     const lineTexts: string[] = [];
+    const floorLabelAnchors: Array<{ text: string; polygon: number[]; }> = [];
 
     for (const line of lines) {
       if (linePolygons.length >= LAYOUT_POLYGON_LIMIT) break;
@@ -1545,6 +1664,11 @@ async function runLocalOcrLayoutHints(
       if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
         if (polygon.length >= 6) {
           dimensionAnchors.push({ text, polygon });
+        }
+      }
+      if (text && floorLabelAnchors.length < LAYOUT_FLOOR_LABEL_LIMIT && collectFloorKeysFromText(text).length > 0) {
+        if (polygon.length >= 6) {
+          floorLabelAnchors.push({ text: text.slice(0, 96), polygon });
         }
       }
     }
@@ -1563,6 +1687,11 @@ async function runLocalOcrLayoutHints(
         if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
           if (polygon.length >= 6) {
             dimensionAnchors.push({ text, polygon });
+          }
+        }
+        if (text && floorLabelAnchors.length < LAYOUT_FLOOR_LABEL_LIMIT && collectFloorKeysFromText(text).length > 0) {
+          if (polygon.length >= 6) {
+            floorLabelAnchors.push({ text: text.slice(0, 96), polygon });
           }
         }
       }
@@ -1590,6 +1719,7 @@ async function runLocalOcrLayoutHints(
       linePolygons,
       dimensionAnchors,
       lineTexts,
+      floorLabelAnchors,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2466,15 +2596,24 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
     let observedFloorCount = getObservedFloorCount(result);
+    let floorCoverage = assessFloorCoverageQuality(result, expectedFloorCount);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', {
       ...summarizeReconstruction(result),
       expectedFloorCount,
       observedFloorCount,
+      floorCoverage: floorCoverage.perFloor,
+      weakLevels: floorCoverage.weakLevels,
+      minWallsThreshold: floorCoverage.minWallsThreshold,
     });
 
     const underfitDetected = shouldRetryForUnderfit(result, layoutHints);
     const floorCollapseDetected = expectedFloorCount >= 2 && observedFloorCount < expectedFloorCount;
-    if (underfitDetected || floorCollapseDetected) {
+    const weakFloorCoverageDetected =
+      ENFORCE_MULTI_FLOOR_COVERAGE &&
+      expectedFloorCount >= 2 &&
+      floorCoverage.weakLevels.length > 0;
+
+    if (underfitDetected || floorCollapseDetected || weakFloorCoverageDetected) {
       let strictPrompt = buildBlueprintRetryPrompt(prompt);
       if (floorCollapseDetected) {
         strictPrompt = `${strictPrompt}
@@ -2484,22 +2623,45 @@ CRITICAL MULTI-FLOOR ENFORCEMENT (MANDATORY):
 - Use distinct floor_level values and set meta.floor_count >= ${expectedFloorCount}.
 - If any floor is uncertain, still preserve separate floor_level partitions and add explicit conflicts.`;
       }
+      if (weakFloorCoverageDetected) {
+        strictPrompt = `${strictPrompt}
+
+CRITICAL PER-FLOOR STRUCTURE ENFORCEMENT (MANDATORY):
+- Reconstruct each detected floor as a non-trivial wall graph.
+- Current weak floors: [${floorCoverage.weakLevels.join(', ')}].
+- Minimum required wall segments per floor in this retry: ${Math.max(2, floorCoverage.minWallsThreshold)}.
+- Do not satisfy floor_count by sprinkling isolated walls across levels.
+- If a floor cannot be reconstructed confidently, still include a structurally plausible shell and add explicit conflicts.`;
+      }
       traceLog('Infralith Vision Engine', traceId, '4/9', 'retrying reconstruction with stricter constraints', {
         underfitDetected,
         floorCollapseDetected,
+        weakFloorCoverageDetected,
         expectedFloorCount,
         observedFloorCount,
+        floorCoverage: floorCoverage.perFloor,
       }, 'warn');
       result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
       observedFloorCount = getObservedFloorCount(result);
+      floorCoverage = assessFloorCoverageQuality(result, expectedFloorCount);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', {
         ...summarizeReconstruction(result),
         expectedFloorCount,
         observedFloorCount,
+        floorCoverage: floorCoverage.perFloor,
+        weakLevels: floorCoverage.weakLevels,
+        minWallsThreshold: floorCoverage.minWallsThreshold,
       });
     }
     if (expectedFloorCount >= 2 && observedFloorCount < expectedFloorCount) {
       throw new Error(`Multi-floor collapse detected: layout hints indicate at least ${expectedFloorCount} floor labels, but reconstruction returned ${observedFloorCount} floor level(s). Upload a clearer multi-floor plan sheet or split each floor into separate images.`);
+    }
+    if (
+      ENFORCE_MULTI_FLOOR_COVERAGE &&
+      expectedFloorCount >= 2 &&
+      floorCoverage.weakLevels.length > 0
+    ) {
+      throw new Error(`Multi-floor under-segmentation detected: floor labels indicate ${expectedFloorCount} floors, but weak structural coverage remains for floor level(s) [${floorCoverage.weakLevels.join(', ')}]. Please upload a clearer sheet per floor or reduce clutter/overlap in the drawing.`);
     }
     if (!hasNonEmptyWalls(result)) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
