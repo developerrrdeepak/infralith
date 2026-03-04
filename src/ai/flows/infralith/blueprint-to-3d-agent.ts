@@ -726,7 +726,7 @@ type RoomDimensionHint = {
   text: string;
   widthM: number;
   depthM: number;
-  center: [number, number] | null;
+  centerPx: [number, number] | null;
   floorLevel: number | null;
 };
 
@@ -786,6 +786,125 @@ const flatPolygonCenter = (polygon: number[] | null | undefined): [number, numbe
   return [sumX / count, sumY / count];
 };
 
+const resolveLayoutHintExtent = (
+  layoutHints: BlueprintLayoutHints | null
+): { minX: number; minY: number; width: number; height: number } | null => {
+  if (!layoutHints) return null;
+
+  const page = layoutHints.pages?.[0];
+  const pageWidth = Number(page?.width || 0);
+  const pageHeight = Number(page?.height || 0);
+  if (Number.isFinite(pageWidth) && Number.isFinite(pageHeight) && pageWidth > 0 && pageHeight > 0) {
+    return { minX: 0, minY: 0, width: pageWidth, height: pageHeight };
+  }
+
+  const polygons = [
+    ...(layoutHints.linePolygons || []),
+    ...(layoutHints.dimensionAnchors || []).map((anchor) => anchor.polygon || []),
+    ...(layoutHints.floorLabelAnchors || []).map((anchor) => anchor.polygon || []),
+  ];
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const polygon of polygons) {
+    if (!Array.isArray(polygon)) continue;
+    for (let i = 0; i < polygon.length - 1; i += 2) {
+      const x = Number(polygon[i]);
+      const y = Number(polygon[i + 1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null;
+  }
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (width <= 0 || height <= 0) return null;
+  return { minX, minY, width, height };
+};
+
+const resolveModelWallBounds = (
+  result: GeometricReconstruction
+): { minX: number; maxX: number; minY: number; maxY: number } | null => {
+  const walls = result?.walls || [];
+  if (walls.length === 0) return null;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const wall of walls) {
+    const sx = Number(wall?.start?.[0]);
+    const sy = Number(wall?.start?.[1]);
+    const ex = Number(wall?.end?.[0]);
+    const ey = Number(wall?.end?.[1]);
+    if (Number.isFinite(sx)) xs.push(sx);
+    if (Number.isFinite(ex)) xs.push(ex);
+    if (Number.isFinite(sy)) ys.push(sy);
+    if (Number.isFinite(ey)) ys.push(ey);
+  }
+  if (xs.length === 0 || ys.length === 0) return null;
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+};
+
+const mapHintPointToModelSpace = (
+  point: [number, number] | null,
+  layoutHints: BlueprintLayoutHints | null,
+  result: GeometricReconstruction,
+  floorRooms: GeometricReconstruction['rooms']
+): [number, number] | null => {
+  if (!point) return null;
+  const layoutExtent = resolveLayoutHintExtent(layoutHints);
+  const modelBounds = resolveModelWallBounds(result);
+  if (!layoutExtent || !modelBounds) return null;
+
+  const ratioX = (point[0] - layoutExtent.minX) / layoutExtent.width;
+  const ratioY = (point[1] - layoutExtent.minY) / layoutExtent.height;
+  if (!Number.isFinite(ratioX) || !Number.isFinite(ratioY)) return null;
+  const clampedX = Math.max(0, Math.min(1, ratioX));
+  const clampedY = Math.max(0, Math.min(1, ratioY));
+
+  const modelWidth = modelBounds.maxX - modelBounds.minX;
+  const modelHeight = modelBounds.maxY - modelBounds.minY;
+  if (modelWidth <= 0 || modelHeight <= 0) return null;
+
+  const direct: [number, number] = [
+    modelBounds.minX + (clampedX * modelWidth),
+    modelBounds.minY + (clampedY * modelHeight),
+  ];
+  const flipped: [number, number] = [
+    modelBounds.minX + (clampedX * modelWidth),
+    modelBounds.maxY - (clampedY * modelHeight),
+  ];
+
+  const roomCenters = floorRooms
+    .map((room) => {
+      const bounds = collectRoomBounds(room?.polygon || []);
+      if (!bounds) return null;
+      return [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2] as [number, number];
+    })
+    .filter((entry): entry is [number, number] => Array.isArray(entry));
+  if (roomCenters.length === 0) return direct;
+
+  const nearestDistance = (candidate: [number, number]) =>
+    roomCenters.reduce((best, center) => {
+      const distance = Math.hypot(center[0] - candidate[0], center[1] - candidate[1]);
+      return Math.min(best, distance);
+    }, Number.POSITIVE_INFINITY);
+
+  return nearestDistance(direct) <= nearestDistance(flipped) ? direct : flipped;
+};
+
 const parseDimensionTokenMeters = (token: string, fullText: string): number | null => {
   const raw = String(token || '').trim().toLowerCase();
   if (!raw) return null;
@@ -832,6 +951,10 @@ const extractDimensionPairFromText = (value: string): { widthM: number; depthM: 
 
 const extractRoomDimensionHints = (layoutHints: BlueprintLayoutHints | null): RoomDimensionHint[] => {
   if (!layoutHints) return [];
+  const hintExtent = resolveLayoutHintExtent(layoutHints);
+  const pairDistanceThreshold = hintExtent
+    ? Math.max(18, Math.min(hintExtent.width, hintExtent.height) * 0.18)
+    : 80;
   const floorAnchors = (layoutHints.floorLabelAnchors || [])
     .map((anchor, index) => {
       const center = flatPolygonCenter(anchor?.polygon || []);
@@ -846,11 +969,43 @@ const extractRoomDimensionHints = (layoutHints: BlueprintLayoutHints | null): Ro
     .sort((a, b) => a.centerY - b.centerY);
 
   const hints: RoomDimensionHint[] = [];
+  const singleValueAnchors: Array<{ text: string; valueM: number; centerPx: [number, number]; floorLevel: number | null }> = [];
   const dedupe = new Set<string>();
+  const pushHint = (
+    text: string,
+    widthM: number,
+    depthM: number,
+    centerPx: [number, number] | null,
+    floorLevel: number | null
+  ) => {
+    const safeW = Number(widthM.toFixed(3));
+    const safeD = Number(depthM.toFixed(3));
+    if (!Number.isFinite(safeW) || !Number.isFinite(safeD)) return;
+    if (safeW < 0.4 || safeD < 0.4 || safeW > 40 || safeD > 40) return;
+
+    const key = [
+      Math.min(safeW, safeD).toFixed(2),
+      Math.max(safeW, safeD).toFixed(2),
+      floorLevel == null ? 'na' : String(floorLevel),
+      centerPx ? `${centerPx[0].toFixed(1)}:${centerPx[1].toFixed(1)}` : 'nocenter',
+      String(text || '').toLowerCase().trim().slice(0, 80),
+    ].join('|');
+    if (dedupe.has(key)) return;
+    dedupe.add(key);
+
+    hints.push({
+      text: String(text || '').trim(),
+      widthM: safeW,
+      depthM: safeD,
+      centerPx,
+      floorLevel,
+    });
+  };
+
   for (const anchor of layoutHints.dimensionAnchors || []) {
     if (hints.length >= 36) break;
-    const pair = extractDimensionPairFromText(String(anchor?.text || ''));
-    if (!pair) continue;
+    const text = String(anchor?.text || '');
+    const pair = extractDimensionPairFromText(text);
     const center = flatPolygonCenter(anchor?.polygon || []);
 
     let floorLevel: number | null = null;
@@ -865,23 +1020,43 @@ const extractRoomDimensionHints = (layoutHints: BlueprintLayoutHints | null): Ro
       floorLevel = best?.level ?? null;
     }
 
-    const key = [
-      pair.widthM.toFixed(2),
-      pair.depthM.toFixed(2),
-      floorLevel == null ? 'na' : String(floorLevel),
-      center ? `${center[0].toFixed(1)}:${center[1].toFixed(1)}` : 'nocenter',
-      String(anchor?.text || '').toLowerCase().trim(),
-    ].join('|');
-    if (dedupe.has(key)) continue;
-    dedupe.add(key);
+    if (pair) {
+      pushHint(text, pair.widthM, pair.depthM, center, floorLevel);
+      continue;
+    }
 
-    hints.push({
-      text: String(anchor?.text || '').trim(),
-      widthM: pair.widthM,
-      depthM: pair.depthM,
-      center,
-      floorLevel,
-    });
+    if (center) {
+      const singleValue = parseDimensionTokenMeters(text, text);
+      if (singleValue != null && singleValue >= 0.4 && singleValue <= 40) {
+        singleValueAnchors.push({
+          text,
+          valueM: Number(singleValue.toFixed(3)),
+          centerPx: center,
+          floorLevel,
+        });
+      }
+    }
+  }
+
+  if (singleValueAnchors.length >= 2) {
+    for (let i = 0; i < singleValueAnchors.length; i += 1) {
+      const a = singleValueAnchors[i];
+      for (let j = i + 1; j < singleValueAnchors.length; j += 1) {
+        const b = singleValueAnchors[j];
+        if (a.floorLevel != null && b.floorLevel != null && a.floorLevel !== b.floorLevel) continue;
+        const distancePx = Math.hypot(a.centerPx[0] - b.centerPx[0], a.centerPx[1] - b.centerPx[1]);
+        if (!Number.isFinite(distancePx) || distancePx > pairDistanceThreshold) continue;
+        const nearEqual = Math.abs(a.valueM - b.valueM) <= Math.max(0.35, Math.min(a.valueM, b.valueM) * 0.08);
+        if (nearEqual && Math.max(a.valueM, b.valueM) > 8) continue;
+        const centerPx: [number, number] = [
+          Number(((a.centerPx[0] + b.centerPx[0]) / 2).toFixed(3)),
+          Number(((a.centerPx[1] + b.centerPx[1]) / 2).toFixed(3)),
+        ];
+        const floorLevel = a.floorLevel ?? b.floorLevel ?? null;
+        const pairText = `${a.text} x ${b.text}`.slice(0, 120);
+        pushHint(pairText, a.valueM, b.valueM, centerPx, floorLevel);
+      }
+    }
   }
 
   return hints;
@@ -950,6 +1125,7 @@ const estimateRoomDimensionAlignment = (
     const floorRooms = hint.floorLevel == null
       ? rooms
       : rooms.filter((room) => toFloorBucket(room?.floor_level) === toFloorBucket(hint.floorLevel));
+    const mappedHintCenter = mapHintPointToModelSpace(hint.centerPx, layoutHints, result, floorRooms);
     if (floorRooms.length === 0) {
       mismatches.push({
         hintText: hint.text,
@@ -960,7 +1136,7 @@ const estimateRoomDimensionAlignment = (
         matchedRoomName: null,
         sizeErrorRatio: 1,
         positionDistance: null,
-        hintCenter: hint.center,
+        hintCenter: mappedHintCenter,
         reason: `No room polygons found on floor ${hint.floorLevel ?? 'unknown'} for dimension hint "${hint.text}".`,
       });
       continue;
@@ -992,10 +1168,10 @@ const estimateRoomDimensionAlignment = (
       const sizeErrorRatio = Math.min(direct, swapped);
 
       let positionDistance: number | null = null;
-      if (hint.center) {
+      if (mappedHintCenter) {
         const centerX = (bounds.minX + bounds.maxX) / 2;
         const centerY = (bounds.minY + bounds.maxY) / 2;
-        positionDistance = Math.hypot(centerX - hint.center[0], centerY - hint.center[1]);
+        positionDistance = Math.hypot(centerX - mappedHintCenter[0], centerY - mappedHintCenter[1]);
       }
       const positionPenalty = positionDistance == null
         ? 0
@@ -1023,7 +1199,7 @@ const estimateRoomDimensionAlignment = (
         matchedRoomName: null,
         sizeErrorRatio: 1,
         positionDistance: null,
-        hintCenter: hint.center,
+        hintCenter: mappedHintCenter,
         reason: `No valid room polygon could be matched for dimension hint "${hint.text}".`,
       });
       continue;
@@ -1048,7 +1224,7 @@ const estimateRoomDimensionAlignment = (
         matchedRoomName: bestMatch.roomName,
         sizeErrorRatio: bestMatch.sizeErrorRatio,
         positionDistance: bestMatch.positionDistance,
-        hintCenter: hint.center,
+        hintCenter: mappedHintCenter,
         reason: mismatchReason,
       });
       continue;
@@ -2023,6 +2199,353 @@ const buildServerCutWallSolids = (
   return solids;
 };
 
+const cellIndex = (col: number, row: number, cols: number) => (row * cols) + col;
+
+const dedupePolygonPoints = (points: [number, number][]): [number, number][] => {
+  if (points.length <= 1) return points;
+  const out: [number, number][] = [];
+  for (const point of points) {
+    const prev = out[out.length - 1];
+    if (prev && pointDistance(prev, point) < 1e-5) continue;
+    out.push(point);
+  }
+  if (out.length > 1 && pointDistance(out[0], out[out.length - 1]) < 1e-5) {
+    out.pop();
+  }
+  return out;
+};
+
+const simplifyOrthogonalPolygon = (points: [number, number][]): [number, number][] => {
+  if (points.length < 4) return points;
+  const output: [number, number][] = [];
+  const n = points.length;
+  const collinearTolerance = 1e-4;
+  for (let i = 0; i < n; i += 1) {
+    const prev = points[(i - 1 + n) % n];
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const v1x = curr[0] - prev[0];
+    const v1y = curr[1] - prev[1];
+    const v2x = next[0] - curr[0];
+    const v2y = next[1] - curr[1];
+    const cross = Math.abs((v1x * v2y) - (v1y * v2x));
+    if (cross <= collinearTolerance) continue;
+    output.push(curr);
+  }
+  return dedupePolygonPoints(output);
+};
+
+const extractLargestBoundaryLoopFromCells = (
+  componentCells: Set<number>,
+  cols: number,
+  rows: number,
+  originX: number,
+  originY: number,
+  cellSize: number
+): [number, number][] | null => {
+  if (componentCells.size === 0) return null;
+
+  type Edge = { start: [number, number]; end: [number, number] };
+  const edges: Edge[] = [];
+  const pushEdge = (start: [number, number], end: [number, number]) => {
+    edges.push({
+      start: [Number(start[0].toFixed(4)), Number(start[1].toFixed(4))],
+      end: [Number(end[0].toFixed(4)), Number(end[1].toFixed(4))],
+    });
+  };
+  const hasCell = (col: number, row: number): boolean => {
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return false;
+    return componentCells.has(cellIndex(col, row, cols));
+  };
+
+  for (const index of componentCells) {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x0 = originX + (col * cellSize);
+    const x1 = x0 + cellSize;
+    const y0 = originY + (row * cellSize);
+    const y1 = y0 + cellSize;
+
+    if (!hasCell(col, row - 1)) pushEdge([x0, y0], [x1, y0]);
+    if (!hasCell(col + 1, row)) pushEdge([x1, y0], [x1, y1]);
+    if (!hasCell(col, row + 1)) pushEdge([x1, y1], [x0, y1]);
+    if (!hasCell(col - 1, row)) pushEdge([x0, y1], [x0, y0]);
+  }
+
+  if (edges.length < 4) return null;
+
+  const startMap = new Map<string, number[]>();
+  const pointKeyLocal = (point: [number, number]) => `${point[0].toFixed(4)},${point[1].toFixed(4)}`;
+  for (let i = 0; i < edges.length; i += 1) {
+    const key = pointKeyLocal(edges[i].start);
+    const bucket = startMap.get(key) || [];
+    bucket.push(i);
+    startMap.set(key, bucket);
+  }
+
+  const unused = new Set<number>(edges.map((_, i) => i));
+  const loops: [number, number][][] = [];
+
+  while (unused.size > 0) {
+    const first = unused.values().next().value as number;
+    const edge = edges[first];
+    const loop: [number, number][] = [edge.start];
+    let cursor = edge.end;
+    unused.delete(first);
+
+    let guard = 0;
+    const guardLimit = edges.length + 10;
+    while (guard++ < guardLimit) {
+      loop.push(cursor);
+      if (pointDistance(cursor, loop[0]) < 1e-5) break;
+      const key = pointKeyLocal(cursor);
+      const candidates = (startMap.get(key) || []).filter((idx) => unused.has(idx));
+      if (candidates.length === 0) break;
+      const nextIdx = candidates[0];
+      unused.delete(nextIdx);
+      cursor = edges[nextIdx].end;
+    }
+
+    const deduped = dedupePolygonPoints(loop);
+    if (deduped.length >= 3) loops.push(deduped);
+  }
+
+  if (loops.length === 0) return null;
+  loops.sort((a, b) => Math.abs(polygonArea(b)) - Math.abs(polygonArea(a)));
+  let polygon = simplifyOrthogonalPolygon(loops[0]);
+  if (polygon.length < 3) return null;
+  if (polygonArea(polygon) < 0) polygon = [...polygon].reverse();
+  return polygon.map((point) => [Number(point[0].toFixed(3)), Number(point[1].toFixed(3))] as [number, number]);
+};
+
+const buildDeterministicRoomsFromWallRaster = (
+  walls: GeometricReconstruction['walls'],
+  existingRooms: GeometricReconstruction['rooms'],
+  floorLevel: number
+): GeometricReconstruction['rooms'] => {
+  if (!Array.isArray(walls) || walls.length < 4) return [];
+
+  const points = walls.flatMap((wall) => [wall.start, wall.end]);
+  const xs = points.map((point) => Number(point?.[0])).filter((value) => Number.isFinite(value));
+  const ys = points.map((point) => Number(point?.[1])).filter((value) => Number.isFinite(value));
+  if (xs.length === 0 || ys.length === 0) return [];
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (width < 2 || height < 2) return [];
+
+  const longestSpan = Math.max(width, height);
+  let cellSize = Math.max(0.1, Math.min(0.28, longestSpan / 120));
+  const margin = cellSize * 2;
+  const maxGrid = 280;
+  let cols = Math.max(24, Math.ceil((width + margin * 2) / cellSize));
+  let rows = Math.max(24, Math.ceil((height + margin * 2) / cellSize));
+  if (cols > maxGrid || rows > maxGrid) {
+    const scaleUp = Math.max(cols / maxGrid, rows / maxGrid);
+    cellSize *= scaleUp;
+    cols = Math.max(24, Math.ceil((width + margin * 2) / cellSize));
+    rows = Math.max(24, Math.ceil((height + margin * 2) / cellSize));
+  }
+  if (cols > 320 || rows > 320) return [];
+
+  const originX = minX - margin;
+  const originY = minY - margin;
+  const blocked = new Uint8Array(cols * rows);
+
+  const markBlocked = (col: number, row: number, radiusCell: number) => {
+    for (let dy = -radiusCell; dy <= radiusCell; dy += 1) {
+      const ny = row + dy;
+      if (ny < 0 || ny >= rows) continue;
+      for (let dx = -radiusCell; dx <= radiusCell; dx += 1) {
+        const nx = col + dx;
+        if (nx < 0 || nx >= cols) continue;
+        if ((dx * dx) + (dy * dy) > (radiusCell * radiusCell) + 1) continue;
+        blocked[cellIndex(nx, ny, cols)] = 1;
+      }
+    }
+  };
+
+  for (const wall of walls) {
+    const sx = Number(wall?.start?.[0]);
+    const sy = Number(wall?.start?.[1]);
+    const ex = Number(wall?.end?.[0]);
+    const ey = Number(wall?.end?.[1]);
+    if (![sx, sy, ex, ey].every((value) => Number.isFinite(value))) continue;
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const length = Math.hypot(dx, dy);
+    if (length < 0.05) continue;
+
+    const halfThickness = Math.max(0.06, Number(wall.thickness || 0.115) * 0.5);
+    const radiusCell = Math.max(1, Math.ceil((halfThickness + (cellSize * 0.7)) / cellSize));
+    const samples = Math.max(3, Math.ceil(length / (cellSize * 0.45)));
+    for (let step = 0; step <= samples; step += 1) {
+      const t = step / samples;
+      const px = sx + (dx * t);
+      const py = sy + (dy * t);
+      const col = Math.floor((px - originX) / cellSize);
+      const row = Math.floor((py - originY) / cellSize);
+      if (col < 0 || row < 0 || col >= cols || row >= rows) continue;
+      markBlocked(col, row, radiusCell);
+    }
+  }
+
+  const outside = new Uint8Array(cols * rows);
+  const queue: number[] = [];
+  const pushOutside = (col: number, row: number) => {
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+    const idx = cellIndex(col, row, cols);
+    if (blocked[idx] || outside[idx]) return;
+    outside[idx] = 1;
+    queue.push(idx);
+  };
+
+  for (let col = 0; col < cols; col += 1) {
+    pushOutside(col, 0);
+    pushOutside(col, rows - 1);
+  }
+  for (let row = 0; row < rows; row += 1) {
+    pushOutside(0, row);
+    pushOutside(cols - 1, row);
+  }
+
+  let head = 0;
+  while (head < queue.length) {
+    const idx = queue[head++];
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    pushOutside(col + 1, row);
+    pushOutside(col - 1, row);
+    pushOutside(col, row + 1);
+    pushOutside(col, row - 1);
+  }
+
+  const visited = new Uint8Array(cols * rows);
+  const existingRoomPool = (existingRooms || []).map((room) => {
+    const bounds = collectRoomBounds(room?.polygon || []);
+    if (!bounds) return null;
+    return {
+      id: room.id,
+      name: room.name,
+      color: room.floor_color,
+      center: [
+        (bounds.minX + bounds.maxX) / 2,
+        (bounds.minY + bounds.maxY) / 2,
+      ] as [number, number],
+    };
+  }).filter((entry): entry is NonNullable<typeof entry> => entry != null);
+  const claimedExisting = new Set<string>();
+
+  const rooms: GeometricReconstruction['rooms'] = [];
+  let roomCounter = 1;
+  for (let idx = 0; idx < visited.length; idx += 1) {
+    if (visited[idx] || blocked[idx] || outside[idx]) continue;
+
+    const componentQueue: number[] = [idx];
+    visited[idx] = 1;
+    const componentCells: number[] = [];
+    let qHead = 0;
+    while (qHead < componentQueue.length) {
+      const current = componentQueue[qHead++];
+      componentCells.push(current);
+      const col = current % cols;
+      const row = Math.floor(current / cols);
+      const neighbors = [
+        [col + 1, row],
+        [col - 1, row],
+        [col, row + 1],
+        [col, row - 1],
+      ] as Array<[number, number]>;
+      for (const [nx, ny] of neighbors) {
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+        const nIdx = cellIndex(nx, ny, cols);
+        if (visited[nIdx] || blocked[nIdx] || outside[nIdx]) continue;
+        visited[nIdx] = 1;
+        componentQueue.push(nIdx);
+      }
+    }
+
+    const areaApprox = componentCells.length * cellSize * cellSize;
+    if (areaApprox < 2) continue;
+    if (areaApprox > width * height * 0.92) continue;
+
+    const componentSet = new Set(componentCells);
+    const polygon = extractLargestBoundaryLoopFromCells(componentSet, cols, rows, originX, originY, cellSize);
+    if (!polygon || polygon.length < 3) continue;
+    const area = Math.abs(polygonArea(polygon));
+    if (!Number.isFinite(area) || area < 2 || area > width * height * 0.9) continue;
+
+    const bounds = collectRoomBounds(polygon);
+    if (!bounds) continue;
+    const center: [number, number] = [
+      (bounds.minX + bounds.maxX) / 2,
+      (bounds.minY + bounds.maxY) / 2,
+    ];
+
+    let name = `Room ${roomCounter}`;
+    let floorColor = '#e8d5b7';
+    let bestMatch: { id: string; distance: number; name: string; color: string | undefined } | null = null;
+    for (const existing of existingRoomPool) {
+      const existingKey = String(existing.id);
+      if (claimedExisting.has(existingKey)) continue;
+      const distance = Math.hypot(existing.center[0] - center[0], existing.center[1] - center[1]);
+      if (!bestMatch || distance < bestMatch.distance) {
+        bestMatch = {
+          id: existingKey,
+          distance,
+          name: existing.name,
+          color: existing.color,
+        };
+      }
+    }
+    if (bestMatch && bestMatch.distance <= Math.max(2.5, Math.sqrt(area) * 0.9)) {
+      claimedExisting.add(bestMatch.id);
+      name = bestMatch.name || name;
+      floorColor = bestMatch.color || floorColor;
+    }
+
+    rooms.push({
+      id: `det-r-${floorLevel}-${roomCounter}`,
+      name,
+      polygon,
+      area: Number(area.toFixed(2)),
+      confidence: 0.62,
+      floor_color: floorColor,
+      floor_level: floorLevel,
+    });
+    roomCounter += 1;
+  }
+
+  return rooms;
+};
+
+const shouldUseDeterministicRooms = (
+  existingRooms: GeometricReconstruction['rooms'],
+  deterministicRooms: GeometricReconstruction['rooms'],
+  walls: GeometricReconstruction['walls']
+): boolean => {
+  if (!Array.isArray(deterministicRooms) || deterministicRooms.length === 0) return false;
+  if (!Array.isArray(existingRooms) || existingRooms.length === 0) return deterministicRooms.length >= 1;
+
+  const interiorWallCount = (walls || []).filter((wall) => wall?.is_exterior === false).length;
+  if (interiorWallCount < 2) return false;
+
+  const existingUnique = new Set(existingRooms.map((room) => roomPolygonSignature(room?.polygon || []))).size;
+  const deterministicUnique = new Set(deterministicRooms.map((room) => roomPolygonSignature(room?.polygon || []))).size;
+  const repeatedExisting = existingUnique <= Math.max(2, Math.floor(existingRooms.length / 3));
+
+  if (deterministicRooms.length >= existingRooms.length + 2) return true;
+  if (deterministicUnique >= existingUnique + 2 && deterministicRooms.length >= existingRooms.length) return true;
+  if (repeatedExisting && deterministicUnique > existingUnique && deterministicRooms.length >= Math.max(2, existingRooms.length - 1)) {
+    return true;
+  }
+  return false;
+};
+
 const normalizeReconstructionGeometry = (payload: GeometricReconstruction): GeometricReconstruction => {
   if (!Array.isArray(payload?.walls) || payload.walls.length === 0) return payload;
 
@@ -2204,6 +2727,13 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
       };
     })
     .filter((room): room is NonNullable<typeof room> => room != null);
+  const floorLevel =
+    finalizedWalls.length > 0
+      ? toFloorLevel(finalizedWalls[0]?.floor_level)
+      : (normalizedRooms.length > 0 ? toFloorLevel(normalizedRooms[0]?.floor_level) : 0);
+  const deterministicRooms = buildDeterministicRoomsFromWallRaster(finalizedWalls, normalizedRooms, floorLevel);
+  const useDeterministicRooms = shouldUseDeterministicRooms(normalizedRooms, deterministicRooms, finalizedWalls);
+  const resolvedRooms = useDeterministicRooms ? deterministicRooms : normalizedRooms;
 
   const normalizedFurnitures = (payload.furnitures || []).map((item) => {
     const initialPos: [number, number] = [Number(item.position[0]), Number(item.position[1])];
@@ -2251,7 +2781,7 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     wallSolids: wallSolids.length > 0 ? wallSolids : undefined,
     doors: normalizedDoors,
     windows: normalizedWindows,
-    rooms: normalizedRooms,
+    rooms: resolvedRooms,
     furnitures: normalizedFurnitures,
   };
 
@@ -2276,6 +2806,22 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
         severity: 'low',
         description: `Applied miter corner normalization on ${miterResult.adjustedEndpointCount} wall endpoint(s) to reduce overlap artifacts.`,
         location: normalized.walls[0].start,
+      },
+    ];
+  }
+
+  if (useDeterministicRooms && deterministicRooms.length > 0) {
+    const location =
+      deterministicRooms[0]?.polygon?.[0] ||
+      normalized.rooms?.[0]?.polygon?.[0] ||
+      normalized.walls[0]?.start;
+    normalized.conflicts = [
+      ...(normalized.conflicts || []),
+      {
+        type: 'code',
+        severity: 'low',
+        description: `Applied deterministic interior partition extraction from wall raster (${deterministicRooms.length} room polygon(s) selected).`,
+        location,
       },
     ];
   }
