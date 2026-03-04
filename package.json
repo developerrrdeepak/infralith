@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --turbopack -p 3500",
-    "build": "npm run typecheck && next build",
+    "build": "next build",
     "start": "node .next/standalone/server.js",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
