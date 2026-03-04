@@ -461,6 +461,211 @@ const closestPointOnSegment = (
 
 const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const ORIENTATION_EPS = 1e-6;
+const TOPOLOGY_SNAP_TOLERANCE = 0.12;
+
+const orientation = (a: [number, number], b: [number, number], c: [number, number]) =>
+  (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+
+const isNearlyZero = (value: number, eps = ORIENTATION_EPS) => Math.abs(value) <= eps;
+
+const isPointOnSegment = (a: [number, number], b: [number, number], p: [number, number], eps = ORIENTATION_EPS) => {
+  if (!isNearlyZero(orientation(a, b, p), eps)) return false;
+  return (
+    p[0] >= Math.min(a[0], b[0]) - eps &&
+    p[0] <= Math.max(a[0], b[0]) + eps &&
+    p[1] >= Math.min(a[1], b[1]) - eps &&
+    p[1] <= Math.max(a[1], b[1]) + eps
+  );
+};
+
+const segmentsIntersect = (
+  a1: [number, number],
+  a2: [number, number],
+  b1: [number, number],
+  b2: [number, number],
+  eps = ORIENTATION_EPS
+) => {
+  const o1 = orientation(a1, a2, b1);
+  const o2 = orientation(a1, a2, b2);
+  const o3 = orientation(b1, b2, a1);
+  const o4 = orientation(b1, b2, a2);
+
+  if (isNearlyZero(o1, eps) && isPointOnSegment(a1, a2, b1, eps)) return true;
+  if (isNearlyZero(o2, eps) && isPointOnSegment(a1, a2, b2, eps)) return true;
+  if (isNearlyZero(o3, eps) && isPointOnSegment(b1, b2, a1, eps)) return true;
+  if (isNearlyZero(o4, eps) && isPointOnSegment(b1, b2, a2, eps)) return true;
+
+  return (
+    ((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps)) &&
+    ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps))
+  );
+};
+
+const buildEndpointDegreeMap = (
+  walls: GeometricReconstruction['walls'],
+  tolerance = TOPOLOGY_SNAP_TOLERANCE
+) => {
+  const degree = new Map<string, number>();
+  for (const wall of walls || []) {
+    if (!Array.isArray(wall?.start) || !Array.isArray(wall?.end)) continue;
+    const a = pointKey(snapPoint(wall.start, tolerance));
+    const b = pointKey(snapPoint(wall.end, tolerance));
+    if (a === b) continue;
+    degree.set(a, (degree.get(a) || 0) + 1);
+    degree.set(b, (degree.get(b) || 0) + 1);
+  }
+  return degree;
+};
+
+const countDanglingWalls = (
+  walls: GeometricReconstruction['walls'],
+  tolerance = TOPOLOGY_SNAP_TOLERANCE
+) => {
+  const degree = buildEndpointDegreeMap(walls, tolerance);
+  const danglingWalls = new Set<string>();
+  for (const wall of walls || []) {
+    const a = pointKey(snapPoint(wall.start, tolerance));
+    const b = pointKey(snapPoint(wall.end, tolerance));
+    if ((degree.get(a) || 0) <= 1 || (degree.get(b) || 0) <= 1) {
+      danglingWalls.add(String(wall.id));
+    }
+  }
+  return danglingWalls.size;
+};
+
+const hasClosedWallLoops = (
+  walls: GeometricReconstruction['walls'],
+  tolerance = TOPOLOGY_SNAP_TOLERANCE
+) => {
+  const loopCandidates = (walls || []).filter((wall) =>
+    Array.isArray(wall?.start) && Array.isArray(wall?.end)
+  );
+  if (loopCandidates.length < 3) return false;
+  const degree = buildEndpointDegreeMap(loopCandidates, tolerance);
+  if (degree.size < 3) return false;
+  return [...degree.values()].every((d) => d >= 2 && d % 2 === 0);
+};
+
+const countWallSelfIntersections = (walls: GeometricReconstruction['walls']) => {
+  let intersections = 0;
+  const endpointKeys = walls.map((wall) => ({
+    a: pointKey(snapPoint(wall.start, TOPOLOGY_SNAP_TOLERANCE)),
+    b: pointKey(snapPoint(wall.end, TOPOLOGY_SNAP_TOLERANCE)),
+  }));
+
+  for (let i = 0; i < walls.length; i += 1) {
+    const wa = walls[i];
+    for (let j = i + 1; j < walls.length; j += 1) {
+      const wb = walls[j];
+      const sharesEndpoint =
+        endpointKeys[i].a === endpointKeys[j].a ||
+        endpointKeys[i].a === endpointKeys[j].b ||
+        endpointKeys[i].b === endpointKeys[j].a ||
+        endpointKeys[i].b === endpointKeys[j].b;
+      if (sharesEndpoint) continue;
+      if (segmentsIntersect(wa.start, wa.end, wb.start, wb.end)) {
+        intersections += 1;
+      }
+    }
+  }
+
+  return intersections;
+};
+
+const isRoomPolygonValid = (polygon: [number, number][]) => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+
+  const clean: [number, number][] = [];
+  for (const p of polygon) {
+    if (!Array.isArray(p) || p.length < 2) return false;
+    if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) return false;
+    const next: [number, number] = [Number(p[0]), Number(p[1])];
+    const prev = clean[clean.length - 1];
+    if (prev && pointDistance(prev, next) < 1e-4) continue;
+    clean.push(next);
+  }
+
+  if (clean.length < 3) return false;
+  if (pointDistance(clean[0], clean[clean.length - 1]) < 1e-4) {
+    clean.pop();
+  }
+  if (clean.length < 3) return false;
+  if (Math.abs(polygonArea(clean)) < 1e-3) return false;
+
+  for (let i = 0; i < clean.length; i += 1) {
+    const a1 = clean[i];
+    const a2 = clean[(i + 1) % clean.length];
+    for (let j = i + 1; j < clean.length; j += 1) {
+      const areAdjacent =
+        Math.abs(i - j) <= 1 || (i === 0 && j === clean.length - 1);
+      if (areAdjacent) continue;
+      const b1 = clean[j];
+      const b2 = clean[(j + 1) % clean.length];
+      if (segmentsIntersect(a1, a2, b1, b2)) return false;
+    }
+  }
+
+  return true;
+};
+
+const computeDeterministicTopologyChecks = (
+  walls: GeometricReconstruction['walls'],
+  doors: GeometricReconstruction['doors'],
+  windows: GeometricReconstruction['windows'],
+  rooms: GeometricReconstruction['rooms']
+): NonNullable<GeometricReconstruction['topology_checks']> => {
+  const wallList = Array.isArray(walls) ? walls : [];
+  const doorList = Array.isArray(doors) ? doors : [];
+  const windowList = Array.isArray(windows) ? windows : [];
+  const roomList = Array.isArray(rooms) ? rooms : [];
+
+  const floorSet = new Set<number>();
+  for (const wall of wallList) {
+    const floor = Number.isFinite(Number(wall.floor_level)) ? Number(wall.floor_level) : 0;
+    floorSet.add(floor);
+  }
+  if (floorSet.size === 0) floorSet.add(0);
+
+  let totalDanglingWalls = 0;
+  let totalSelfIntersections = 0;
+  let closedWallLoops = true;
+
+  for (const floor of floorSet) {
+    const floorWalls = wallList.filter((wall) => {
+      const level = Number.isFinite(Number(wall.floor_level)) ? Number(wall.floor_level) : 0;
+      return level === floor;
+    });
+    if (floorWalls.length === 0) continue;
+
+    totalDanglingWalls += countDanglingWalls(floorWalls);
+    totalSelfIntersections += countWallSelfIntersections(floorWalls);
+
+    const exterior = floorWalls.filter((wall) => wall.is_exterior);
+    if (exterior.length >= 3) {
+      if (!hasClosedWallLoops(exterior)) closedWallLoops = false;
+    } else {
+      // Fallback when exterior tagging is absent: no dangling walls implies usable enclosure quality.
+      if (countDanglingWalls(floorWalls) > 0 || floorWalls.length < 3) closedWallLoops = false;
+    }
+  }
+
+  const wallIdSet = new Set(wallList.map((wall) => String(wall.id)));
+  const unhostedOpenings =
+    doorList.filter((door) => !wallIdSet.has(String(door.host_wall_id))).length +
+    windowList.filter((window) => !wallIdSet.has(String(window.host_wall_id))).length;
+
+  const roomPolygonValidityPass = roomList.every((room) => isRoomPolygonValid(room.polygon));
+
+  return {
+    closed_wall_loops: closedWallLoops && wallList.length >= 3,
+    self_intersections: totalSelfIntersections,
+    dangling_walls: totalDanglingWalls,
+    unhosted_openings: unhostedOpenings,
+    room_polygon_validity_pass: roomPolygonValidityPass,
+  };
+};
+
 const applyWallMiterJoins = (
   walls: GeometricReconstruction['walls'],
   tolerance = 0.12
@@ -751,7 +956,17 @@ const buildServerCutWallSolids = (
 };
 
 const normalizeReconstructionGeometry = (payload: GeometricReconstruction): GeometricReconstruction => {
-  if (!Array.isArray(payload?.walls) || payload.walls.length === 0) return payload;
+  if (!Array.isArray(payload?.walls) || payload.walls.length === 0) {
+    return {
+      ...payload,
+      topology_checks: computeDeterministicTopologyChecks(
+        payload?.walls || [],
+        payload?.doors || [],
+        payload?.windows || [],
+        payload?.rooms || []
+      ),
+    };
+  }
 
   const snapTolerance = 0.12;
   const axisSnapRatio = 0.2;
@@ -812,10 +1027,30 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     });
   }
 
-  if (normalizedWalls.length === 0) return payload;
+  if (normalizedWalls.length === 0) {
+    return {
+      ...payload,
+      topology_checks: computeDeterministicTopologyChecks(
+        payload?.walls || [],
+        payload?.doors || [],
+        payload?.windows || [],
+        payload?.rooms || []
+      ),
+    };
+  }
   const miterResult = applyWallMiterJoins(normalizedWalls, snapTolerance);
   const finalizedWalls = miterResult.walls;
-  if (finalizedWalls.length === 0) return payload;
+  if (finalizedWalls.length === 0) {
+    return {
+      ...payload,
+      topology_checks: computeDeterministicTopologyChecks(
+        payload?.walls || [],
+        payload?.doors || [],
+        payload?.windows || [],
+        payload?.rooms || []
+      ),
+    };
+  }
 
   const findNearestWallId = (position: [number, number]): string | number | null => {
     let nearest: { id: string | number; distance: number } | null = null;
@@ -917,6 +1152,12 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   });
 
   const wallSolids = buildServerCutWallSolids(finalizedWalls, normalizedDoors, normalizedWindows);
+  const topologyChecks = computeDeterministicTopologyChecks(
+    finalizedWalls,
+    normalizedDoors,
+    normalizedWindows,
+    normalizedRooms
+  );
 
   const normalized: GeometricReconstruction = {
     ...payload,
@@ -926,6 +1167,7 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     windows: normalizedWindows,
     rooms: normalizedRooms,
     furnitures: normalizedFurnitures,
+    topology_checks: topologyChecks,
   };
 
   const droppedWalls = payload.walls.length - normalizedWalls.length;

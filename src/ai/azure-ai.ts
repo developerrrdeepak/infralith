@@ -143,13 +143,23 @@ const isDeploymentLookupError = (error: unknown) => {
 /**
  * Zod Schema for GeometricReconstruction to enforce rigorous JSON parsing via AI SDK
  */
+const confidenceScoreSchema = z.number().min(0).max(1);
+
 const GeometricReconstructionSchema = z.object({
+    meta: z.object({
+        unit: z.enum(["m", "cm", "mm", "ft", "in", "unknown"]).optional(),
+        scale_m_per_px: z.number().optional(),
+        scale_confidence: confidenceScoreSchema.optional(),
+        rotation_deg: z.number().optional(),
+        floor_count: z.number().int().optional(),
+    }).optional(),
     walls: z.array(z.object({
         id: z.union([z.string(), z.number()]),
         start: z.array(z.number()),
         end: z.array(z.number()),
         thickness: z.number(),
         height: z.number(),
+        confidence: confidenceScoreSchema.optional(),
         color: z.string(),
         is_exterior: z.boolean(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
@@ -160,6 +170,8 @@ const GeometricReconstructionSchema = z.object({
         position: z.array(z.number()),
         width: z.number(),
         height: z.number(),
+        swing: z.enum(["left", "right", "unknown"]).optional(),
+        confidence: confidenceScoreSchema.optional(),
         color: z.string(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of doors"),
@@ -169,6 +181,7 @@ const GeometricReconstructionSchema = z.object({
         position: z.array(z.number()),
         width: z.number(),
         sill_height: z.number(),
+        confidence: confidenceScoreSchema.optional(),
         color: z.string(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of windows"),
@@ -177,6 +190,7 @@ const GeometricReconstructionSchema = z.object({
         name: z.string(),
         polygon: z.array(z.array(z.number())),
         area: z.number(),
+        confidence: confidenceScoreSchema.optional(),
         floor_color: z.string(),
         floor_level: z.number().describe("0 for Ground, 1 for First Floor, etc."),
     })).describe("List of rooms"),
@@ -199,6 +213,13 @@ const GeometricReconstructionSchema = z.object({
         base_height: z.number(),
         color: z.string(),
     }).nullable().describe("Building roof structure (null if no roof)"),
+    topology_checks: z.object({
+        closed_wall_loops: z.boolean().optional(),
+        self_intersections: z.number().int().nonnegative().optional(),
+        dangling_walls: z.number().int().nonnegative().optional(),
+        unhosted_openings: z.number().int().nonnegative().optional(),
+        room_polygon_validity_pass: z.boolean().optional(),
+    }).optional().describe("Topological quality checks for geometric validity"),
     conflicts: z.array(z.object({
         type: z.enum(['structural', 'safety', 'code']),
         severity: z.enum(['low', 'medium', 'high']),

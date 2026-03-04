@@ -12,6 +12,7 @@ export interface WallGeometry {
     end: [number, number];
     thickness: number;
     height: number;
+    confidence?: number;
     source_wall_id?: string | number;
     base_offset?: number;
     color?: string; // hex color for the wall
@@ -26,6 +27,8 @@ export interface DoorGeometry {
     position: [number, number];
     width: number;
     height: number;
+    swing?: 'left' | 'right' | 'unknown';
+    confidence?: number;
     color?: string;
     floor_level?: number;
 }
@@ -36,6 +39,7 @@ export interface WindowGeometry {
     position: [number, number];
     width: number;
     sill_height: number;
+    confidence?: number;
     color?: string;
     floor_level?: number;
 }
@@ -45,6 +49,7 @@ export interface RoomGeometry {
     name: string;
     polygon: [number, number][];
     area: number;
+    confidence?: number;
     floor_color?: string; // hex color for the floor tile
     floor_level?: number;
 }
@@ -78,6 +83,22 @@ export interface ConstructionConflict {
     location: [number, number];
 }
 
+export interface ReconstructionMeta {
+    unit?: 'm' | 'cm' | 'mm' | 'ft' | 'in' | 'unknown';
+    scale_m_per_px?: number;
+    scale_confidence?: number;
+    rotation_deg?: number;
+    floor_count?: number;
+}
+
+export interface TopologyChecks {
+    closed_wall_loops?: boolean;
+    self_intersections?: number;
+    dangling_walls?: number;
+    unhosted_openings?: number;
+    room_polygon_validity_pass?: boolean;
+}
+
 export interface AIAssetPart {
     name: string;
     position: [number, number, number];
@@ -92,6 +113,7 @@ export interface AIAsset {
 }
 
 export interface GeometricReconstruction {
+    meta?: ReconstructionMeta;
     walls: WallGeometry[];
     wallSolids?: WallGeometry[];
     doors: DoorGeometry[];
@@ -99,6 +121,7 @@ export interface GeometricReconstruction {
     rooms: RoomGeometry[];
     furnitures?: FurnitureGeometry[];
     roof?: RoofGeometry;
+    topology_checks?: TopologyChecks;
     conflicts: ConstructionConflict[];
     building_name?: string;
     exterior_color?: string;

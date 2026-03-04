@@ -1,89 +1,174 @@
 import type { BlueprintLayoutHints } from "@/ai/azure-ai";
 
+const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
+const PROMPT_LINE_BBOX_LIMIT = 48;
+
+const toFinite = (value: unknown): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, number, number, number] | null => {
+  if (!Array.isArray(polygon) || polygon.length < 6) return null;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = 0; i < polygon.length - 1; i += 2) {
+    const x = toFinite(polygon[i]);
+    const y = toFinite(polygon[i + 1]);
+    if (x == null || y == null) continue;
+    xs.push(x);
+    ys.push(y);
+  }
+  if (xs.length === 0 || ys.length === 0) return null;
+  return [
+    Number(Math.min(...xs).toFixed(2)),
+    Number(Math.min(...ys).toFixed(2)),
+    Number(Math.max(...xs).toFixed(2)),
+    Number(Math.max(...ys).toFixed(2)),
+  ];
+};
+
+const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null) => {
+  if (!layoutHints) return "Not available.";
+
+  const pageSummary = (layoutHints.pages || []).map((page) => ({
+    pageNumber: page.pageNumber,
+    width: Number((page.width || 0).toFixed(2)),
+    height: Number((page.height || 0).toFixed(2)),
+    unit: page.unit || "pixel",
+    lineCount: page.lineCount || 0,
+    wordCount: page.wordCount || 0,
+  }));
+
+  const dimensionAnchors = (layoutHints.dimensionAnchors || [])
+    .slice(0, PROMPT_DIMENSION_ANCHOR_LIMIT)
+    .map((anchor) => ({
+      text: String(anchor?.text || "").slice(0, 80),
+      bbox: polygonToBoundingBox(anchor?.polygon || []),
+    }))
+    .filter((anchor) => Array.isArray(anchor.bbox));
+
+  const lineBBoxes = (layoutHints.linePolygons || [])
+    .slice(0, PROMPT_LINE_BBOX_LIMIT)
+    .map((polygon) => polygonToBoundingBox(polygon))
+    .filter((bbox): bbox is [number, number, number, number] => Array.isArray(bbox));
+
+  return JSON.stringify({
+    pageCount: layoutHints.pageCount || pageSummary.length,
+    pages: pageSummary,
+    linePolygonCount: layoutHints.linePolygons?.length || 0,
+    sampledLineBBoxes: lineBBoxes,
+    dimensionAnchorCount: layoutHints.dimensionAnchors?.length || 0,
+    sampledDimensionAnchors: dimensionAnchors,
+  }, null, 2);
+};
+
 export const buildBlueprintVisionPrompt = (layoutHints: BlueprintLayoutHints | null): string => `
-You are the Infralith Blueprint Reconstruction Engine.
-Task: convert the provided 2D architectural blueprint into a metrically consistent geometric reconstruction.
+You are Infralith Blueprint Reconstruction Engine v5.
+Goal: convert a 2D floorplan image into a metrically consistent, topologically valid geometric reconstruction for BIM pre-processing.
+
+PRIORITY ORDER:
+1) Geometric correctness and topology validity.
+2) Evidence-backed extraction.
+3) Completeness.
 
 ANTI-HALLUCINATION HARD RULES:
-- Extract only what is visible in the drawing and in the provided hints.
-- Do not invent default rectangular layouts, random extra floors, or imaginary furniture.
-- If an element is unclear, omit it and mention uncertainty in conflicts.
+- Use only visible drawing evidence plus provided layout hints.
+- Do not invent default box layouts, random extra floors, or speculative furniture.
+- If evidence is weak, output fewer elements and add explicit conflicts.
+- Prefer "unknown by omission" over wrong geometry.
 
-PREPROCESSING INPUTS:
+INPUT EVIDENCE SUMMARY:
 AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS:
-${layoutHints ? JSON.stringify(layoutHints, null, 2) : "Not available."}
+${summarizeLayoutHintsForPrompt(layoutHints)}
 
-EXTRACTION ORDER (MANDATORY):
-1) SCALE + GLOBAL FRAME
-- Derive metric scale from dimension text first (m, mm, cm, ft, in).
-- If no reliable dimensions are found, infer scale conservatively from architectural priors.
-- Keep one consistent coordinate frame for all floors.
+MANDATORY PIPELINE:
+1) NORMALIZE + SCALE + GLOBAL FRAME
+- Detect dominant drawing orientation and normalize mentally to a consistent axis.
+- Derive scale from readable dimensions first (m, mm, cm, ft, in).
+- If scale is inferred from priors, keep geometry conservative and add a scale-related conflict.
+- Keep one global coordinate frame across all floors.
 
-2) STOREY PARTITIONING
-- Detect separate floor blocks (ground, level 1, etc.) and assign integer floor_level starting at 0.
-- Keep vertical alignment consistent between floors using shared cores or stair/shaft anchors when visible.
+2) STRUCTURAL GRAPH FIRST (JUNCTION -> EDGE -> WALL)
+- Detect wall junction candidates and wall edge candidates first.
+- Build walls from the graph, then snap near-junction endpoints within 0.15m.
+- Preserve non-Manhattan edges when evidence supports them; do not force orthogonality.
+- Remove duplicates, zero-length edges, and obvious overlaps.
 
-3) STRUCTURAL SHELL FIRST
-- Trace walls before all other elements.
-- Thick wall lines: treat as exterior walls (thickness about 0.23m).
-- Thin wall lines: treat as interior partitions (thickness about 0.115m).
-- Return each wall with start/end, thickness, height, is_exterior, floor_level.
-- Wall geometry must match the observed footprint and internal partitions, not a simplified box.
+3) FLOOR PARTITIONING
+- Separate distinct floor blocks and assign integer floor_level from 0.
+- Keep floor-local geometry consistent in a shared global frame.
+- If vertical alignment between floors is uncertain, add conflict instead of guessing hidden structure.
 
-4) OPENINGS WITH VALID HOST LINKS
-- Detect door and window openings only after walls are complete.
-- Each door/window must reference an existing host_wall_id on the same floor_level.
-- Use realistic defaults only when symbol dimensions are unreadable:
+4) OPENINGS AFTER STABLE WALLS
+- Detect doors/windows only after walls are stable.
+- Every opening must reference an existing host_wall_id on the same floor_level.
+- If host wall is ambiguous, omit opening and record conflict.
+- Use conservative defaults only if symbol is clearly detected but size text is unreadable:
   door width 0.9m, door height 2.1m, window sill_height 0.9m.
 
-5) SPACES / ROOMS
-- Build room polygons from enclosed regions.
-- Every room polygon must be closed, non-self-intersecting, and counter-clockwise.
-- Compute room area in square meters from polygon geometry.
-- Use visible room labels when present; otherwise use generic names like "Room 1".
+5) ROOM POLYGONS
+- Build room polygons only from enclosed wall regions.
+- Room polygons must be closed, non-self-intersecting, and counter-clockwise.
+- Compute room area from polygon geometry (m^2).
+- Use visible labels when available; otherwise use deterministic names ("Room 1", "Room 2", ...).
 
 6) ROOF FOOTPRINT
-- Extract roof polygon from the outermost building boundary.
-- If roof type is unclear, set type="flat".
-- Keep roof aligned to overall footprint.
+- Set roof polygon from the outer building shell.
+- Keep roof aligned with shell geometry.
+- If roof type is unclear, use "flat".
 
-7) FURNITURE (OPTIONAL, CONSERVATIVE)
-- Add furniture only when symbols are clearly visible.
-- If uncertain, return an empty furnitures array instead of guessing.
+7) FURNITURE POLICY
+- Furniture is optional and conservative.
+- Include only clearly observed furniture; otherwise return an empty furnitures array.
 
-8) ENGINEERING CONFLICTS
-- Return 2 to 5 practical conflicts when detected (structural/safety/code), with location coordinates.
-- Use low/medium/high severity based on observed ambiguity or non-compliance cues.
+8) QUALITY GATES (MANDATORY)
+- All coordinates must be finite numbers in meters.
+- No duplicate IDs across walls/doors/windows/rooms/furnitures.
+- No dangling zero-length walls.
+- All doors/windows must have valid host_wall_id.
+- Emit confidence in [0,1] for walls, doors, windows, and rooms when estimable.
+- If any major gate is uncertain or fails, add conflict with precise location.
 
-GEOMETRY VALIDATION RULES (MANDATORY):
-- All coordinates are meters and finite numbers.
-- Wall height should be 2.8m unless explicitly indicated otherwise.
-- Snap near-adjacent wall endpoints within 0.15m tolerance.
-- No zero-length walls and no duplicate IDs.
-- doors[].host_wall_id and windows[].host_wall_id must exist in walls[].
-- room.floor_level must match the level of surrounding walls.
+9) CONFLICTS
+- Conflicts must use type in {"structural","safety","code"} and severity in {"low","medium","high"}.
+- Include concise, actionable descriptions tied to uncertainty, topology, or scale reliability.
 
 OUTPUT CONTRACT:
-Return ONLY one valid JSON object with this exact structure:
+Return ONLY one valid JSON object matching exactly this structure:
 {
+  "meta": {
+    "unit": "m|cm|mm|ft|in|unknown",
+    "scale_m_per_px": 0.001,
+    "scale_confidence": 0.0,
+    "rotation_deg": 0,
+    "floor_count": 1
+  },
   "building_name": "Project Name",
   "exterior_color": "#hex",
   "walls": [
-    { "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "color": "#hex", "is_exterior": true, "floor_level": 0 }
+    { "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "confidence": 0.0, "color": "#hex", "is_exterior": true, "floor_level": 0 }
   ],
   "doors": [
-    { "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#hex", "floor_level": 0 }
+    { "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "swing": "left|right|unknown", "confidence": 0.0, "color": "#hex", "floor_level": 0 }
   ],
   "windows": [
-    { "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#hex", "floor_level": 0 }
+    { "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "confidence": 0.0, "color": "#hex", "floor_level": 0 }
   ],
   "rooms": [
-    { "id": "r1", "name": "Room Name", "polygon": [[x, y], [x, y], [x, y]], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }
+    { "id": "r1", "name": "Room Name", "polygon": [[x, y], [x, y], [x, y]], "area": 0.0, "confidence": 0.0, "floor_color": "#hex", "floor_level": 0 }
   ],
   "furnitures": [
     { "id": "f1", "room_id": "r1", "type": "table", "position": [x, y], "width": 1.2, "depth": 0.8, "height": 0.75, "color": "#hex", "description": "Simple table", "floor_level": 0 }
   ],
   "roof": { "type": "flat", "polygon": [[x, y], [x, y], [x, y]], "height": 1.5, "base_height": 2.8, "color": "#hex" },
+  "topology_checks": {
+    "closed_wall_loops": true,
+    "self_intersections": 0,
+    "dangling_walls": 0,
+    "unhosted_openings": 0,
+    "room_polygon_validity_pass": true
+  },
   "conflicts": [
     { "type": "structural", "severity": "medium", "description": "Conflict text", "location": [x, y] }
   ]
@@ -96,15 +181,18 @@ STRICT OUTPUT RULE:
 
 export const buildBlueprintRetryPrompt = (basePrompt: string): string => `${basePrompt}
 
-CRITICAL QUALITY CORRECTION (MANDATORY):
-Your previous reconstruction appears underfit for this blueprint complexity.
-You MUST increase geometric fidelity and match the extracted hints.
+CRITICAL QUALITY RECOVERY (MANDATORY):
+Previous result appears underfit or topologically weak.
+Regenerate with higher structural fidelity while staying evidence-bound.
 
-HARD CONSTRAINTS FOR THIS RETRY:
-- Do not return a simple rectangular default.
-- Trace significantly more wall segments where hints show structural complexity.
-- If the plan indicates multiple enclosed spaces, output corresponding room polygons.
-- Respect geometry cues from AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS.
+RETRY HARD GATES:
+- Do not collapse to a simple rectangle unless evidence is truly rectangular.
+- Increase wall segmentation where line evidence indicates additional junctions/partitions.
+- Ensure every detected enclosed region becomes a valid room polygon or an explicit conflict.
+- Recheck door/window host_wall_id integrity and remove uncertain openings.
+- Keep non-Manhattan edges where supported.
+- If scale is uncertain, keep geometry conservative and emit a conflict.
+- Return strictly valid JSON only, same schema as above.
 `;
 
 export const buildTextToBuildingPrompt = (description: string): string => `
