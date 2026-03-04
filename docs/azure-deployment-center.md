@@ -2,6 +2,8 @@
 
 This project is prepared for direct deployment from GitHub to **Azure App Service** using **Deployment Center** with App Service build automation.
 
+Last verified for no-GitHub-Actions deployment flow: 2026-03-04.
+
 ## 1. Local build/run checks
 
 ```bash
