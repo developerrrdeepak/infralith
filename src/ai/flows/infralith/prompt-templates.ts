@@ -2,6 +2,8 @@ import type { BlueprintLayoutHints } from "@/ai/azure-ai";
 
 const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
 const PROMPT_LINE_BBOX_LIMIT = 48;
+const PROMPT_LINE_TEXT_LIMIT = 22;
+const PROMPT_FLOOR_LABEL_LIMIT = 10;
 
 const toFinite = (value: unknown): number | null => {
   const n = Number(value);
@@ -28,6 +30,32 @@ const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, nu
   ];
 };
 
+const parseDimensionTextToMeters = (value: unknown): number | null => {
+  const raw = String(value || '').toLowerCase().replace(/,/g, ' ').trim();
+  if (!raw) return null;
+
+  const feetInches = raw.match(/(\d+(?:\.\d+)?)\s*'\s*(\d+(?:\.\d+)?)?/);
+  if (feetInches) {
+    const feet = Number(feetInches[1] || 0);
+    const inches = Number(feetInches[2] || 0);
+    const meters = (feet * 0.3048) + (inches * 0.0254);
+    return Number.isFinite(meters) && meters > 0 ? Number(meters.toFixed(3)) : null;
+  }
+
+  const numeric = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!numeric) return null;
+  const n = Number(numeric[0]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+
+  let meters = n;
+  if (/\bmm\b/.test(raw)) meters = n / 1000;
+  else if (/\bcm\b/.test(raw)) meters = n / 100;
+  else if (/\b(ft|feet|foot)\b|\'/.test(raw)) meters = n * 0.3048;
+  else if (/\b(in|inch|inches)\b|\"/.test(raw)) meters = n * 0.0254;
+
+  return Number.isFinite(meters) && meters > 0 ? Number(meters.toFixed(3)) : null;
+};
+
 const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null) => {
   if (!layoutHints) return "Not available.";
 
@@ -44,6 +72,7 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     .slice(0, PROMPT_DIMENSION_ANCHOR_LIMIT)
     .map((anchor) => ({
       text: String(anchor?.text || "").slice(0, 80),
+      meters_estimate: parseDimensionTextToMeters(anchor?.text),
       bbox: polygonToBoundingBox(anchor?.polygon || []),
     }))
     .filter((anchor) => Array.isArray(anchor.bbox));
@@ -53,18 +82,35 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     .map((polygon) => polygonToBoundingBox(polygon))
     .filter((bbox): bbox is [number, number, number, number] => Array.isArray(bbox));
 
+  const lineTexts = (layoutHints.lineTexts || [])
+    .map((text) => String(text || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, PROMPT_LINE_TEXT_LIMIT);
+
+  const floorLabels = (layoutHints.floorLabelAnchors || [])
+    .slice(0, PROMPT_FLOOR_LABEL_LIMIT)
+    .map((anchor) => ({
+      text: String(anchor?.text || '').slice(0, 64),
+      bbox: polygonToBoundingBox(anchor?.polygon || []),
+    }))
+    .filter((entry) => Array.isArray(entry.bbox));
+
   return JSON.stringify({
+    caveat: "OCR line polygons are text-location boxes and are not wall vectors.",
     pageCount: layoutHints.pageCount || pageSummary.length,
     pages: pageSummary,
-    linePolygonCount: layoutHints.linePolygons?.length || 0,
-    sampledLineBBoxes: lineBBoxes,
+    ocrTextLineBoxCount: layoutHints.linePolygons?.length || 0,
+    sampledOcrTextLineBBoxes: lineBBoxes,
+    sampledLineTexts: lineTexts,
     dimensionAnchorCount: layoutHints.dimensionAnchors?.length || 0,
     sampledDimensionAnchors: dimensionAnchors,
+    floorLabelAnchorCount: layoutHints.floorLabelAnchors?.length || 0,
+    sampledFloorLabelAnchors: floorLabels,
   }, null, 2);
 };
 
 export const buildBlueprintVisionPrompt = (layoutHints: BlueprintLayoutHints | null): string => `
-You are Infralith Blueprint Reconstruction Engine v5.
+You are Infralith Blueprint Reconstruction Engine v6.
 Goal: convert a 2D floorplan image into a metrically consistent, topologically valid geometric reconstruction for BIM pre-processing.
 
 PRIORITY ORDER:
@@ -77,6 +123,7 @@ ANTI-HALLUCINATION HARD RULES:
 - Do not invent default box layouts, random extra floors, or speculative furniture.
 - If evidence is weak, output fewer elements and add explicit conflicts.
 - Prefer "unknown by omission" over wrong geometry.
+- OCR text-line polygons are NOT wall segments. Treat them as weak text-localization hints only.
 
 INPUT EVIDENCE SUMMARY:
 AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS:
@@ -85,9 +132,15 @@ ${summarizeLayoutHintsForPrompt(layoutHints)}
 MANDATORY PIPELINE:
 1) NORMALIZE + SCALE + GLOBAL FRAME
 - Detect dominant drawing orientation and normalize mentally to a consistent axis.
-- Derive scale from readable dimensions first (m, mm, cm, ft, in).
+- Derive scale from readable dimensions first (m, mm, cm, ft, in) and preserve proportional consistency across rooms.
 - If scale is inferred from priors, keep geometry conservative and add a scale-related conflict.
 - Keep one global coordinate frame across all floors.
+
+1.5) EVIDENCE WEIGHTING (STRICT)
+- Highest confidence: visible wall lines, junctions, and opening symbols.
+- Medium confidence: readable dimension annotations and room labels.
+- Lowest confidence: OCR text line boxes (text layout only, not wall geometry).
+- Never promote low-confidence text layout hints over clear drawing geometry.
 
 2) STRUCTURAL GRAPH FIRST (JUNCTION -> EDGE -> WALL)
 - Detect wall junction candidates and wall edge candidates first.
@@ -128,6 +181,8 @@ MANDATORY PIPELINE:
 - No dangling zero-length walls.
 - All doors/windows must have valid host_wall_id.
 - Emit confidence in [0,1] for walls, doors, windows, and rooms when estimable.
+- If dimension anchors are present, avoid trivial single-rectangle fallback unless evidence is truly rectangular.
+- If floor labels suggest multi-floor content, set floor levels consistently or emit explicit high-severity conflict.
 - If any major gate is uncertain or fails, add conflict with precise location.
 
 9) CONFLICTS
@@ -179,11 +234,16 @@ STRICT OUTPUT RULE:
 - No markdown, no commentary, no code fences.
 `;
 
-export const buildBlueprintRetryPrompt = (basePrompt: string): string => `${basePrompt}
+export const buildBlueprintRetryPrompt = (basePrompt: string, diagnostics: string[] = []): string => `${basePrompt}
 
 CRITICAL QUALITY RECOVERY (MANDATORY):
 Previous result appears underfit or topologically weak.
 Regenerate with higher structural fidelity while staying evidence-bound.
+
+RETRY DIAGNOSTICS FROM PREVIOUS OUTPUT:
+${diagnostics.length > 0
+    ? diagnostics.map((item, index) => `${index + 1}. ${item}`).join('\n')
+    : '1. Previous output was structurally underfit against available blueprint evidence.'}
 
 RETRY HARD GATES:
 - Do not collapse to a simple rectangle unless evidence is truly rectangular.

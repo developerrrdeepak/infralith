@@ -52,11 +52,16 @@ const summarizeLayoutHints = (payload: BlueprintLayoutHints | null) => ({
   pages: payload?.pageCount || 0,
   linePolygons: payload?.linePolygons?.length || 0,
   dimensionAnchors: payload?.dimensionAnchors?.length || 0,
+  lineTexts: payload?.lineTexts?.length || 0,
+  floorLabelAnchors: payload?.floorLabelAnchors?.length || 0,
 });
 
 const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
+const LAYOUT_LINE_TEXT_LIMIT = 140;
+const LAYOUT_FLOOR_LABEL_LIMIT = 36;
 const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
+const LAYOUT_FLOOR_LABEL_REGEX = /\b((?:basement|cellar|lower\s*ground|stilt|ground|first|second|third|fourth|fifth|terrace|roof)\s*floor|(?:level|lvl|floor|flr)\s*[-_:]?\s*[a-z0-9]+|(?:g|b|l|f)\s*[-_:]?\s*\d{1,2})\b/i;
 
 type LayoutHintMode = 'auto' | 'azure' | 'local' | 'hybrid';
 
@@ -218,19 +223,160 @@ const getLayoutHintMode = (): LayoutHintMode => {
   return 'auto';
 };
 
-const shouldRetryForUnderfit = (
+type FidelityAssessment = {
+  shouldRetry: boolean;
+  reasons: string[];
+};
+
+const toFiniteScalar = (value: unknown): number | null => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizeFloorLabelText = (value: string): string | null => {
+  const text = value.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+
+  const named = text.match(/\b(basement|cellar|ground|first|second|third|fourth|fifth|terrace|roof)\b/);
+  if (named?.[1]) return named[1];
+
+  const level = text.match(/\b(?:level|lvl|floor|flr)\s*[-_:]?\s*([a-z0-9]+)\b/);
+  if (level?.[1]) return `level-${level[1]}`;
+
+  const shortCode = text.match(/\b(?:g|b|l|f)\s*[-_:]?\s*(\d{1,2})\b/);
+  if (shortCode?.[1]) return `code-${shortCode[1]}`;
+
+  return null;
+};
+
+const estimateFloorHintCount = (layoutHints: BlueprintLayoutHints | null): number => {
+  if (!layoutHints) return 0;
+
+  const labels = new Set<string>();
+  for (const anchor of layoutHints.floorLabelAnchors || []) {
+    const normalized = normalizeFloorLabelText(String(anchor?.text || ''));
+    if (!normalized) continue;
+    labels.add(normalized);
+    if (labels.size >= 6) break;
+  }
+
+  if (labels.size > 0) return labels.size;
+
+  for (const lineText of layoutHints.lineTexts || []) {
+    const normalized = normalizeFloorLabelText(String(lineText || ''));
+    if (!normalized) continue;
+    labels.add(normalized);
+    if (labels.size >= 6) break;
+  }
+
+  return labels.size;
+};
+
+const estimateResultFloorCount = (result: GeometricReconstruction): number => {
+  const hinted = Math.max(0, Math.round(toFiniteScalar(result?.meta?.floor_count) ?? 0));
+  let maxLevel = -1;
+  const bump = (level: unknown) => {
+    const n = toFiniteScalar(level);
+    if (n == null) return;
+    maxLevel = Math.max(maxLevel, Math.round(n));
+  };
+
+  for (const wall of result?.walls || []) bump(wall.floor_level);
+  for (const room of result?.rooms || []) bump(room.floor_level);
+  for (const door of result?.doors || []) bump(door.floor_level);
+  for (const win of result?.windows || []) bump(win.floor_level);
+
+  const fromGeometry = maxLevel >= 0 ? maxLevel + 1 : 0;
+  return Math.max(hinted, fromGeometry);
+};
+
+const countDirectionBuckets = (walls: GeometricReconstruction['walls']): number => {
+  const directions = new Set<number>();
+  for (const wall of walls || []) {
+    const dx = Number(wall?.end?.[0] || 0) - Number(wall?.start?.[0] || 0);
+    const dz = Number(wall?.end?.[1] || 0) - Number(wall?.start?.[1] || 0);
+    const length = Math.hypot(dx, dz);
+    if (length < 0.2) continue;
+    const deg = Math.atan2(dz, dx) * (180 / Math.PI);
+    const normalized = ((deg % 180) + 180) % 180;
+    directions.add(Math.round(normalized / 15) * 15);
+  }
+  return directions.size;
+};
+
+const isLikelyRectangularFallback = (result: GeometricReconstruction): boolean => {
+  const walls = result?.walls || [];
+  const rooms = result?.rooms || [];
+  if (walls.length < 4 || walls.length > 10) return false;
+
+  const exteriorWalls = walls.filter((wall) => wall?.is_exterior !== false);
+  if (exteriorWalls.length < 4 || exteriorWalls.length > 8) return false;
+
+  const directionBuckets = countDirectionBuckets(exteriorWalls);
+  if (directionBuckets > 2) return false;
+
+  return rooms.length <= 1;
+};
+
+const evaluateReconstructionFidelity = (
   result: GeometricReconstruction,
   layoutHints: BlueprintLayoutHints | null
-) => {
+): FidelityAssessment => {
+  const reasons = new Set<string>();
   const wallCount = result?.walls?.length || 0;
   const roomCount = result?.rooms?.length || 0;
-  const layoutLines = layoutHints?.linePolygons?.length || 0;
-  const signalStrength = layoutLines;
+  const dimensionSignals = layoutHints?.dimensionAnchors?.length || 0;
+  const ocrLineSignals = layoutHints?.linePolygons?.length || 0;
+  const floorSignals = estimateFloorHintCount(layoutHints);
+  const inferredFloorCount = estimateResultFloorCount(result);
+  const scaleConfidence = toFiniteScalar(result?.meta?.scale_confidence);
+  const topology = result?.topology_checks;
 
-  // If hints show complex blueprint but output is too simple, force one stricter retry.
-  if (signalStrength >= 40 && wallCount <= 8) return true;
-  if (signalStrength >= 60 && roomCount <= 2) return true;
-  return false;
+  if (wallCount <= 3) {
+    reasons.add(`Only ${wallCount} wall segment(s) were produced, which is structurally incomplete.`);
+  }
+  if (dimensionSignals >= 5 && wallCount <= 8) {
+    reasons.add(`Blueprint exposes ${dimensionSignals} dimension anchors but reconstruction has only ${wallCount} walls.`);
+  }
+  if (dimensionSignals >= 8 && roomCount <= 1) {
+    reasons.add(`Dimension-rich blueprint (${dimensionSignals} anchors) collapsed to ${roomCount} room(s).`);
+  }
+  if (dimensionSignals >= 4 && roomCount === 0) {
+    reasons.add('No room polygons were produced despite measurable blueprint annotations.');
+  }
+  if (floorSignals >= 2 && inferredFloorCount <= 1) {
+    reasons.add(`Floor labels indicate multi-level drawing (${floorSignals} signals) but output floor_count is ${inferredFloorCount}.`);
+  }
+  if (dimensionSignals >= 5 && (scaleConfidence == null || scaleConfidence < 0.3)) {
+    reasons.add('Scale confidence remained too low despite visible dimension anchors.');
+  }
+  if (isLikelyRectangularFallback(result) && (dimensionSignals >= 4 || ocrLineSignals >= 70)) {
+    reasons.add('Model appears collapsed to a simple rectangular shell despite richer blueprint evidence.');
+  }
+
+  if (topology?.closed_wall_loops === false) {
+    reasons.add('Topology check reports open wall loops.');
+  }
+  if ((topology?.dangling_walls ?? 0) > 2) {
+    reasons.add(`Topology check reports ${topology?.dangling_walls} dangling walls.`);
+  }
+  if ((topology?.unhosted_openings ?? 0) > 0) {
+    reasons.add(`Topology check reports ${topology?.unhosted_openings} unhosted openings.`);
+  }
+  if (topology?.room_polygon_validity_pass === false) {
+    reasons.add('Topology check reports invalid room polygon(s).');
+  }
+
+  const highSeverityConflicts = (result?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
+  if (highSeverityConflicts >= 3) {
+    reasons.add(`Output still carries ${highSeverityConflicts} high-severity conflicts.`);
+  }
+
+  const selectedReasons = Array.from(reasons).slice(0, 5);
+  return {
+    shouldRetry: selectedReasons.length > 0,
+    reasons: selectedReasons,
+  };
 };
 
 const hasNonEmptyWalls = (
@@ -1095,12 +1241,39 @@ const mergeLayoutHintSources = (
     if (mergedAnchors.length >= LAYOUT_DIMENSION_ANCHOR_LIMIT) break;
   }
 
+  const lineTextSeen = new Set<string>();
+  const mergedLineTexts: string[] = [];
+  for (const entry of [...(azureHints?.lineTexts || []), ...(localHints?.lineTexts || [])]) {
+    const text = String(entry || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (lineTextSeen.has(key)) continue;
+    lineTextSeen.add(key);
+    mergedLineTexts.push(text.slice(0, 160));
+    if (mergedLineTexts.length >= LAYOUT_LINE_TEXT_LIMIT) break;
+  }
+
+  const floorSeen = new Set<string>();
+  const mergedFloorLabels: Array<{ text: string; polygon: number[]; }> = [];
+  for (const anchor of [...(azureHints?.floorLabelAnchors || []), ...(localHints?.floorLabelAnchors || [])]) {
+    const text = String(anchor?.text || '').replace(/\s+/g, ' ').trim();
+    const polygon = Array.isArray(anchor?.polygon) ? anchor.polygon.map((v) => Number(v.toFixed(2))) : [];
+    if (!text || polygon.length < 6) continue;
+    const key = `${text.toLowerCase()}|${polygon.join(',')}`;
+    if (floorSeen.has(key)) continue;
+    floorSeen.add(key);
+    mergedFloorLabels.push({ text: text.slice(0, 96), polygon });
+    if (mergedFloorLabels.length >= LAYOUT_FLOOR_LABEL_LIMIT) break;
+  }
+
   const basePages = (azureHints?.pages?.length || 0) > 0 ? azureHints?.pages : localHints?.pages;
   return {
     pageCount: Math.max(localHints?.pageCount || 0, azureHints?.pageCount || 0, basePages?.length || 0),
     pages: basePages || [],
     linePolygons: mergedLinePolygons,
     dimensionAnchors: mergedAnchors,
+    lineTexts: mergedLineTexts,
+    floorLabelAnchors: mergedFloorLabels,
   };
 };
 
@@ -1214,6 +1387,9 @@ async function runLocalOcrLayoutHints(
     const words = Array.isArray(data?.words) ? data.words : [];
     const linePolygons: number[][] = [];
     const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
+    const lineTexts: string[] = [];
+    const floorLabelAnchors: Array<{ text: string; polygon: number[]; }> = [];
+    const lineTextSeen = new Set<string>();
 
     for (const line of lines) {
       if (linePolygons.length >= LAYOUT_POLYGON_LIMIT) break;
@@ -1222,10 +1398,22 @@ async function runLocalOcrLayoutHints(
         linePolygons.push(polygon);
       }
 
-      const text = String(line?.text || '').trim();
+      const text = String(line?.text || '').replace(/\s+/g, ' ').trim();
+      if (text && lineTexts.length < LAYOUT_LINE_TEXT_LIMIT) {
+        const key = text.toLowerCase();
+        if (!lineTextSeen.has(key)) {
+          lineTextSeen.add(key);
+          lineTexts.push(text.slice(0, 160));
+        }
+      }
       if (text && LAYOUT_DIMENSION_REGEX.test(text) && dimensionAnchors.length < LAYOUT_DIMENSION_ANCHOR_LIMIT) {
         if (polygon.length >= 6) {
           dimensionAnchors.push({ text, polygon });
+        }
+      }
+      if (text && LAYOUT_FLOOR_LABEL_REGEX.test(text) && floorLabelAnchors.length < LAYOUT_FLOOR_LABEL_LIMIT) {
+        if (polygon.length >= 6) {
+          floorLabelAnchors.push({ text: text.slice(0, 96), polygon });
         }
       }
     }
@@ -1243,6 +1431,11 @@ async function runLocalOcrLayoutHints(
             dimensionAnchors.push({ text, polygon });
           }
         }
+        if (text && LAYOUT_FLOOR_LABEL_REGEX.test(text) && floorLabelAnchors.length < LAYOUT_FLOOR_LABEL_LIMIT) {
+          if (polygon.length >= 6) {
+            floorLabelAnchors.push({ text: text.slice(0, 96), polygon });
+          }
+        }
       }
     }
 
@@ -1252,6 +1445,8 @@ async function runLocalOcrLayoutHints(
     traceLog('Local OCR', traceId, '3/3', `parsed in ${durationMs}ms`, {
       linePolygons: linePolygons.length,
       dimensionAnchors: dimensionAnchors.length,
+      lineTexts: lineTexts.length,
+      floorLabelAnchors: floorLabelAnchors.length,
       words: words.length,
     });
 
@@ -1267,6 +1462,8 @@ async function runLocalOcrLayoutHints(
       }],
       linePolygons,
       dimensionAnchors,
+      lineTexts,
+      floorLabelAnchors,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2124,11 +2321,29 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
-    if (shouldRetryForUnderfit(result, layoutHints)) {
-      const strictPrompt = buildBlueprintRetryPrompt(prompt);
-      traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', undefined, 'warn');
+
+    const maxRetries = 2;
+    let retryCount = 0;
+    let fidelity = evaluateReconstructionFidelity(result, layoutHints);
+    while (fidelity.shouldRetry && retryCount < maxRetries) {
+      retryCount += 1;
+      const strictPrompt = buildBlueprintRetryPrompt(prompt, fidelity.reasons);
+      traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', {
+        retryCount,
+        maxRetries,
+        reasons: fidelity.reasons,
+      }, 'warn');
       result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
-      traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', summarizeReconstruction(result));
+      traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', {
+        retryCount,
+        ...summarizeReconstruction(result),
+      });
+      fidelity = evaluateReconstructionFidelity(result, layoutHints);
+    }
+    if (fidelity.shouldRetry) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'fidelity gaps remain after retries; proceeding with deterministic normalization', {
+        reasons: fidelity.reasons,
+      }, 'warn');
     }
     if (!hasNonEmptyWalls(result)) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
