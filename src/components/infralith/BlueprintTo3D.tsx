@@ -114,6 +114,193 @@ function isHumanLabel(value?: string | null) {
 
 const getVisibilityKey = (type: string, id: string | number) => `${type}::${id}`;
 
+type WalkthroughBounds = {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+};
+
+type WalkthroughInteractableType = 'door' | 'furniture' | 'stairs';
+
+type WalkthroughInteractable = {
+    id: string;
+    label: string;
+    type: WalkthroughInteractableType;
+    position: [number, number];
+    floorLevel: number;
+    useHint: string;
+    collectible?: boolean;
+};
+
+type WalkthroughInteractionAction = 'toggle-door' | 'pickup' | 'use' | 'stairs';
+
+type WalkthroughInteractionEvent = {
+    item: WalkthroughInteractable;
+    action: WalkthroughInteractionAction;
+    message: string;
+};
+
+type WalkthroughHudState = {
+    hint: string | null;
+    activeFloor: number;
+    sprinting: boolean;
+    crouching: boolean;
+    flashlightOn: boolean;
+};
+
+const clampScalar = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const normalizeFloorLevel = (value: unknown): number => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.round(n));
+};
+
+const inferClientFloorCount = (model: GeometricReconstruction | null | undefined): number => {
+    if (!model) return 1;
+    const metaCount = Number(model.meta?.floor_count);
+    let maxLevel = -1;
+    const bump = (value: unknown) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return;
+        maxLevel = Math.max(maxLevel, Math.round(parsed));
+    };
+    for (const wall of model.walls || []) bump(wall.floor_level);
+    for (const room of model.rooms || []) bump(room.floor_level);
+    for (const door of model.doors || []) bump(door.floor_level);
+    for (const win of model.windows || []) bump(win.floor_level);
+    const fromGeometry = maxLevel >= 0 ? maxLevel + 1 : 1;
+    return Math.max(1, Number.isFinite(metaCount) ? Math.round(metaCount) : 1, fromGeometry);
+};
+
+const computeWalkBounds = (model: GeometricReconstruction | null | undefined): WalkthroughBounds | undefined => {
+    if (!model?.walls?.length) return undefined;
+    const xs = model.walls.flatMap((w) => [w.start[0], w.end[0]]).filter((v) => Number.isFinite(v));
+    const zs = model.walls.flatMap((w) => [w.start[1], w.end[1]]).filter((v) => Number.isFinite(v));
+    if (!xs.length || !zs.length) return undefined;
+    return {
+        minX: Math.min(...xs),
+        maxX: Math.max(...xs),
+        minZ: Math.min(...zs),
+        maxZ: Math.max(...zs),
+    };
+};
+
+const computeRoomCenter = (polygon: [number, number][] | null | undefined): [number, number] | null => {
+    if (!Array.isArray(polygon) || polygon.length < 3) return null;
+    let sumX = 0;
+    let sumZ = 0;
+    let count = 0;
+    for (const pt of polygon) {
+        const x = Number(pt?.[0]);
+        const z = Number(pt?.[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+        sumX += x;
+        sumZ += z;
+        count += 1;
+    }
+    if (count === 0) return null;
+    return [sumX / count, sumZ / count];
+};
+
+const stairsSemanticRegex = /\bstair(?:case)?s?\b|\bstairwell\b|\bup\b|\bdn\b|\bdown\b/i;
+
+const buildWalkthroughInteractables = (model: GeometricReconstruction | null | undefined): WalkthroughInteractable[] => {
+    if (!model) return [];
+    const interactables: WalkthroughInteractable[] = [];
+    const seen = new Set<string>();
+
+    for (const door of model.doors || []) {
+        const pos = door.position;
+        if (!Array.isArray(pos) || pos.length < 2) continue;
+        const x = Number(pos[0]);
+        const z = Number(pos[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+        const floorLevel = normalizeFloorLevel(door.floor_level);
+        const id = `door-${String(door.id)}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        interactables.push({
+            id,
+            label: 'Door',
+            type: 'door',
+            position: [x, z],
+            floorLevel,
+            useHint: 'Open / Close Door',
+        });
+    }
+
+    for (const item of model.furnitures || []) {
+        const pos = item.position;
+        if (!Array.isArray(pos) || pos.length < 2) continue;
+        const x = Number(pos[0]);
+        const z = Number(pos[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+        const typeLabel = String(item.type || '').trim();
+        const descLabel = String(item.description || '').trim();
+        const baseLabel = typeLabel || descLabel || 'Item';
+        const collectible = /\b(ammo|med|kit|bandage|key|flashlight|torch|tool|hammer|wrench|extinguisher|gun|rifle|pistol|battery|radio)\b/i.test(
+            `${typeLabel} ${descLabel}`
+        );
+        const floorLevel = normalizeFloorLevel(item.floor_level);
+        const id = `furniture-${String(item.id)}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        interactables.push({
+            id,
+            label: baseLabel.slice(0, 48),
+            type: 'furniture',
+            position: [x, z],
+            floorLevel,
+            useHint: collectible ? `Pick ${baseLabel.slice(0, 36)}` : `Use ${baseLabel.slice(0, 36)}`,
+            collectible,
+        });
+    }
+
+    for (const room of model.rooms || []) {
+        const roomName = String(room.name || '').trim();
+        if (!stairsSemanticRegex.test(roomName)) continue;
+        const center = computeRoomCenter(room.polygon || []);
+        if (!center) continue;
+        const floorLevel = normalizeFloorLevel(room.floor_level);
+        const id = `stairs-${String(room.id)}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        interactables.push({
+            id,
+            label: roomName || 'Stairs',
+            type: 'stairs',
+            position: center,
+            floorLevel,
+            useHint: 'Use Stairs (Change Floor)',
+        });
+    }
+
+    return interactables;
+};
+
+const pointToSegmentDistance2D = (
+    pointX: number,
+    pointZ: number,
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number
+): { distance: number; t: number } => {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const l2 = dx * dx + dz * dz;
+    if (l2 <= 1e-9) {
+        return { distance: Math.hypot(pointX - ax, pointZ - az), t: 0 };
+    }
+    let t = ((pointX - ax) * dx + (pointZ - az) * dz) / l2;
+    t = clampScalar(t, 0, 1);
+    const cx = ax + t * dx;
+    const cz = az + t * dz;
+    return { distance: Math.hypot(pointX - cx, pointZ - cz), t };
+};
+
 // -- UI Helper Components for Professional CAD Interface --
 
 const ToolButton = ({ icon, label, active, onClick, expanded, shortcut, color, className }: any) => (
@@ -371,6 +558,52 @@ function AIAssetRenderer({ description, width, height, depth, fallbackColor, isW
 
 // -- Wall with CSG Openings --
 
+function AnimatedDoorLeaf({
+    door,
+    localX,
+    wallThickness,
+    wallHeight,
+    isOpen,
+}: {
+    door: any;
+    localX: number;
+    wallThickness: number;
+    wallHeight: number;
+    isOpen: boolean;
+}) {
+    const hingeRef = useRef<THREE.Group>(null);
+    const doorWidth = Math.max(0.72, Number(door?.width || 0.9));
+    const doorHeight = Math.max(1.9, Number(door?.height || 2.1));
+    const doorDepth = Math.max(0.035, wallThickness * 0.42);
+    const hingeOnRight = String(door?.swing || '').toLowerCase() === 'right';
+    const openSign = hingeOnRight ? -1 : 1;
+    const hingeX = localX + (hingeOnRight ? (doorWidth / 2) : -(doorWidth / 2));
+    const leafOffset = hingeOnRight ? -(doorWidth / 2) : (doorWidth / 2);
+
+    useFrame((_, delta) => {
+        if (!hingeRef.current) return;
+        const targetYaw = isOpen ? openSign * 1.2 : 0;
+        hingeRef.current.rotation.y = THREE.MathUtils.lerp(
+            hingeRef.current.rotation.y,
+            targetYaw,
+            Math.min(1, delta * 9)
+        );
+    });
+
+    return (
+        <group ref={hingeRef} position={[hingeX, doorHeight / 2 - wallHeight / 2, 0]}>
+            <mesh position={[leafOffset, 0, 0]} castShadow receiveShadow>
+                <boxGeometry args={[doorWidth, doorHeight, doorDepth]} />
+                <meshStandardMaterial color={door.color || "#8b4513"} roughness={0.5} metalness={0.08} />
+            </mesh>
+            <mesh position={[leafOffset + (hingeOnRight ? -doorWidth * 0.32 : doorWidth * 0.32), 0, doorDepth * 0.58]} castShadow>
+                <boxGeometry args={[0.06, 0.06, 0.06]} />
+                <meshStandardMaterial color="#d9d3c7" metalness={0.7} roughness={0.25} />
+            </mesh>
+        </group>
+    );
+}
+
 const WallSegment = React.memo(function WallSegment({
     wall,
     wallWindows,
@@ -378,6 +611,7 @@ const WallSegment = React.memo(function WallSegment({
     defaultColor,
     onSelect,
     isWalkthrough,
+    openedDoorIds,
     useCsg = true,
     renderWallMesh = true,
     renderOpeningAssets = true
@@ -464,6 +698,19 @@ const WallSegment = React.memo(function WallSegment({
                 const doorDz = door.position[1] - wall.start[1];
                 const dist = (doorDx * dx + doorDz * dz) / len;
                 const localX = dist - len / 2;
+                const isOpen = !!openedDoorIds?.has(String(door.id));
+                if (isWalkthrough) {
+                    return (
+                        <AnimatedDoorLeaf
+                            key={`door-leaf-${door.id}`}
+                            door={door}
+                            localX={localX}
+                            wallThickness={wall.thickness}
+                            wallHeight={wall.height}
+                            isOpen={isOpen}
+                        />
+                    );
+                }
                 // High-fidelity description for AI Generation
                 const desc = `Premium solid wooden entrance door with metallic modern handle, hinges, and detailed door frame.Color: ${door.color || 'walnut brown'} wood.`;
                 return (
@@ -476,7 +723,25 @@ const WallSegment = React.memo(function WallSegment({
     );
 });
 
-function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkthrough, humanModelUrl }: { progress: number, data: GeometricReconstruction | null, visibleElements?: Set<string | number>, onSelect?: (el: any) => void, isWalkthrough?: boolean, humanModelUrl?: string | null }) {
+function GeneratedStructure({
+    progress,
+    data,
+    visibleElements,
+    onSelect,
+    isWalkthrough,
+    humanModelUrl,
+    openedDoorIds,
+    hiddenFurnitureIds,
+}: {
+    progress: number,
+    data: GeometricReconstruction | null,
+    visibleElements?: Set<string | number>,
+    onSelect?: (el: any) => void,
+    isWalkthrough?: boolean,
+    humanModelUrl?: string | null,
+    openedDoorIds?: Set<string>,
+    hiddenFurnitureIds?: Set<string>,
+}) {
     if (!data) return null;
     const groupRef = useRef<THREE.Group>(null);
     const p = progress;
@@ -595,6 +860,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                                 defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
                                 onSelect={onSelect}
                                 isWalkthrough={isWalkthrough}
+                                openedDoorIds={openedDoorIds}
                                 useCsg={useCsg}
                                 renderWallMesh={true}
                                 renderOpeningAssets={!useServerCuts}
@@ -613,6 +879,7 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
                                 defaultColor={wall.is_exterior ? defaultExterior : defaultInterior}
                                 onSelect={onSelect}
                                 isWalkthrough={isWalkthrough}
+                                openedDoorIds={openedDoorIds}
                                 useCsg={false}
                                 renderWallMesh={false}
                                 renderOpeningAssets={true}
@@ -621,6 +888,8 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
 
                     {/* Procedurally Generated Furniture / Decor */}
                     {data.furnitures?.map((furniture, i) => {
+                        const furnitureInteractableId = `furniture-${String(furniture.id)}`;
+                        if (hiddenFurnitureIds?.has(furnitureInteractableId)) return null;
                         const zPos = (furniture.floor_level || 0) * 2.8;
                         const isHumanFurniture = isHumanLabel(furniture.type) || isHumanLabel(furniture.description);
                         const humanScale = Math.max(0.65, Math.min(1.8, (furniture.height || 1.7) / 1.7));
@@ -666,112 +935,455 @@ function GeneratedStructure({ progress, data, visibleElements, onSelect, isWalkt
 
 // -- Walkthrough First Person Controller --
 
-function WalkthroughController({ bounds }: { bounds?: any }) {
+function WalkthroughController({
+    bounds,
+    walls,
+    doors,
+    interactables,
+    disabledInteractableIds,
+    floorCount = 1,
+    onHudChange,
+    onUseInteractable,
+}: {
+    bounds?: WalkthroughBounds;
+    walls?: GeometricReconstruction['walls'];
+    doors?: GeometricReconstruction['doors'];
+    interactables?: WalkthroughInteractable[];
+    disabledInteractableIds?: Set<string>;
+    floorCount?: number;
+    onHudChange?: (next: WalkthroughHudState) => void;
+    onUseInteractable?: (event: WalkthroughInteractionEvent) => void;
+}) {
     const { camera } = useThree();
-    const [moveForward, setMoveForward] = useState(false);
-    const [moveBackward, setMoveBackward] = useState(false);
-    const [moveLeft, setMoveLeft] = useState(false);
-    const [moveRight, setMoveRight] = useState(false);
-    const [isSprinting, setIsSprinting] = useState(false);
+    const [flashlightOn, setFlashlightOn] = useState(false);
+    const flashlightOnRef = useRef(false);
+    const spotLightRef = useRef<THREE.SpotLight>(null);
+    const spotlightTargetRef = useRef<THREE.Object3D>(null);
 
-    // Initialize camera position when entering walkthrough
+    const movementRef = useRef({
+        forward: false,
+        backward: false,
+        left: false,
+        right: false,
+        sprint: false,
+        crouch: false,
+    });
+    const jumpRequestedRef = useRef(false);
+    const interactRequestedRef = useRef(false);
+    const horizontalVelocityRef = useRef(new THREE.Vector3());
+    const verticalVelocityRef = useRef(0);
+    const jumpOffsetRef = useRef(0);
+    const eyeHeightRef = useRef(1.72);
+    const bobPhaseRef = useRef(0);
+    const activeFloorRef = useRef(0);
+    const currentTargetRef = useRef<WalkthroughInteractable | null>(null);
+    const hudSignatureRef = useRef('');
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const footstepTimerRef = useRef(0);
+
+    const wallCacheByFloor = useMemo(() => {
+        const cache = new Map<number, GeometricReconstruction['walls']>();
+        for (const wall of walls || []) {
+            const floor = normalizeFloorLevel(wall.floor_level);
+            if (!cache.has(floor)) cache.set(floor, []);
+            cache.get(floor)?.push(wall);
+        }
+        return cache;
+    }, [walls]);
+
+    const doorCacheByWall = useMemo(() => {
+        const cache = new Map<string, Array<{ x: number; z: number; halfWidth: number; floorLevel: number }>>();
+        for (const door of doors || []) {
+            const pos = door.position;
+            if (!Array.isArray(pos) || pos.length < 2) continue;
+            const x = Number(pos[0]);
+            const z = Number(pos[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+            const key = String(door.host_wall_id);
+            if (!cache.has(key)) cache.set(key, []);
+            cache.get(key)?.push({
+                x,
+                z,
+                halfWidth: Math.max(0.35, Number(door.width || 0.9) * 0.5),
+                floorLevel: normalizeFloorLevel(door.floor_level),
+            });
+        }
+        return cache;
+    }, [doors]);
+
+    const ensureAudioContext = useCallback(() => {
+        if (typeof window === 'undefined') return null;
+        if (!audioContextRef.current) {
+            const Ctx = (window.AudioContext || (window as any).webkitAudioContext);
+            if (!Ctx) return null;
+            audioContextRef.current = new Ctx();
+        }
+        const ctx = audioContextRef.current;
+        if (ctx && ctx.state === 'suspended') {
+            ctx.resume().catch(() => { /* no-op */ });
+        }
+        return ctx;
+    }, []);
+
+    const playFootstep = useCallback((profile: 'sprint' | 'walk' | 'crouch') => {
+        const ctx = ensureAudioContext();
+        if (!ctx || ctx.state !== 'running') return;
+        const now = ctx.currentTime;
+        const oscillator = ctx.createOscillator();
+        const filter = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+        const baseFrequency = profile === 'sprint' ? 145 : (profile === 'crouch' ? 105 : 120);
+        const maxGain = profile === 'sprint' ? 0.042 : (profile === 'crouch' ? 0.018 : 0.03);
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(baseFrequency + Math.random() * 30, now);
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(profile === 'sprint' ? 420 : 320, now);
+
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(maxGain, now + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+
+        oscillator.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+
+        oscillator.start(now);
+        oscillator.stop(now + 0.12);
+    }, [ensureAudioContext]);
+
+    React.useEffect(() => {
+        flashlightOnRef.current = flashlightOn;
+    }, [flashlightOn]);
+
     React.useEffect(() => {
         if (bounds) {
-            // Spawn just at the front edge of the house, facing it
-            camera.position.set((bounds.minX + bounds.maxX) / 2, 1.7, bounds.maxZ + 2);
+            activeFloorRef.current = 0;
+            horizontalVelocityRef.current.set(0, 0, 0);
+            verticalVelocityRef.current = 0;
+            jumpOffsetRef.current = 0;
+            eyeHeightRef.current = 1.72;
+            bobPhaseRef.current = 0;
+            const spawnX = (bounds.minX + bounds.maxX) / 2;
+            const spawnZ = bounds.maxZ + 1.8;
+            camera.position.set(spawnX, 1.72, spawnZ);
             camera.rotation.set(0, 0, 0);
         }
     }, [bounds, camera]);
 
     React.useEffect(() => {
+        const updateKeyState = (code: string, isDown: boolean, repeated = false) => {
+            switch (code) {
+                case 'KeyW':
+                case 'ArrowUp':
+                    movementRef.current.forward = isDown;
+                    break;
+                case 'KeyS':
+                case 'ArrowDown':
+                    movementRef.current.backward = isDown;
+                    break;
+                case 'KeyA':
+                case 'ArrowLeft':
+                    movementRef.current.left = isDown;
+                    break;
+                case 'KeyD':
+                case 'ArrowRight':
+                    movementRef.current.right = isDown;
+                    break;
+                case 'ShiftLeft':
+                case 'ShiftRight':
+                    movementRef.current.sprint = isDown;
+                    break;
+                case 'ControlLeft':
+                case 'ControlRight':
+                case 'KeyC':
+                    movementRef.current.crouch = isDown;
+                    break;
+                case 'Space':
+                    if (isDown && !repeated) jumpRequestedRef.current = true;
+                    break;
+                case 'KeyE':
+                    if (isDown && !repeated) interactRequestedRef.current = true;
+                    break;
+                case 'KeyF':
+                    if (isDown && !repeated) {
+                        setFlashlightOn((prev) => !prev);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
+
         const handleKeyDown = (e: KeyboardEvent) => {
-            switch (e.code) {
-                case 'KeyW': case 'ArrowUp': setMoveForward(true); break;
-                case 'KeyA': case 'ArrowLeft': setMoveLeft(true); break;
-                case 'KeyS': case 'ArrowDown': setMoveBackward(true); break;
-                case 'KeyD': case 'ArrowRight': setMoveRight(true); break;
-                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(true); break;
+            if (e.code === 'Space') e.preventDefault();
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'Space', 'KeyE', 'KeyF', 'ControlLeft', 'ControlRight', 'KeyC'].includes(e.code)) {
+                ensureAudioContext();
             }
+            updateKeyState(e.code, true, e.repeat);
         };
+
         const handleKeyUp = (e: KeyboardEvent) => {
-            switch (e.code) {
-                case 'KeyW': case 'ArrowUp': setMoveForward(false); break;
-                case 'KeyA': case 'ArrowLeft': setMoveLeft(false); break;
-                case 'KeyS': case 'ArrowDown': setMoveBackward(false); break;
-                case 'KeyD': case 'ArrowRight': setMoveRight(false); break;
-                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(false); break;
-            }
+            updateKeyState(e.code, false, false);
         };
+
         document.addEventListener('keydown', handleKeyDown);
         document.addEventListener('keyup', handleKeyUp);
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
             document.removeEventListener('keyup', handleKeyUp);
         };
+    }, [ensureAudioContext]);
+
+    React.useEffect(() => {
+        return () => {
+            if (audioContextRef.current) {
+                audioContextRef.current.close().catch(() => { /* ignore */ });
+                audioContextRef.current = null;
+            }
+        };
     }, []);
 
-    // A simple function to check collision with walls (2D line segments)
-    const checkCollision = (_position: THREE.Vector3, _radius: number) => {
-        // Disabled rigid wall collision so the player can walk through doors.
-        // True CSG collision requires complex navmeshes. For now, free-roam is best!
-        return false;
-    };
+    const collidesWithWalls = useCallback((nextX: number, nextZ: number, radius: number, floorLevel: number) => {
+        const floorWalls = wallCacheByFloor.get(floorLevel) || [];
+        for (const wall of floorWalls) {
+            const ax = Number(wall.start?.[0]);
+            const az = Number(wall.start?.[1]);
+            const bx = Number(wall.end?.[0]);
+            const bz = Number(wall.end?.[1]);
+            if (![ax, az, bx, bz].every((v) => Number.isFinite(v))) continue;
 
-    useFrame((state, delta) => {
-        const baseSpeed = 5.0; // Faster for FPS feel
-        const sprintMultiplier = isSprinting ? 2.5 : 1.0;
-        const speed = baseSpeed * sprintMultiplier * delta;
+            const wallThickness = Math.max(0.05, Number(wall.thickness || 0.115));
+            const collisionThreshold = radius + (wallThickness * 0.5);
+            const hit = pointToSegmentDistance2D(nextX, nextZ, ax, az, bx, bz);
+            if (hit.distance > collisionThreshold) continue;
 
-        const vel = new THREE.Vector3();
-        if (moveForward) vel.z -= 1;
-        if (moveBackward) vel.z += 1;
-        if (moveLeft) vel.x -= 1;
-        if (moveRight) vel.x += 1;
-
-        if (vel.lengthSq() > 0) {
-            vel.normalize().multiplyScalar(speed);
-            const eul = new THREE.Euler(0, camera.rotation.y, 0);
-            vel.applyEuler(eul);
-
-            // Calculate next position
-            const nextPosition = camera.position.clone().add(vel);
-
-            // Collision check (radius 0.4 for the player)
-            if (!checkCollision(nextPosition, 0.4)) {
-                camera.position.add(vel);
-
-                // Head bobbing effect
-                const time = state.clock.getElapsedTime();
-                const bobFrequency = isSprinting ? 15 : 10;
-                const bobAmplitude = isSprinting ? 0.08 : 0.05;
-                camera.position.y = 1.7 + Math.sin(time * bobFrequency) * bobAmplitude;
-            } else {
-                // Sliding against the wall (try X and Z independently)
-                const nextX = camera.position.clone();
-                nextX.x += vel.x;
-                if (!checkCollision(nextX, 0.4)) {
-                    camera.position.x += vel.x;
-                } else {
-                    const nextZ = camera.position.clone();
-                    nextZ.z += vel.z;
-                    if (!checkCollision(nextZ, 0.4)) {
-                        camera.position.z += vel.z;
-                    }
+            const wallIdKey = String(wall.id);
+            const wallDoors = (doorCacheByWall.get(wallIdKey) || []).filter((entry) => entry.floorLevel === floorLevel);
+            if (wallDoors.length > 0) {
+                const dx = bx - ax;
+                const dz = bz - az;
+                const wallLength = Math.hypot(dx, dz);
+                if (wallLength > 1e-5) {
+                    const invLenSq = 1 / (wallLength * wallLength);
+                    const isInsideDoor = wallDoors.some((entry) => {
+                        const doorT = clampScalar(((entry.x - ax) * dx + (entry.z - az) * dz) * invLenSq, 0, 1);
+                        const normalizedHalfWidth = (entry.halfWidth + radius + 0.12) / wallLength;
+                        return Math.abs(hit.t - doorT) <= normalizedHalfWidth;
+                    });
+                    if (isInsideDoor) continue;
                 }
             }
 
-            // Boundary constraints (allow them to walk further out)
-            if (bounds) {
-                camera.position.x = Math.max(bounds.minX - 15, Math.min(bounds.maxX + 15, camera.position.x));
-                camera.position.z = Math.max(bounds.minZ - 15, Math.min(bounds.maxZ + 15, camera.position.z));
+            return true;
+        }
+        return false;
+    }, [doorCacheByWall, wallCacheByFloor]);
+
+    useFrame((_, delta) => {
+        const dt = clampScalar(delta, 0.0001, 0.04);
+        const FLOOR_HEIGHT = 2.8;
+        const STAND_HEIGHT = 1.72;
+        const CROUCH_HEIGHT = 1.18;
+        const PLAYER_RADIUS = 0.28;
+        const GRAVITY = 18.5;
+        const JUMP_VELOCITY = 5.4;
+
+        const forward = new THREE.Vector3();
+        camera.getWorldDirection(forward);
+        forward.y = 0;
+        if (forward.lengthSq() < 1e-6) {
+            forward.set(0, 0, -1);
+        } else {
+            forward.normalize();
+        }
+        const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+        const moveInput = new THREE.Vector3();
+        if (movementRef.current.forward) moveInput.add(forward);
+        if (movementRef.current.backward) moveInput.sub(forward);
+        if (movementRef.current.right) moveInput.add(right);
+        if (movementRef.current.left) moveInput.sub(right);
+
+        const hasMovementInput = moveInput.lengthSq() > 1e-6;
+        if (hasMovementInput) moveInput.normalize();
+
+        const isCrouching = movementRef.current.crouch;
+        const targetEyeHeight = isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+        eyeHeightRef.current = THREE.MathUtils.lerp(eyeHeightRef.current, targetEyeHeight, Math.min(1, dt * 12));
+
+        const isSprinting = movementRef.current.sprint && hasMovementInput && !isCrouching;
+        const targetSpeed = isCrouching ? 2.05 : (isSprinting ? 6.7 : 4.25);
+        const desiredHorizontalVelocity = moveInput.multiplyScalar(targetSpeed);
+        const acceleration = hasMovementInput ? 16 : 10;
+        horizontalVelocityRef.current.lerp(desiredHorizontalVelocity, Math.min(1, dt * acceleration));
+        const horizontalSpeed = Math.hypot(horizontalVelocityRef.current.x, horizontalVelocityRef.current.z);
+
+        if (hasMovementInput && jumpOffsetRef.current <= 0.001 && horizontalSpeed > 0.8) {
+            footstepTimerRef.current += dt;
+            const stepInterval = isSprinting ? 0.22 : (isCrouching ? 0.46 : 0.32);
+            if (footstepTimerRef.current >= stepInterval) {
+                footstepTimerRef.current = 0;
+                playFootstep(isSprinting ? 'sprint' : (isCrouching ? 'crouch' : 'walk'));
             }
         } else {
-            // Return to resting height smoothly
-            camera.position.y = THREE.MathUtils.lerp(camera.position.y, 1.7, 0.1);
+            footstepTimerRef.current = 0;
+        }
+
+        const activeFloor = clampScalar(activeFloorRef.current, 0, Math.max(0, floorCount - 1));
+        activeFloorRef.current = activeFloor;
+
+        const nextX = camera.position.x + (horizontalVelocityRef.current.x * dt);
+        const nextZ = camera.position.z + (horizontalVelocityRef.current.z * dt);
+        const collides = collidesWithWalls(nextX, nextZ, PLAYER_RADIUS, activeFloor);
+
+        if (!collides) {
+            camera.position.x = nextX;
+            camera.position.z = nextZ;
+        } else {
+            const slideX = camera.position.x + (horizontalVelocityRef.current.x * dt);
+            const slideXBlocked = collidesWithWalls(slideX, camera.position.z, PLAYER_RADIUS, activeFloor);
+            if (!slideXBlocked) {
+                camera.position.x = slideX;
+                horizontalVelocityRef.current.z *= 0.6;
+            } else {
+                const slideZ = camera.position.z + (horizontalVelocityRef.current.z * dt);
+                const slideZBlocked = collidesWithWalls(camera.position.x, slideZ, PLAYER_RADIUS, activeFloor);
+                if (!slideZBlocked) {
+                    camera.position.z = slideZ;
+                    horizontalVelocityRef.current.x *= 0.6;
+                } else {
+                    horizontalVelocityRef.current.multiplyScalar(0.4);
+                }
+            }
+        }
+
+        if (bounds) {
+            camera.position.x = clampScalar(camera.position.x, bounds.minX - 10, bounds.maxX + 10);
+            camera.position.z = clampScalar(camera.position.z, bounds.minZ - 10, bounds.maxZ + 10);
+        }
+
+        if (jumpRequestedRef.current && jumpOffsetRef.current <= 0.001) {
+            verticalVelocityRef.current = JUMP_VELOCITY;
+        }
+        jumpRequestedRef.current = false;
+
+        verticalVelocityRef.current -= GRAVITY * dt;
+        jumpOffsetRef.current += verticalVelocityRef.current * dt;
+        if (jumpOffsetRef.current < 0) {
+            jumpOffsetRef.current = 0;
+            verticalVelocityRef.current = 0;
+        }
+
+        let headBob = 0;
+        if (hasMovementInput && jumpOffsetRef.current <= 0.001) {
+            bobPhaseRef.current += dt * (isSprinting ? 12.5 : (isCrouching ? 6.5 : 9.5));
+            headBob = Math.sin(bobPhaseRef.current) * (isSprinting ? 0.045 : (isCrouching ? 0.015 : 0.028));
+        }
+
+        const baseFloorY = activeFloor * FLOOR_HEIGHT;
+        camera.position.y = baseFloorY + eyeHeightRef.current + jumpOffsetRef.current + headBob;
+
+        let bestTarget: WalkthroughInteractable | null = null;
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (const target of interactables || []) {
+            if (disabledInteractableIds?.has(target.id)) continue;
+            if (normalizeFloorLevel(target.floorLevel) !== activeFloor) continue;
+            const dx = target.position[0] - camera.position.x;
+            const dz = target.position[1] - camera.position.z;
+            const planarDistance = Math.hypot(dx, dz);
+            if (!Number.isFinite(planarDistance) || planarDistance > 2.6) continue;
+            const invDist = planarDistance <= 1e-6 ? 1 : (1 / planarDistance);
+            const dot = (dx * forward.x + dz * forward.z) * invDist;
+            if (dot < 0.42) continue;
+            const score = planarDistance - (dot * 0.65);
+            if (score < bestScore) {
+                bestScore = score;
+                bestTarget = target;
+            }
+        }
+
+        currentTargetRef.current = bestTarget;
+
+        if (interactRequestedRef.current) {
+            const activeTarget = currentTargetRef.current;
+            if (activeTarget) {
+                if (activeTarget.type === 'stairs' && floorCount > 1) {
+                    const nextFloor = (activeFloorRef.current + 1) % floorCount;
+                    activeFloorRef.current = nextFloor;
+                    jumpOffsetRef.current = 0;
+                    verticalVelocityRef.current = 0;
+                    onUseInteractable?.({
+                        item: activeTarget,
+                        action: 'stairs',
+                        message: `Moved to floor ${nextFloor + 1}`,
+                    });
+                } else if (activeTarget.type === 'door') {
+                    onUseInteractable?.({
+                        item: activeTarget,
+                        action: 'toggle-door',
+                        message: `${activeTarget.label} toggled`,
+                    });
+                } else if (activeTarget.type === 'furniture' && activeTarget.collectible) {
+                    onUseInteractable?.({
+                        item: activeTarget,
+                        action: 'pickup',
+                        message: `Picked ${activeTarget.label}`,
+                    });
+                } else {
+                    onUseInteractable?.({
+                        item: activeTarget,
+                        action: 'use',
+                        message: `Used ${activeTarget.label}`,
+                    });
+                }
+            }
+        }
+        interactRequestedRef.current = false;
+
+        if (spotLightRef.current && spotlightTargetRef.current) {
+            const light = spotLightRef.current;
+            const targetObj = spotlightTargetRef.current;
+            light.position.copy(camera.position);
+            targetObj.position.set(
+                camera.position.x + (forward.x * 8),
+                camera.position.y - 0.05,
+                camera.position.z + (forward.z * 8)
+            );
+            light.target = targetObj;
+            light.intensity = flashlightOnRef.current ? 2.2 : 0;
+            targetObj.updateMatrixWorld();
+        }
+
+        const hint = currentTargetRef.current ? `[E] ${currentTargetRef.current.useHint}` : null;
+        const hudSnapshot = `${hint || ''}|${activeFloorRef.current}|${isSprinting ? 1 : 0}|${isCrouching ? 1 : 0}|${flashlightOnRef.current ? 1 : 0}`;
+        if (hudSnapshot !== hudSignatureRef.current) {
+            hudSignatureRef.current = hudSnapshot;
+            onHudChange?.({
+                hint,
+                activeFloor: activeFloorRef.current,
+                sprinting: isSprinting,
+                crouching: isCrouching,
+                flashlightOn: flashlightOnRef.current,
+            });
         }
     });
 
-    return <PointerLockControls />;
+    return (
+        <>
+            <PointerLockControls />
+            <object3D ref={spotlightTargetRef} />
+            <spotLight
+                ref={spotLightRef}
+                intensity={flashlightOn ? 2.2 : 0}
+                distance={18}
+                angle={0.32}
+                penumbra={0.45}
+                color="#fff5cf"
+                castShadow
+                shadow-mapSize={[1024, 1024]}
+            />
+        </>
+    );
 }
 
 function FallbackFreefireAvatar() {
@@ -1004,9 +1616,23 @@ function BlueprintWorkspace() {
     const [activeTool, setActiveTool] = useState('select');
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
+    const [walkHud, setWalkHud] = useState<WalkthroughHudState>({
+        hint: null,
+        activeFloor: 0,
+        sprinting: false,
+        crouching: false,
+        flashlightOn: false,
+    });
+    const [walkActionFeed, setWalkActionFeed] = useState<string | null>(null);
+    const [walkOpenedDoorIds, setWalkOpenedDoorIds] = useState<Set<string>>(new Set());
+    const [walkCollectedItemIds, setWalkCollectedItemIds] = useState<Set<string>>(new Set());
+    const [walkInventory, setWalkInventory] = useState<Array<{ id: string; label: string; count: number }>>([]);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
+    const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
+    const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
+    const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
 
     const summarizeReconstruction = (result: GeometricReconstruction | null | undefined) => ({
         walls: result?.walls?.length || 0,
@@ -1026,6 +1652,67 @@ function BlueprintWorkspace() {
         }
         console.log(`[Blueprint Flow][${runId}] ${step}`);
     };
+
+    const handleWalkHudChange = useCallback((next: WalkthroughHudState) => {
+        setWalkHud((prev) => {
+            if (
+                prev.hint === next.hint &&
+                prev.activeFloor === next.activeFloor &&
+                prev.sprinting === next.sprinting &&
+                prev.crouching === next.crouching &&
+                prev.flashlightOn === next.flashlightOn
+            ) {
+                return prev;
+            }
+            return next;
+        });
+    }, []);
+
+    const handleWalkUseInteractable = useCallback((event: WalkthroughInteractionEvent) => {
+        const { item, action, message } = event;
+        if (action === 'toggle-door') {
+            setWalkOpenedDoorIds((prev) => {
+                const next = new Set(prev);
+                const key = String(item.id).replace(/^door-/, '');
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+            });
+        }
+
+        if (action === 'pickup') {
+            if (!walkCollectedItemIds.has(item.id)) {
+                setWalkCollectedItemIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(item.id);
+                    return next;
+                });
+                setWalkInventory((prev) => {
+                    const existingIdx = prev.findIndex((entry) => entry.id === item.id || entry.label === item.label);
+                    if (existingIdx >= 0) {
+                        const next = [...prev];
+                        next[existingIdx] = {
+                            ...next[existingIdx],
+                            count: next[existingIdx].count + 1,
+                        };
+                        return next;
+                    }
+                    return [...prev, { id: item.id, label: item.label, count: 1 }];
+                });
+            }
+        }
+
+        setWalkActionFeed(message);
+        toast({
+            title:
+                action === 'stairs'
+                    ? 'Floor Shift'
+                    : action === 'pickup'
+                        ? 'Item Collected'
+                        : 'Interaction',
+            description: message,
+        });
+    }, [toast, walkCollectedItemIds]);
 
     // Initialize visibility
     React.useEffect(() => {
@@ -1049,6 +1736,27 @@ function BlueprintWorkspace() {
             return next;
         });
     };
+
+    React.useEffect(() => {
+        if (isWalkthrough) return;
+        setWalkHud({
+            hint: null,
+            activeFloor: 0,
+            sprinting: false,
+            crouching: false,
+            flashlightOn: false,
+        });
+        setWalkActionFeed(null);
+        setWalkOpenedDoorIds(new Set());
+        setWalkCollectedItemIds(new Set());
+        setWalkInventory([]);
+    }, [isWalkthrough]);
+
+    React.useEffect(() => {
+        if (!walkActionFeed) return;
+        const timer = window.setTimeout(() => setWalkActionFeed(null), 2200);
+        return () => window.clearTimeout(timer);
+    }, [walkActionFeed]);
 
     React.useEffect(() => {
         if (status === 'complete' && elements) {
@@ -1637,7 +2345,7 @@ function BlueprintWorkspace() {
                             <Button
                                 variant="ghost" size="sm"
                                 className={cn("h-7 text-[9px] font-black uppercase tracking-wider px-2 transition-all rounded-lg", isWalkthrough ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-white/5")}
-                                onClick={() => { setIsTopView(false); setIsWalkthrough(!isWalkthrough); if (!isWalkthrough) { toast({ title: "Walkthrough Active", description: "Use WASD to move. Click to look." }); } }}
+                                onClick={() => { setIsTopView(false); setIsWalkthrough(!isWalkthrough); if (!isWalkthrough) { toast({ title: "Walkthrough Active", description: "WASD move, Shift sprint, Space jump, C crouch, E use, F flashlight." }); } }}
                             >
                                 <Footprints className="h-3 w-3 mr-1.5" /> Walk
                             </Button>
@@ -1703,22 +2411,19 @@ function BlueprintWorkspace() {
                             >
                                 {showWalkthroughHuman ? (
                                     <FreefireWalkthroughController
-                                        bounds={elements ? {
-                                            minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                            maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                            minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                            maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                        } : undefined}
+                                        bounds={walkthroughBounds}
                                         humanModelUrl={CUSTOM_HUMAN_GLB_URL}
                                     />
                                 ) : (
                                     <WalkthroughController
-                                        bounds={elements ? {
-                                            minX: Math.min(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                            maxX: Math.max(...elements.walls.flatMap(w => [w.start[0], w.end[0]])),
-                                            minZ: Math.min(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                            maxZ: Math.max(...elements.walls.flatMap(w => [w.start[1], w.end[1]])),
-                                        } : undefined}
+                                        bounds={walkthroughBounds}
+                                        walls={elements?.walls}
+                                        doors={elements?.doors}
+                                        interactables={walkthroughInteractables}
+                                        disabledInteractableIds={walkCollectedItemIds}
+                                        floorCount={walkthroughFloorCount}
+                                        onHudChange={handleWalkHudChange}
+                                        onUseInteractable={handleWalkUseInteractable}
                                     />
                                 )}
 
@@ -1753,7 +2458,16 @@ function BlueprintWorkspace() {
                                 })()}
 
                                 <Suspense fallback={null}>
-                                    <GeneratedStructure progress={progress} data={elements} visibleElements={visibleElements} onSelect={setSelectedElement} isWalkthrough={isWalkthrough} humanModelUrl={CUSTOM_HUMAN_GLB_URL} />
+                                    <GeneratedStructure
+                                        progress={progress}
+                                        data={elements}
+                                        visibleElements={visibleElements}
+                                        onSelect={setSelectedElement}
+                                        isWalkthrough={isWalkthrough}
+                                        humanModelUrl={CUSTOM_HUMAN_GLB_URL}
+                                        openedDoorIds={walkOpenedDoorIds}
+                                        hiddenFurnitureIds={walkCollectedItemIds}
+                                    />
                                     <Environment preset="apartment" />
                                     <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
 
@@ -1782,7 +2496,10 @@ function BlueprintWorkspace() {
                             <>
                                 {/* Crosshair */}
                                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-[100]">
-                                    <div className="w-1.5 h-1.5 bg-white/80 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)] border border-black/50" />
+                                    <div className={cn(
+                                        "w-2 h-2 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)] border",
+                                        walkHud.hint ? "bg-emerald-300 border-emerald-700/70" : "bg-white/80 border-black/50"
+                                    )} />
                                 </div>
                                 {/* Instructions */}
                                 <div className="absolute top-8 left-1/2 -translate-x-1/2 pointer-events-none z-[100]">
@@ -1791,10 +2508,56 @@ function BlueprintWorkspace() {
                                         <span className="text-[9px] font-bold text-white/60 tracking-wider">
                                             {showWalkthroughHuman
                                                 ? 'FREEFIRE MODE • DRAG TO ROTATE CAMERA • WASD MOVE • SHIFT SPRINT'
-                                                : 'CLICK TO LOOK AROUND • WASD TO MOVE • SHIFT TO SPRINT • ESC TO UNLOCK MOUSE'}
+                                                : 'CLICK TO LOOK • WASD MOVE • SHIFT SPRINT • SPACE JUMP • C/CTRL CROUCH • E USE • F FLASHLIGHT'}
                                         </span>
                                     </div>
                                 </div>
+                                {!showWalkthroughHuman && (
+                                    <>
+                                        <div className="absolute top-24 left-6 pointer-events-none z-[100]">
+                                            <div className="bg-black/45 backdrop-blur-md border border-white/10 text-white rounded-xl px-3 py-2 shadow-xl space-y-1">
+                                                <div className="text-[9px] font-black tracking-widest uppercase text-white/70">
+                                                    Floor {walkHud.activeFloor + 1}/{Math.max(1, walkthroughFloorCount)}
+                                                </div>
+                                                <div className="text-[9px] font-bold uppercase tracking-wide">
+                                                    {walkHud.sprinting ? 'Sprint: ON' : 'Sprint: OFF'} • {walkHud.crouching ? 'Crouch: ON' : 'Crouch: OFF'}
+                                                </div>
+                                                <div className="text-[9px] font-bold uppercase tracking-wide">
+                                                    Flashlight: {walkHud.flashlightOn ? 'ON' : 'OFF'}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {walkInventory.length > 0 && (
+                                            <div className="absolute top-24 right-6 pointer-events-none z-[100]">
+                                                <div className="bg-black/45 backdrop-blur-md border border-white/10 text-white rounded-xl px-3 py-2 shadow-xl min-w-[180px]">
+                                                    <div className="text-[9px] font-black tracking-widest uppercase text-white/70 mb-1.5">Inventory</div>
+                                                    <div className="space-y-1">
+                                                        {walkInventory.slice(0, 5).map((entry) => (
+                                                            <div key={entry.id} className="text-[9px] font-bold uppercase tracking-wide text-white/90 flex items-center justify-between">
+                                                                <span className="truncate pr-2">{entry.label}</span>
+                                                                <span>x{entry.count}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {walkHud.hint && (
+                                            <div className="absolute bottom-28 left-1/2 -translate-x-1/2 pointer-events-none z-[100]">
+                                                <div className="bg-emerald-500/20 border border-emerald-300/40 text-emerald-100 px-4 py-2 rounded-xl text-[11px] font-black tracking-wide shadow-xl">
+                                                    {walkHud.hint}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {walkActionFeed && (
+                                            <div className="absolute bottom-16 left-1/2 -translate-x-1/2 pointer-events-none z-[100]">
+                                                <div className="bg-sky-500/20 border border-sky-300/40 text-sky-100 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider shadow-xl">
+                                                    {walkActionFeed}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                             </>
                         )}
 
