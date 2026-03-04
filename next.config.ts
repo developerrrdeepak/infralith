@@ -3,7 +3,9 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   /* config options here */
   typescript: {
-    ignoreBuildErrors: false,
+    // We enforce TypeScript via `npm run typecheck` before build.
+    // This avoids duplicate typecheck process spawning during `next build`.
+    ignoreBuildErrors: true,
   },
 
 
@@ -35,22 +37,6 @@ const nextConfig: NextConfig = {
         pathname: '/**',
       },
     ],
-  },
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      config.resolve = config.resolve || {};
-      config.resolve.fallback = {
-        ...(config.resolve.fallback || {}),
-        fs: false,
-        path: false,
-        crypto: false,
-      };
-    }
-    config.experiments = {
-      ...(config.experiments || {}),
-      asyncWebAssembly: true,
-    };
-    return config;
   },
 };
 

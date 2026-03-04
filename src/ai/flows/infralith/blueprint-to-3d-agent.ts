@@ -1536,6 +1536,13 @@ type BlueprintPreprocessResult = {
   height: number;
 };
 
+type VisionInputSelection = {
+  primaryImage: string;
+  primarySource: 'original' | 'preprocessed';
+  secondaryImage: string | null;
+  secondarySource: 'original' | 'preprocessed' | null;
+};
+
 let sharpUnsupported = false;
 let sharpWarned = false;
 let tesseractUnsupported = false;
@@ -1560,6 +1567,51 @@ const originalPreprocessResult = (image: string): BlueprintPreprocessResult => (
   width: 0,
   height: 0,
 });
+
+const selectVisionInputImage = (
+  originalImage: string,
+  preprocessed: BlueprintPreprocessResult
+): VisionInputSelection => {
+  const modeRaw = (process.env.INFRALITH_VISION_INPUT_SOURCE || 'preprocessed').trim().toLowerCase();
+  const mode = modeRaw === 'original' || modeRaw === 'auto' || modeRaw === 'preprocessed'
+    ? modeRaw
+    : 'preprocessed';
+  const hasPreprocessed = preprocessed.source === 'sharp' && !!preprocessed.image;
+
+  if (!hasPreprocessed || mode === 'original') {
+    return {
+      primaryImage: originalImage,
+      primarySource: 'original',
+      secondaryImage: hasPreprocessed ? preprocessed.image : null,
+      secondarySource: hasPreprocessed ? 'preprocessed' : null,
+    };
+  }
+
+  if (mode === 'auto') {
+    const minDim = Math.min(preprocessed.width || 0, preprocessed.height || 0);
+    if (minDim > 0 && minDim < 700) {
+      return {
+        primaryImage: preprocessed.image,
+        primarySource: 'preprocessed',
+        secondaryImage: originalImage,
+        secondarySource: 'original',
+      };
+    }
+    return {
+      primaryImage: originalImage,
+      primarySource: 'original',
+      secondaryImage: preprocessed.image,
+      secondarySource: 'preprocessed',
+    };
+  }
+
+  return {
+    primaryImage: preprocessed.image,
+    primarySource: 'preprocessed',
+    secondaryImage: originalImage,
+    secondarySource: 'original',
+  };
+};
 
 const readPolygonFromBoundingBox = (bbox: any): number[] => {
   const x0 = Number(bbox?.x0 ?? bbox?.left ?? 0);

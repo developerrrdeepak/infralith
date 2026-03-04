@@ -12,13 +12,14 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
+import type { Session } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 
 type SignalEvent = {
     type: string;
     from?: string;
     to?: string;
-    payload?: any;
+    payload?: unknown;
     roomId?: string;
     peerId?: string;
     peers?: string[];
@@ -36,8 +37,33 @@ const sseEncoder = new TextEncoder();
 
 const ROOM_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
 const PEER_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
+const EVENT_TYPE_REGEX = /^[a-z][a-z0-9-]{1,63}$/i;
 const MAX_ROOMS = Number(process.env.MEET_MAX_ROOMS || 200);
 const MAX_PEERS_PER_ROOM = Number(process.env.MEET_MAX_PEERS_PER_ROOM || 12);
+const MAX_SIGNAL_PAYLOAD_BYTES = 256 * 1024;
+
+function getSessionPeerId(session: Session | null): string | null {
+    const explicitId = String(session?.user?.id || '').trim();
+    if (PEER_ID_REGEX.test(explicitId)) return explicitId;
+
+    const email = String(session?.user?.email || '').trim().toLowerCase();
+    if (!email) return null;
+
+    const localPart = email
+        .split('@')[0]
+        ?.replace(/[^a-z0-9_-]/gi, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 64);
+    return localPart && PEER_ID_REGEX.test(localPart) ? localPart : null;
+}
+
+function payloadSizeInBytes(value: unknown): number {
+    try {
+        return Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
+    } catch {
+        return Number.POSITIVE_INFINITY;
+    }
+}
 
 function queueEvent(ctrl: PeerController, event: SignalEvent) {
     ctrl.enqueue(sseEncoder.encode(`data: ${JSON.stringify(event)}\n\n`));
@@ -70,16 +96,18 @@ function broadcastMembers(room: RoomState, excludeId: string, event: SignalEvent
 // GET /api/meet/signal?roomId=xxx&peerId=yyy  -> SSE stream
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
+    const sessionPeerId = getSessionPeerId(session);
+    if (!sessionPeerId) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const peerDisplayName = session?.user?.name || session?.user?.email || sessionPeerId;
 
     const { searchParams } = new URL(req.url);
     const roomId = searchParams.get('roomId') || '';
     const requestedPeerId = searchParams.get('peerId') || '';
-    const peerId = requestedPeerId || session.user.id;
+    const peerId = requestedPeerId || sessionPeerId;
 
-    if (requestedPeerId && requestedPeerId !== session.user.id) {
+    if (requestedPeerId && requestedPeerId !== sessionPeerId) {
         return NextResponse.json({ error: 'Forbidden: peer mismatch' }, { status: 403 });
     }
     if (!ROOM_ID_REGEX.test(roomId) || !PEER_ID_REGEX.test(peerId)) {
@@ -141,7 +169,7 @@ export async function GET(req: NextRequest) {
                 type: 'join-request',
                 peerId,
                 roomId,
-                payload: { name: session.user.name || session.user.email || peerId },
+                payload: { name: peerDisplayName },
             });
 
             console.log(`[Signal] Peer ${peerId} is pending host approval in room ${roomId}.`);
@@ -214,16 +242,33 @@ export async function GET(req: NextRequest) {
 // POST /api/meet/signal  -> host moderation + relay a signal to a peer
 export async function POST(req: NextRequest) {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
+    const from = getSessionPeerId(session);
+    if (!from) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body: SignalEvent = await req.json();
-    const { roomId = '', to = '', type = '', payload } = body;
-    const from = session.user.id;
+    let body: unknown;
+    try {
+        body = await req.json();
+    } catch {
+        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
-    if (!type || !ROOM_ID_REGEX.test(roomId)) {
+    if (!body || typeof body !== 'object') {
+        return NextResponse.json({ error: 'Invalid signal payload' }, { status: 400 });
+    }
+
+    const event = body as SignalEvent;
+    const roomId = String(event.roomId || '').trim();
+    const to = String(event.to || '').trim();
+    const type = String(event.type || '').trim();
+    const payload = event.payload;
+
+    if (!type || !EVENT_TYPE_REGEX.test(type) || !ROOM_ID_REGEX.test(roomId)) {
         return NextResponse.json({ error: 'Missing or invalid roomId/type' }, { status: 400 });
+    }
+    if (payloadSizeInBytes(payload) > MAX_SIGNAL_PAYLOAD_BYTES) {
+        return NextResponse.json({ error: 'Signal payload too large' }, { status: 413 });
     }
 
     const room = rooms.get(roomId);

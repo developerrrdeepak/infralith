@@ -39,6 +39,7 @@ next-env.d.ts
 
 .genkit/*
 .env*
+!.env.example
 
 # firebase
 firebase-debug.log
@@ -51,3 +52,4 @@ service-account-key.json
 tsc.log
 tsc_output.txt
 .modified
+.azure/

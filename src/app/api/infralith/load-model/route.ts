@@ -24,7 +24,8 @@ export async function GET(req: Request) {
         }
 
         // Security check: ensure the model belongs to the user
-        if (model.userId !== (session.user.email || "anonymous")) {
+        const userId = session.user.email || session.user.id || "anonymous";
+        if (model.userId !== userId) {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 });
         }
 

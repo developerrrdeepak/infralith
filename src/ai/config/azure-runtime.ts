@@ -21,7 +21,7 @@ export const azureRuntime = {
   openAIKey: pickFirst([process.env.AZURE_OPENAI_KEY, process.env.AZURE_OPENAI_API_KEY]),
   openAIEndpoint: pickFirst([process.env.AZURE_OPENAI_ENDPOINT]),
   openAIApiVersion: pickFirst([process.env.AZURE_OPENAI_API_VERSION], "2024-08-01-preview"),
-  resourceName: pickFirst([process.env.AZURE_OPENAI_RESOURCE_NAME], "barja-mlwuryls-eastus2"),
+  resourceName: pickFirst([process.env.AZURE_OPENAI_RESOURCE_NAME]),
   routerDeploymentName: pickFirst(
     [process.env.AZURE_OPENAI_DEPLOYMENT_NAME, process.env.AZURE_OPENAI_DEPLOYMENT],
     "model-router"

@@ -11,7 +11,7 @@ export async function GET() {
     }
 
     try {
-        const userId = session.user.email || "anonymous";
+        const userId = session.user.email || session.user.id || "anonymous";
         const models = await listUserBIMModels(userId);
         return NextResponse.json(models);
     } catch (error: unknown) {

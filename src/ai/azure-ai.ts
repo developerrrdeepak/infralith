@@ -2,25 +2,37 @@ import { generateObject } from 'ai';
 import { createAzure } from '@ai-sdk/azure';
 import { z } from 'zod';
 import { DocumentAnalysisClient, AzureKeyCredential } from "@azure/ai-form-recognizer";
+import { azureRuntime } from './config/azure-runtime';
 
 // Azure OpenAI Configuration
-const azureKey = process.env.AZURE_OPENAI_KEY || "";
-const routerDeploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || "model-router";
-const topDeploymentName = process.env.AZURE_OPENAI_TOP_DEPLOYMENT || process.env.AZURE_OPENAI_TOP_MODEL_DEPLOYMENT || "gpt-5";
-const preferTopModel = (process.env.AZURE_OPENAI_PREFER_TOP_MODEL || "true").toLowerCase() !== "false";
-const azureResourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || "barja-mlwuryls-eastus2";
+const azureKey = azureRuntime.openAIKey;
+const routerDeploymentName = azureRuntime.routerDeploymentName || "model-router";
+const topDeploymentName = azureRuntime.topDeploymentName || "gpt-5";
+const preferTopModel = azureRuntime.preferTopModel;
+const azureResourceName = azureRuntime.resourceName;
+const azureEndpoint = azureRuntime.openAIEndpoint;
+const azureApiVersion = azureRuntime.openAIApiVersion || '2024-08-01-preview';
 const VERBOSE_LOGS = (process.env.INFRALITH_VERBOSE_LOGS || "true").toLowerCase() !== "false";
 
 // Azure Document Intelligence Configuration
-const docIntelEndpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || "";
-const docIntelKey = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY || "";
+const docIntelEndpoint = azureRuntime.docIntelEndpoint;
+const docIntelKey = azureRuntime.docIntelKey;
 
-// If the above baseURL is tricky, we'll stick to resourceName but disable automatic versioning
+const normalizeAzureBaseUrl = (endpoint: string) => {
+    const trimmed = endpoint.trim().replace(/\/+$/, '');
+    if (!trimmed) return '';
+    if (trimmed.endsWith('/openai')) return trimmed;
+    if (trimmed.endsWith('/openai/v1')) return trimmed.replace(/\/v1$/i, '');
+    return `${trimmed}/openai`;
+};
+
+const azureBaseUrl = normalizeAzureBaseUrl(azureEndpoint);
+
 const azureFixed = createAzure({
-    resourceName: azureResourceName,
+    ...(azureBaseUrl ? { baseURL: azureBaseUrl } : { resourceName: azureResourceName }),
     apiKey: azureKey,
     useDeploymentBasedUrls: true,
-    apiVersion: '2024-08-01-preview',
+    apiVersion: azureApiVersion,
 });
 
 const summarizeGeometry = (payload: any) => ({
@@ -271,7 +283,11 @@ export interface BlueprintLayoutHints {
 
 /** Helper to get the model with correct deployment name and settings */
 export const getAzureModel = (_isVision = false, deploymentOverride?: string) => {
-    // For production stability, we explicitly define the model to avoid SDK version appending
+    if (!azureBaseUrl && !azureResourceName) {
+        throw new Error(
+            "Azure OpenAI endpoint is not configured. Set AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_RESOURCE_NAME."
+        );
+    }
     // Must use .chat() because the default goes to the unsupported /responses endpoint
     return azureFixed.chat(deploymentOverride || routerDeploymentName);
 };

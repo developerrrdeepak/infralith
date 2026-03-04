@@ -1,36 +1,50 @@
+import { z } from 'zod';
+import { getServerSession } from 'next-auth/next';
+import { NextResponse } from 'next/server';
+import { authOptions } from '@/lib/auth';
 
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import { NextResponse } from "next/server";
+const uploadRequestSchema = z.object({
+  fileName: z.string().trim().min(1).max(256).optional(),
+  fileType: z.string().trim().max(128).optional(),
+  bytes: z.number().int().positive().max(100 * 1024 * 1024).optional(),
+}).passthrough();
 
 export async function POST(req: Request) {
-    const session = await getServerSession(authOptions);
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-    if (!session) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const userRole = session.user.role;
+  const isEngineer = userRole === 'Engineer' || userRole === 'Admin';
+  if (!isEngineer) {
+    return NextResponse.json({ error: 'Forbidden: Engineer role required' }, { status: 403 });
+  }
 
-    const userRole = session.user.role;
-    const isEngineer = userRole === "Engineer" || userRole === "Admin";
+  let payload: unknown = {};
+  try {
+    payload = await req.json();
+  } catch {
+    payload = {};
+  }
 
-    if (!isEngineer) {
-        return NextResponse.json({ error: "Forbidden: Engineer role required" }, { status: 403 });
-    }
+  const parsed = uploadRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Invalid upload payload' }, { status: 400 });
+  }
 
-    try {
-        await req.json();
-        console.log(`Blueprint upload triggered by ${session.user.name} (${session.user.email})`);
+  console.log('Blueprint upload request accepted', {
+    actor: session.user.email || session.user.id,
+    role: session.user.role,
+    fileName: parsed.data.fileName || null,
+    fileType: parsed.data.fileType || null,
+    bytes: parsed.data.bytes || null,
+  });
 
-        // In a real app, this would trigger an Azure Function or Logic App
-        // and store the metadata in Cosmos DB.
-
-        return NextResponse.json({
-            success: true,
-            message: "Blueprint upload processed",
-            timestamp: new Date().toISOString(),
-            user: session.user.name
-        });
-    } catch (error) {
-        return NextResponse.json({ error: "Failed to process upload" }, { status: 500 });
-    }
+  return NextResponse.json({
+    success: true,
+    message: 'Blueprint upload processed',
+    timestamp: new Date().toISOString(),
+    user: session.user.name || session.user.email || session.user.id,
+  });
 }

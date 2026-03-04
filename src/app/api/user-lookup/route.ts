@@ -1,16 +1,58 @@
+import { z } from 'zod';
 import { NextRequest, NextResponse } from 'next/server';
-
-const normalizeEmail = (email: string) => (email || '').trim().toLowerCase();
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
+const RATE_STORE_MAX = 2_000;
+const DEFAULT_TIMEOUT_MS = 5_000;
+const MIN_TIMEOUT_MS = 1_000;
+const MAX_TIMEOUT_MS = 20_000;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const lookupPayloadSchema = z.object({
+  uid: z.union([z.string(), z.number()]).optional(),
+  id: z.union([z.string(), z.number()]).optional(),
+  name: z.string().optional(),
+  fullName: z.string().optional(),
+  email: z.string().optional(),
+  avatar: z.string().nullable().optional(),
+  image: z.string().nullable().optional(),
+  role: z.string().optional(),
+  title: z.string().optional(),
+}).passthrough();
+
 const rateStore = new Map<string, { count: number; windowStart: number }>();
+const backendUrl = (process.env.USER_LOOKUP_URL || '').trim();
 
-const backendUrl = process.env.USER_LOOKUP_URL; // server-side only
-const FETCH_TIMEOUT_MS = Number(process.env.USER_LOOKUP_TIMEOUT_MS || 5000);
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
-async function rateLimit(ip: string): Promise<boolean> {
+const parseTimeoutMs = (value: string | undefined) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS;
+  return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.floor(parsed)));
+};
+
+const FETCH_TIMEOUT_MS = parseTimeoutMs(process.env.USER_LOOKUP_TIMEOUT_MS);
+
+const pruneRateStore = (now: number) => {
+  for (const [ip, bucket] of rateStore.entries()) {
+    if (now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
+      rateStore.delete(ip);
+    }
+  }
+  if (rateStore.size <= RATE_STORE_MAX) return;
+  const overflow = rateStore.size - RATE_STORE_MAX;
+  const oldest = [...rateStore.entries()]
+    .sort((a, b) => a[1].windowStart - b[1].windowStart)
+    .slice(0, overflow);
+  for (const [ip] of oldest) {
+    rateStore.delete(ip);
+  }
+};
+
+const rateLimit = (ip: string) => {
   const now = Date.now();
+  pruneRateStore(now);
   const bucket = rateStore.get(ip);
   if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
     rateStore.set(ip, { count: 1, windowStart: now });
@@ -19,20 +61,31 @@ async function rateLimit(ip: string): Promise<boolean> {
   if (bucket.count >= RATE_LIMIT_MAX) return false;
   bucket.count += 1;
   return true;
-}
+};
+
+const readJsonSafe = async (res: Response): Promise<unknown> => {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
 
 export async function GET(req: NextRequest) {
   const ip =
-    (req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()) ||
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
     'unknown';
-  if (!(await rateLimit(ip))) {
+
+  if (!rateLimit(ip)) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
 
   const emailParam = req.nextUrl.searchParams.get('email') || '';
   const email = normalizeEmail(emailParam);
-  if (!email || !email.includes('@')) {
+  if (!EMAIL_REGEX.test(email)) {
     return NextResponse.json({ error: 'Invalid email' }, { status: 400 });
   }
 
@@ -40,42 +93,64 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Lookup unavailable' }, { status: 503 });
   }
 
+  let backend: URL;
+  try {
+    backend = new URL(backendUrl);
+  } catch {
+    return NextResponse.json({ error: 'Lookup unavailable' }, { status: 503 });
+  }
+  backend.searchParams.set('email', email);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
   try {
-    const res = await fetch(`${backendUrl}?email=${encodeURIComponent(email)}`, {
+    const res = await fetch(backend.toString(), {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { Accept: 'application/json' },
       cache: 'no-store',
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (res.status === 404) {
       return NextResponse.json(null, { status: 200 });
     }
     if (!res.ok) {
+      const details = await readJsonSafe(res);
+      console.error('User lookup backend failed', { status: res.status, details });
       return NextResponse.json({ error: 'Lookup failed' }, { status: 502 });
     }
 
-    const data = await res.json();
+    const payload = await readJsonSafe(res);
+    const parsed = lookupPayloadSchema.safeParse(payload);
+    if (!parsed.success) {
+      console.error('User lookup payload invalid', parsed.error.flatten());
+      return NextResponse.json({ error: 'Lookup failed' }, { status: 502 });
+    }
+
+    const data = parsed.data;
     const normalizedEmail = normalizeEmail(data.email || email);
+    const uid = String(data.uid ?? data.id ?? '').trim();
+    if (!uid) {
+      return NextResponse.json({ error: 'Lookup failed' }, { status: 502 });
+    }
 
     return NextResponse.json({
-      uid: data.uid || data.id,
+      uid,
       name: data.name || data.fullName || '',
       email: normalizedEmail,
       avatar: data.avatar || data.image || null,
-      role: data.role || data.title,
+      role: data.role || data.title || null,
     });
-  } catch (error: any) {
-    clearTimeout(timeout);
-    const code = error?.code || (error?.name === 'AbortError' ? 'ETIMEOUT' : 'EUNKNOWN');
-    console.error('User lookup proxy error', { code, message: String(error) });
-
-    // Surface a service-unavailable response so callers can gracefully fallback
-    const status = code === 'ETIMEOUT' ? 504 : 503;
+  } catch (error: unknown) {
+    const isAbortError = error instanceof Error && error.name === 'AbortError';
+    const status = isAbortError ? 504 : 503;
+    const code = isAbortError ? 'ETIMEOUT' : 'ELOOKUP';
+    console.error('User lookup proxy error', {
+      code,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return NextResponse.json({ error: 'Lookup unavailable', code }, { status });
+  } finally {
+    clearTimeout(timeout);
   }
 }
