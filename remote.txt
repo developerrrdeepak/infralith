@@ -1,0 +1,4 @@
+﻿origin	https://github.com/Souraveng/infralith.git (fetch)
+origin	https://github.com/Souraveng/infralith.git (push)
+second-origin	https://github.com/developerrrdeepak/infraliths.git (fetch)
+second-origin	https://github.com/developerrrdeepak/infraliths.git (push)
