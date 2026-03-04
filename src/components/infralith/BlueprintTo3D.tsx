@@ -2145,13 +2145,13 @@ function BlueprintWorkspace() {
                                 </div>
 
                                 <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
-                                    {/* Debug Image from OpenCV */}
+                                    {/* Debug Image from layout parsing */}
                                     {elements.debug_image && (
                                         <div className="space-y-2">
-                                            <h5 className="text-[8px] font-black uppercase text-muted-foreground tracking-widest px-1">CV Analysis</h5>
+                                            <h5 className="text-[8px] font-black uppercase text-muted-foreground tracking-widest px-1">Layout Analysis</h5>
                                             <div className="p-2 rounded-xl bg-white/5 border border-white/10">
-                                                <img src={elements.debug_image} alt="Vectorization Analysis" className="rounded-lg" />
-                                                <p className="text-[9px] text-center mt-1 text-muted-foreground/60 italic">OpenCV Detected Polygons</p>
+                                                <img src={elements.debug_image} alt="Layout Analysis Preview" className="rounded-lg" />
+                                                <p className="text-[9px] text-center mt-1 text-muted-foreground/60 italic">Azure parsing preview</p>
                                             </div>
                                         </div>
                                     )}

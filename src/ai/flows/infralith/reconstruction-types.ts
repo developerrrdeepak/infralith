@@ -1,14 +1,23 @@
+export interface WallSolid {
+    id: string;
+    position: [number, number, number]; // [x, y, z] center of the solid piece
+    size: [number, number, number];     // [width, height, depth]
+    rotation: [number, number, number]; // [x, y, z] rotation
+    color: string;
+}
+
 export interface WallGeometry {
     id: string | number;
     start: [number, number];
     end: [number, number];
     thickness: number;
     height: number;
+    source_wall_id?: string | number;
+    base_offset?: number;
     color?: string; // hex color for the wall
     is_exterior?: boolean;
     floor_level?: number; // 0 for Ground, 1 for First Floor, etc.
-    base_offset?: number; // vertical offset from floor base (used by pre-cut wall solids)
-    source_wall_id?: string | number; // source wall id when this wall is a derived solid segment
+    wallSolids?: WallSolid[]; // Pre-cut geometry from the server
 }
 
 export interface DoorGeometry {
@@ -53,6 +62,7 @@ export interface FurnitureGeometry {
     room_id?: string | number;
     type: string; // e.g. "sofa", "bed", "dining table", "hvac"
     position: [number, number]; // [x, z] center position
+    rotation?: number; // Added rotation for wall-snapping
     width: number;
     depth: number;
     height: number;
@@ -83,7 +93,7 @@ export interface AIAsset {
 
 export interface GeometricReconstruction {
     walls: WallGeometry[];
-    wallSolids?: WallGeometry[]; // pre-cut solids generated server-side to avoid client CSG
+    wallSolids?: WallGeometry[];
     doors: DoorGeometry[];
     windows: WindowGeometry[];
     rooms: RoomGeometry[];
@@ -95,3 +105,4 @@ export interface GeometricReconstruction {
     debug_image?: string;
     is_vision_only?: boolean;
 }
+

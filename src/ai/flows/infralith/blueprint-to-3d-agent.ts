@@ -11,6 +11,13 @@ import {
   AIAsset,
 } from './reconstruction-types';
 import { applyBuildingCodes } from './building-codes';
+import {
+  buildAssetPrompt,
+  buildAssetRetryPrompt,
+  buildBlueprintRetryPrompt,
+  buildBlueprintVisionPrompt,
+  buildTextToBuildingPrompt,
+} from './prompt-templates';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import path from 'path';
@@ -63,6 +70,20 @@ const asBool = (value: string | undefined, fallback: boolean): boolean => {
 
 const VERBOSE_LOGS = asBool(process.env.INFRALITH_VERBOSE_LOGS, true);
 const VERBOSE_LOG_PAYLOADS = asBool(process.env.INFRALITH_VERBOSE_LOG_PAYLOADS, false);
+
+const parseTimeoutMs = (
+  value: string | undefined,
+  fallback: number,
+  min = 1_000,
+  max = 300_000
+): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+};
+
+const STAGE_HEARTBEAT_MS = parseTimeoutMs(process.env.INFRALITH_STAGE_HEARTBEAT_MS, 20_000, 5_000, 120_000);
+const LAYOUT_STAGE_TIMEOUT_MS = parseTimeoutMs(process.env.INFRALITH_LAYOUT_TIMEOUT_MS, 65_000);
 
 const createTraceId = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -117,6 +138,78 @@ const traceLog = (
   payload === undefined ? console.log(prefix) : console.log(prefix, payload);
 };
 
+type TimedStageOptions = {
+  component: string;
+  traceId: string;
+  step: string;
+  label: string;
+  timeoutMs: number;
+  heartbeatMs?: number;
+  timeoutLevel?: LogLevel;
+};
+
+const withMonitoredTimeout = async <T>(
+  runner: () => Promise<T>,
+  {
+    component,
+    traceId,
+    step,
+    label,
+    timeoutMs,
+    heartbeatMs = STAGE_HEARTBEAT_MS,
+    timeoutLevel = 'warn',
+  }: TimedStageOptions
+): Promise<T> => {
+  const startedAt = Date.now();
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const finish = () => {
+      settled = true;
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+
+    timeoutTimer = setTimeout(() => {
+      if (settled) return;
+      const elapsedMs = Date.now() - startedAt;
+      traceLog(component, traceId, step, `${label} timed out`, { elapsedMs, timeoutMs }, timeoutLevel);
+      finish();
+      reject(new Error(`${label} timed out after ${elapsedMs}ms`));
+    }, timeoutMs);
+
+    if (heartbeatMs > 0) {
+      heartbeatTimer = setInterval(() => {
+        if (settled) return;
+        const elapsedMs = Date.now() - startedAt;
+        traceLog(component, traceId, step, `${label} still running`, { elapsedMs, timeoutMs }, 'warn');
+      }, heartbeatMs);
+    }
+
+    Promise.resolve()
+      .then(runner)
+      .then((value) => {
+        if (settled) return;
+        finish();
+        resolve(value);
+      })
+      .catch((error) => {
+        if (settled) return;
+        finish();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+  });
+};
+
 const getLayoutHintMode = (): LayoutHintMode => {
   const raw = (process.env.INFRALITH_LAYOUT_HINT_MODE || 'auto').trim().toLowerCase();
   if (raw === 'azure' || raw === 'local' || raw === 'hybrid' || raw === 'auto') {
@@ -125,73 +218,24 @@ const getLayoutHintMode = (): LayoutHintMode => {
   return 'auto';
 };
 
-const buildVectorizationHints = (raw: any) => {
-  if (!raw) return null;
-  const polygons = Array.isArray(raw.lines) ? raw.lines.slice(0, 220) : [];
-  const segments = Array.isArray(raw.segments) ? raw.segments.slice(0, 320) : [];
-  return {
-    image_size: {
-      width: typeof raw.width === 'number' ? raw.width : 0,
-      height: typeof raw.height === 'number' ? raw.height : 0,
-    },
-    counts: {
-      polygon_count: polygons.length,
-      segment_count: segments.length,
-    },
-    polygons,
-    segments,
-    threshold_mode: raw.threshold_mode || 'unknown',
-  };
-};
-
-const summarizeVectorizationHints = (payload: any) => ({
-  polygonCount: payload?.counts?.polygon_count || 0,
-  segmentCount: payload?.counts?.segment_count || 0,
-  thresholdMode: payload?.threshold_mode || 'unknown',
-  width: payload?.image_size?.width || 0,
-  height: payload?.image_size?.height || 0,
-});
-
-type VectorizationResult = {
-  width: number;
-  height: number;
-  lines: Array<Array<[number, number]>>;
-  line_count: number;
-  segments: Array<[number, number, number, number, number]>;
-  segment_count: number;
-  threshold_mode: string;
-  debug_image?: string;
-};
-
-const MAX_VECTOR_POLYGONS = 220;
-const MAX_VECTOR_SEGMENTS = 320;
-
-const shouldRetryForUnderfit = (result: GeometricReconstruction, vectorHints: any, layoutHints: BlueprintLayoutHints | null) => {
+const shouldRetryForUnderfit = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null
+) => {
   const wallCount = result?.walls?.length || 0;
   const roomCount = result?.rooms?.length || 0;
-  const vectorSegments = vectorHints?.counts?.segment_count || 0;
-  const vectorPolygons = vectorHints?.counts?.polygon_count || 0;
   const layoutLines = layoutHints?.linePolygons?.length || 0;
-  const signalStrength = Math.max(vectorSegments, vectorPolygons, layoutLines);
+  const signalStrength = layoutLines;
 
-  // If references show complex blueprint but output is too simple, force one stricter retry.
+  // If hints show complex blueprint but output is too simple, force one stricter retry.
   if (signalStrength >= 40 && wallCount <= 8) return true;
   if (signalStrength >= 60 && roomCount <= 2) return true;
   return false;
 };
 
-const parseDimensionMeters = (text: string): number | null => {
-  const valueMatch = text.match(/(\d+(\.\d+)?)/);
-  if (!valueMatch) return null;
-  const value = Number(valueMatch[1]);
-  if (!Number.isFinite(value)) return null;
-  const unit = text.toLowerCase();
-  if (unit.includes('mm')) return value / 1000;
-  if (unit.includes('cm')) return value / 100;
-  if (unit.includes('ft') || unit.includes('feet') || unit.includes("'")) return value * 0.3048;
-  if (unit.includes('"') || unit.includes('in') || unit.includes('inch')) return value * 0.0254;
-  return value; // treat as meters when no explicit unit
-};
+const hasNonEmptyWalls = (
+  value: GeometricReconstruction | null | undefined
+): value is GeometricReconstruction => Array.isArray(value?.walls) && value.walls.length > 0;
 
 const polygonArea = (points: [number, number][]) => {
   if (!points?.length) return 0;
@@ -912,598 +956,6 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   return normalized;
 };
 
-const convertPixelsToMeters = (x: number, y: number, minX: number, minY: number, scale: number): [number, number] => {
-  const mx = (x - minX) * scale;
-  // Flip Y so blueprint top-down image maps to 3D +Z direction consistently.
-  const mz = (y - minY) * scale;
-  return [Number(mx.toFixed(3)), Number(mz.toFixed(3))];
-};
-
-const buildVectorFallbackReconstruction = (vectorHints: any, layoutHints: BlueprintLayoutHints | null): GeometricReconstruction | null => {
-  const segments = Array.isArray(vectorHints?.segments) ? vectorHints.segments : [];
-  const polygons = Array.isArray(vectorHints?.polygons) ? vectorHints.polygons : [];
-  if (segments.length === 0 && polygons.length === 0) return null;
-
-  const allPoints: Array<[number, number]> = [];
-  for (const seg of segments) {
-    if (!Array.isArray(seg) || seg.length < 4) continue;
-    allPoints.push([Number(seg[0]), Number(seg[1])], [Number(seg[2]), Number(seg[3])]);
-  }
-  for (const poly of polygons) {
-    if (!Array.isArray(poly)) continue;
-    for (const pt of poly) {
-      if (Array.isArray(pt) && pt.length >= 2) {
-        allPoints.push([Number(pt[0]), Number(pt[1])]);
-      }
-    }
-  }
-  if (allPoints.length === 0) return null;
-
-  const xs = allPoints.map((p) => p[0]);
-  const ys = allPoints.map((p) => p[1]);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const widthPx = Math.max(1, maxX - minX);
-  const heightPx = Math.max(1, maxY - minY);
-  const maxDimPx = Math.max(widthPx, heightPx);
-
-  // Default normalization keeps footprint in a realistic 25m envelope.
-  let metersPerPixel = 25 / maxDimPx;
-  const anchorScales: number[] = [];
-  for (const anchor of layoutHints?.dimensionAnchors || []) {
-    if (!anchor?.text || !Array.isArray(anchor?.polygon) || anchor.polygon.length < 6) continue;
-    const anchorMeters = parseDimensionMeters(anchor.text);
-    if (!anchorMeters || !Number.isFinite(anchorMeters) || anchorMeters <= 0) continue;
-    const coords = anchor.polygon;
-    const pairs: Array<[number, number]> = [];
-    for (let i = 0; i + 3 < coords.length; i += 2) {
-      const x1 = Number(coords[i]);
-      const y1 = Number(coords[i + 1]);
-      const x2 = Number(coords[(i + 2) % coords.length]);
-      const y2 = Number(coords[(i + 3) % coords.length]);
-      const d = Math.hypot(x2 - x1, y2 - y1);
-      if (Number.isFinite(d) && d > 1) pairs.push([d, anchorMeters / d]);
-    }
-    if (pairs.length === 0) continue;
-    pairs.sort((a, b) => b[0] - a[0]);
-    const candidateScale = pairs[0][1];
-    if (candidateScale > 0.001 && candidateScale < 2) {
-      anchorScales.push(candidateScale);
-    }
-    if (anchorScales.length >= 12) break;
-  }
-  if (anchorScales.length > 0) {
-    anchorScales.sort((a, b) => a - b);
-    metersPerPixel = anchorScales[Math.floor(anchorScales.length / 2)];
-  }
-
-  const walls: GeometricReconstruction['walls'] = [];
-  let wallId = 1;
-  for (const seg of segments) {
-    if (!Array.isArray(seg) || seg.length < 4) continue;
-    const [x1, y1, x2, y2] = seg;
-    const [sx, sz] = convertPixelsToMeters(Number(x1), Number(y1), minX, minY, metersPerPixel);
-    const [ex, ez] = convertPixelsToMeters(Number(x2), Number(y2), minX, minY, metersPerPixel);
-    const length = Math.hypot(ex - sx, ez - sz);
-    if (length < 0.35) continue;
-
-    const nearBoundary =
-      Math.abs(Number(x1) - minX) < 8 || Math.abs(Number(x1) - maxX) < 8 ||
-      Math.abs(Number(y1) - minY) < 8 || Math.abs(Number(y1) - maxY) < 8 ||
-      Math.abs(Number(x2) - minX) < 8 || Math.abs(Number(x2) - maxX) < 8 ||
-      Math.abs(Number(y2) - minY) < 8 || Math.abs(Number(y2) - maxY) < 8;
-
-    walls.push({
-      id: `vw-${wallId++}`,
-      start: [sx, sz],
-      end: [ex, ez],
-      thickness: nearBoundary ? 0.23 : 0.115,
-      height: 2.8,
-      color: nearBoundary ? '#f5e6d3' : '#faf7f2',
-      is_exterior: nearBoundary,
-      floor_level: 0,
-    });
-    if (walls.length >= 280) break;
-  }
-
-  const rooms: GeometricReconstruction['rooms'] = [];
-  let roomId = 1;
-  for (const poly of polygons) {
-    if (!Array.isArray(poly) || poly.length < 3) continue;
-    const metricPoints: [number, number][] = poly
-      .filter((pt: any) => Array.isArray(pt) && pt.length >= 2)
-      .map((pt: any) => convertPixelsToMeters(Number(pt[0]), Number(pt[1]), minX, minY, metersPerPixel));
-    if (metricPoints.length < 3) continue;
-    let areaSigned = polygonArea(metricPoints);
-    let ordered = metricPoints;
-    if (areaSigned < 0) {
-      ordered = [...metricPoints].reverse();
-      areaSigned = -areaSigned;
-    }
-    if (areaSigned < 2 || areaSigned > 900) continue;
-
-    rooms.push({
-      id: `vr-${roomId++}`,
-      name: `Room ${roomId - 1}`,
-      polygon: ordered,
-      area: Number(areaSigned.toFixed(2)),
-      floor_color: '#e8d5b7',
-      floor_level: 0,
-    });
-    if (rooms.length >= 120) break;
-  }
-
-  if (walls.length === 0) return null;
-
-  return {
-    building_name: 'Vector-Reconstructed Blueprint',
-    exterior_color: '#f5e6d3',
-    walls,
-    doors: [],
-    windows: [],
-    rooms,
-    conflicts: [
-      {
-        type: 'code',
-        severity: 'medium',
-        description: 'Vector fallback reconstruction used due underfit AI response; verify openings manually.',
-        location: [0, 0],
-      },
-    ],
-  };
-};
-
-/**
- * Runs structural pre-processing for blueprint vectorization.
- * Preferred engine: OpenCV.js (WASM) in Node runtime.
- * Fallback engine: Python/OpenCV script when OpenCV.js is unavailable.
- */
-let openCvModulePromise: Promise<any> | null = null;
-
-function stripDataUrl(value: string): string {
-  const marker = 'base64,';
-  const idx = value.indexOf(marker);
-  return idx >= 0 ? value.slice(idx + marker.length).trim() : value.trim();
-}
-
-function decodeBase64ImageBytes(base64Image: string): Uint8Array {
-  const payload = stripDataUrl(base64Image);
-  const buffer = Buffer.from(payload, 'base64');
-  if (!buffer.length) {
-    throw new Error('Image payload is empty.');
-  }
-  return new Uint8Array(buffer);
-}
-
-function dedupeVectorSegments(
-  segments: Array<[number, number, number, number, number]>,
-  quant = 4
-): Array<[number, number, number, number, number]> {
-  const seen = new Set<string>();
-  const deduped: Array<[number, number, number, number, number]> = [];
-
-  for (const [x1, y1, x2, y2, length] of segments) {
-    const p1x = Math.round(x1 / quant) * quant;
-    const p1y = Math.round(y1 / quant) * quant;
-    const p2x = Math.round(x2 / quant) * quant;
-    const p2y = Math.round(y2 / quant) * quant;
-    const a = `${p1x},${p1y}`;
-    const b = `${p2x},${p2y}`;
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push([x1, y1, x2, y2, length]);
-  }
-
-  return deduped;
-}
-
-function contourMatToPoints(mat: any): Array<[number, number]> {
-  const points: Array<[number, number]> = [];
-  const data: Int32Array | undefined = mat?.data32S;
-  if (!data || data.length < 4) return points;
-  for (let i = 0; i + 1 < data.length; i += 2) {
-    points.push([data[i], data[i + 1]]);
-  }
-  return points;
-}
-
-async function loadOpenCvModule(): Promise<any> {
-  if (!openCvModulePromise) {
-    // Keep this as a standard dynamic import so Next output tracing includes the package in standalone builds.
-    openCvModulePromise = import('@techstark/opencv-js');
-  }
-
-  const mod = await openCvModulePromise;
-  const cv = mod?.default ?? mod;
-  if (!cv) {
-    throw new Error('OpenCV.js module did not load.');
-  }
-
-  if (cv.Mat) {
-    return cv;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('OpenCV.js runtime initialization timeout.')), 15_000);
-    const original = cv.onRuntimeInitialized;
-    cv.onRuntimeInitialized = () => {
-      clearTimeout(timeout);
-      if (typeof original === 'function') {
-        try {
-          original();
-        } catch {
-          // ignore callback errors from previous handlers
-        }
-      }
-      resolve();
-    };
-  });
-
-  if (!cv.Mat) {
-    throw new Error('OpenCV.js runtime not ready.');
-  }
-
-  return cv;
-}
-
-function decodeImageWithOpenCv(cv: any, bytes: Uint8Array): any {
-  if (typeof cv.imdecode === 'function') {
-    try {
-      return cv.imdecode(bytes);
-    } catch {
-      // continue with Mat-vector fallback
-    }
-  }
-
-  const byteMat = cv.matFromArray(1, bytes.length, cv.CV_8UC1, Array.from(bytes));
-  try {
-    return cv.imdecode(byteMat);
-  } finally {
-    byteMat.delete();
-  }
-}
-
-async function runOpenCvJsVectorizationScript(base64Image: string, traceId = 'n/a'): Promise<VectorizationResult> {
-  const startedAt = Date.now();
-  traceLog('Vectorization/OpenCV.js', traceId, '1/4', 'loading OpenCV.js runtime', {
-    payloadChars: base64Image.length,
-  });
-  const cv = await loadOpenCvModule();
-  const bytes = decodeBase64ImageBytes(base64Image);
-
-  const disposable: Array<{ delete: () => void }> = [];
-  const track = <T extends { delete: () => void }>(value: T): T => {
-    disposable.push(value);
-    return value;
-  };
-
-  try {
-    const src = track(decodeImageWithOpenCv(cv, bytes));
-    if (!src || src.empty?.()) {
-      throw new Error('Could not decode blueprint image with OpenCV.js.');
-    }
-
-    const height = Number(src.rows || 0);
-    const width = Number(src.cols || 0);
-
-    const gray = track(new cv.Mat());
-    cv.cvtColor(src, gray, cv.COLOR_BGR2GRAY);
-
-    const blur = track(new cv.Mat());
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-
-    const otsu = track(new cv.Mat());
-    cv.threshold(blur, otsu, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-
-    const adaptive = track(new cv.Mat());
-    cv.adaptiveThreshold(
-      blur,
-      adaptive,
-      255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-      cv.THRESH_BINARY_INV,
-      31,
-      7
-    );
-
-    const thresh = track(new cv.Mat());
-    cv.bitwise_or(otsu, adaptive, thresh);
-
-    const denoised = track(new cv.Mat());
-    cv.medianBlur(thresh, denoised, 3);
-
-    const closeKernel = track(cv.Mat.ones(3, 3, cv.CV_8U));
-    const closed = track(new cv.Mat());
-    cv.morphologyEx(denoised, closed, cv.MORPH_CLOSE, closeKernel, new cv.Point(-1, -1), 2);
-
-    const hKernel = track(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(Math.max(15, Math.floor(width / 60)), 1)));
-    const vKernel = track(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, Math.max(15, Math.floor(height / 60)))));
-    const horizontal = track(new cv.Mat());
-    const vertical = track(new cv.Mat());
-    cv.morphologyEx(closed, horizontal, cv.MORPH_OPEN, hKernel);
-    cv.morphologyEx(closed, vertical, cv.MORPH_OPEN, vKernel);
-
-    const hv = track(new cv.Mat());
-    cv.bitwise_or(horizontal, vertical, hv);
-    const wallsIsolated = track(new cv.Mat());
-    cv.bitwise_or(closed, hv, wallsIsolated);
-
-    const dilateKernel = track(cv.Mat.ones(2, 2, cv.CV_8U));
-    cv.dilate(wallsIsolated, wallsIsolated, dilateKernel, new cv.Point(-1, -1), 1);
-
-    // Remove tiny text-like blobs before contour and line extraction.
-    const cleanedWalls = track(cv.Mat.zeros(wallsIsolated.rows, wallsIsolated.cols, cv.CV_8UC1));
-    const noiseContours = track(new cv.MatVector());
-    const noiseHierarchy = track(new cv.Mat());
-    cv.findContours(wallsIsolated, noiseContours, noiseHierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
-    const minKeepArea = Math.max(20, Math.floor(0.00004 * width * height));
-    const smallBlock = Math.max(40, Math.floor(Math.min(width, height) * 0.06));
-    const textishArea = Math.max(180, Math.floor(0.0002 * width * height));
-    for (let i = 0; i < noiseContours.size(); i++) {
-      const cnt = noiseContours.get(i);
-      disposable.push(cnt);
-      const area = Number(cv.contourArea(cnt, false));
-      if (!Number.isFinite(area) || area <= 0) continue;
-      const rect = cv.boundingRect(cnt);
-      const rw = Number(rect?.width || 0);
-      const rh = Number(rect?.height || 0);
-      if (rw <= 0 || rh <= 0) continue;
-      const aspect = Math.max(rw, rh) / Math.max(1, Math.min(rw, rh));
-      const density = area / Math.max(1, rw * rh);
-      const tinyBlob = area < minKeepArea && Math.max(rw, rh) < smallBlock;
-      const likelyTextBlob = area < textishArea && aspect < 12 && density > 0.12 && rw < smallBlock && rh < smallBlock;
-      if (tinyBlob || likelyTextBlob) continue;
-      cv.drawContours(cleanedWalls, noiseContours, i, new cv.Scalar(255), -1);
-    }
-
-    // Morphological skeletonization to reduce double-edge wall detections.
-    const centerline = track(cv.Mat.zeros(cleanedWalls.rows, cleanedWalls.cols, cv.CV_8UC1));
-    const skeletonKernel = track(cv.getStructuringElement(cv.MORPH_CROSS, new cv.Size(3, 3)));
-    const skeletonWorking = track(cleanedWalls.clone());
-    const eroded = track(new cv.Mat());
-    const opened = track(new cv.Mat());
-    const temp = track(new cv.Mat());
-    let skeletonGuard = 0;
-    while (skeletonGuard++ < 1024) {
-      cv.erode(skeletonWorking, eroded, skeletonKernel);
-      cv.dilate(eroded, opened, skeletonKernel);
-      cv.subtract(skeletonWorking, opened, temp);
-      cv.bitwise_or(centerline, temp, centerline);
-      eroded.copyTo(skeletonWorking);
-      if (cv.countNonZero(skeletonWorking) === 0) break;
-    }
-
-    const contours = track(new cv.MatVector());
-    const hierarchy = track(new cv.Mat());
-    cv.findContours(cleanedWalls, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
-
-    const polygons: Array<Array<[number, number]>> = [];
-    const minArea = Math.max(24, Math.floor(0.00003 * width * height));
-    const maxArea = Math.floor(0.95 * width * height);
-
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      disposable.push(cnt);
-
-      const area = cv.contourArea(cnt, false);
-      if (area < minArea || area > maxArea) continue;
-
-      const perimeter = cv.arcLength(cnt, true);
-      if (perimeter < 20) continue;
-
-      const approx = track(new cv.Mat());
-      cv.approxPolyDP(cnt, approx, 0.005 * perimeter, true);
-      const points = contourMatToPoints(approx);
-      if (points.length >= 2) {
-        polygons.push(points);
-      }
-    }
-
-    polygons.sort((a, b) => b.length - a.length);
-    const lines = polygons.slice(0, MAX_VECTOR_POLYGONS);
-
-    const minLineLength = Math.max(12, Math.floor(Math.min(width, height) * 0.03));
-    const houghLines = track(new cv.Mat());
-    cv.HoughLinesP(centerline, houghLines, 1, Math.PI / 180, 60, minLineLength, 8);
-
-    const rawSegments: Array<[number, number, number, number, number]> = [];
-    const lineData: Int32Array | undefined = houghLines?.data32S;
-    if (lineData) {
-      for (let i = 0; i + 3 < lineData.length; i += 4) {
-        const x1 = lineData[i];
-        const y1 = lineData[i + 1];
-        const x2 = lineData[i + 2];
-        const y2 = lineData[i + 3];
-        const length = Number(Math.hypot(x2 - x1, y2 - y1).toFixed(2));
-        if (length < minLineLength) continue;
-        rawSegments.push([x1, y1, x2, y2, length]);
-      }
-    }
-
-    rawSegments.sort((a, b) => b[4] - a[4]);
-    const segments = dedupeVectorSegments(rawSegments).slice(0, MAX_VECTOR_SEGMENTS);
-    const durationMs = Date.now() - startedAt;
-    traceLog('Vectorization/OpenCV.js', traceId, '4/4', `success in ${durationMs}ms`, {
-      lineCount: lines.length,
-      segmentCount: segments.length,
-      width,
-      height,
-    });
-
-    return {
-      width,
-      height,
-      lines,
-      line_count: lines.length,
-      segments,
-      segment_count: segments.length,
-      threshold_mode: 'hybrid-otsu-adaptive',
-    };
-  } finally {
-    for (const value of disposable.reverse()) {
-      try {
-        value.delete();
-      } catch {
-        // ignore cleanup errors
-      }
-    }
-  }
-}
-
-async function resolvePythonBinary(): Promise<string | null> {
-  const configured = process.env.INFRALITH_PYTHON_BIN?.trim();
-  if (configured) {
-    if (await commandExists(configured)) {
-      return configured;
-    }
-    console.warn(`[Vectorization] Configured INFRALITH_PYTHON_BIN was not found: ${configured}`);
-  }
-
-  const candidates = ['python3', 'python'];
-  for (const candidate of candidates) {
-    if (await commandExists(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-async function runPythonVectorizationScript(base64Image: string, traceId = 'n/a'): Promise<VectorizationResult> {
-  const pythonBinary = await resolvePythonBinary();
-  if (!pythonBinary) {
-    traceLog('Vectorization/Python', traceId, '0/4', 'python executable not found, falling back', undefined, 'warn');
-    throw new Error("Python not installed or in PATH.");
-  }
-
-  return new Promise<VectorizationResult>((resolve, reject) => {
-    const scriptPath = path.join(process.cwd(), 'src/ai/scripts/process_blueprint.py');
-    const startedAt = Date.now();
-    traceLog('Vectorization/Python', traceId, '1/4', 'launching python script', {
-      scriptPath,
-      pythonBinary,
-      payloadChars: base64Image.length,
-    });
-    const pythonProcess = spawn(pythonBinary, [scriptPath]);
-
-    let output = '';
-    let errorOutput = '';
-    let settled = false;
-
-    const rejectOnce = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-
-    const resolveOnce = (value: any) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-
-    pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    pythonProcess.on('close', (code) => {
-      if (settled) return;
-      if (code !== 0) {
-        const details = errorOutput.trim() || `exit code ${code}`;
-        traceLog('Vectorization/Python', traceId, '4/4', 'python script exited with error', { details, code }, 'error');
-        rejectOnce(new Error(`Python script exited with code ${code}: ${details}`));
-        return;
-      }
-
-      try {
-        const result = JSON.parse(output);
-        if (result.error) {
-          rejectOnce(new Error(result.error));
-          return;
-        }
-        const durationMs = Date.now() - startedAt;
-        traceLog('Vectorization/Python', traceId, '4/4', `success in ${durationMs}ms`, {
-          lineCount: result.line_count || 0,
-          segmentCount: result.segment_count || 0,
-          width: result.width || 0,
-          height: result.height || 0,
-        });
-        resolveOnce(result as VectorizationResult);
-      } catch {
-        traceLog('Vectorization/Python', traceId, '4/4', 'failed to parse python output', { output }, 'error');
-        rejectOnce(new Error('Failed to parse vectorization output.'));
-      }
-    });
-
-    pythonProcess.on('error', (err: any) => {
-      if (settled) return;
-      if (err.code === 'ENOENT') {
-        traceLog('Vectorization/Python', traceId, '2/4', 'python ENOENT during spawn', undefined, 'warn');
-        rejectOnce(new Error("Python not installed or in PATH."));
-      } else {
-        traceLog('Vectorization/Python', traceId, '2/4', 'python spawn error', { err: String(err) }, 'error');
-        rejectOnce(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
-
-    traceLog('Vectorization/Python', traceId, '2/4', 'streaming payload to python process', {
-      payloadChars: base64Image.length,
-    });
-    pythonProcess.stdin.write(base64Image);
-    pythonProcess.stdin.end();
-    traceLog('Vectorization/Python', traceId, '3/4', 'waiting for python vectorization response');
-  });
-}
-
-async function runVectorizationScript(base64Image: string, traceId = 'n/a'): Promise<VectorizationResult> {
-  const preference = (process.env.INFRALITH_VECTOR_ENGINE || 'opencvjs').trim().toLowerCase();
-  const isCloudRuntime = !!process.env.WEBSITE_SITE_NAME || !!process.env.WEBSITE_INSTANCE_ID;
-  const allowOpenCvJs = preference !== 'python';
-  const allowPython = preference === 'python' || (preference === 'auto' && !isCloudRuntime);
-
-  traceLog('Vectorization', traceId, 'select', 'selecting vectorization engine', {
-    preference,
-    isCloudRuntime,
-    allowOpenCvJs,
-    allowPython,
-  });
-
-  let openCvError: unknown = null;
-  if (allowOpenCvJs) {
-    try {
-      return await runOpenCvJsVectorizationScript(base64Image, traceId);
-    } catch (error) {
-      openCvError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      traceLog('Vectorization', traceId, 'opencvjs', 'OpenCV.js path unavailable', { message }, 'warn');
-      if (!allowPython) {
-        throw error;
-      }
-    }
-  }
-
-  if (allowPython) {
-    try {
-      return await runPythonVectorizationScript(base64Image, traceId);
-    } catch (pythonError) {
-      const message = pythonError instanceof Error ? pythonError.message : String(pythonError);
-      const cvMessage = openCvError
-        ? ` OpenCV.js error: ${openCvError instanceof Error ? openCvError.message : String(openCvError)}.`
-        : '';
-      throw new Error(`Vectorization engines failed. Python error: ${message}.${cvMessage}`);
-    }
-  }
-
-  throw new Error('Vectorization disabled: no engine enabled.');
-}
-
 type Segment2D = { start: [number, number]; end: [number, number] };
 type Affine2D = { a: number; b: number; c: number; d: number; e: number; f: number };
 type FlattenedDxfEntity = { entity: any; transform: Affine2D };
@@ -1583,6 +1035,22 @@ let canvasUnsupported = false;
 let canvasWarned = false;
 
 const ensureDataUrlPng = (base64Payload: string): string => `data:image/png;base64,${base64Payload}`;
+const stripDataUrl = (value: string): string => {
+  const marker = 'base64,';
+  const idx = value.indexOf(marker);
+  return idx >= 0 ? value.slice(idx + marker.length).trim() : value.trim();
+};
+const dynamicImport = new Function('specifier', 'return import(specifier)') as (
+  specifier: string
+) => Promise<any>;
+const isModuleImportError = (message: string): boolean =>
+  /Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message);
+const originalPreprocessResult = (image: string): BlueprintPreprocessResult => ({
+  image,
+  source: 'original',
+  width: 0,
+  height: 0,
+});
 
 const readPolygonFromBoundingBox = (bbox: any): number[] => {
   const x0 = Number(bbox?.x0 ?? bbox?.left ?? 0);
@@ -1650,11 +1118,10 @@ async function preprocessBlueprintImage(base64Image: string, traceId = 'n/a'): P
       useSharp,
       sharpUnsupported,
     });
-    return { image: base64Image, source: 'original', width: 0, height: 0 };
+    return originalPreprocessResult(base64Image);
   }
 
   try {
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
     const sharpModule = await dynamicImport('sharp');
     const sharp = sharpModule?.default ?? sharpModule;
     if (typeof sharp !== 'function') {
@@ -1663,7 +1130,7 @@ async function preprocessBlueprintImage(base64Image: string, traceId = 'n/a'): P
 
     const inputBuffer = Buffer.from(stripDataUrl(base64Image), 'base64');
     if (!inputBuffer.length) {
-      return { image: base64Image, source: 'original', width: 0, height: 0 };
+      return originalPreprocessResult(base64Image);
     }
 
     const maxDim = Math.max(512, Math.min(4096, Number(process.env.INFRALITH_PREPROCESS_MAX_DIM || 2400)));
@@ -1700,18 +1167,18 @@ async function preprocessBlueprintImage(base64Image: string, traceId = 'n/a'): P
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message)) {
+    if (isModuleImportError(message)) {
       sharpUnsupported = true;
       if (!sharpWarned) {
         sharpWarned = true;
         console.warn('[Infralith Vision Engine] Sharp not installed. Skipping local image pre-processing.');
       }
       traceLog('Preprocess', traceId, 'sharp', 'sharp package missing, fallback to original', undefined, 'warn');
-      return { image: base64Image, source: 'original', width: 0, height: 0 };
+      return originalPreprocessResult(base64Image);
     }
 
     traceLog('Preprocess', traceId, 'sharp', 'sharp preprocessing failed, fallback to original', { message }, 'warn');
-    return { image: base64Image, source: 'original', width: 0, height: 0 };
+    return originalPreprocessResult(base64Image);
   }
 }
 
@@ -1725,7 +1192,6 @@ async function runLocalOcrLayoutHints(
   if (!enableLocalOcr || tesseractUnsupported) return null;
 
   try {
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
     const tesseractModule = await dynamicImport('tesseract.js');
     const recognize = tesseractModule?.recognize || tesseractModule?.default?.recognize;
     if (typeof recognize !== 'function') {
@@ -1804,7 +1270,7 @@ async function runLocalOcrLayoutHints(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message)) {
+    if (isModuleImportError(message)) {
       tesseractUnsupported = true;
       if (!tesseractWarned) {
         tesseractWarned = true;
@@ -1824,7 +1290,6 @@ async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls'], t
   if (!enablePreview || canvasUnsupported || walls.length === 0) return undefined;
 
   try {
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
     const canvasModule = await dynamicImport('canvas');
     const createCanvas = canvasModule?.createCanvas || canvasModule?.default?.createCanvas;
     if (typeof createCanvas !== 'function') {
@@ -1872,7 +1337,7 @@ async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls'], t
     return ensureDataUrlPng(pngBuffer.toString('base64'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i.test(message)) {
+    if (isModuleImportError(message)) {
       canvasUnsupported = true;
       if (!canvasWarned) {
         canvasWarned = true;
@@ -2115,7 +1580,7 @@ const flattenDxfEntities = (parsed: any): FlattenedDxfEntity[] => {
   return flattened;
 };
 
-async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
+export async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
   const traceId = createTraceId('dxf');
   const startedAt = Date.now();
   traceLog('Infralith CAD Engine', traceId, '0/5', 'DXF parse request received', {
@@ -2295,7 +1760,7 @@ type CommandResult = {
 
 const KNOWN_DWG_CONVERTERS = ['dwg2dxf', 'dwgread', 'ODAFileConverter', 'TeighaFileConverter'] as const;
 
-type CadPipelineCapabilities = {
+export type CadPipelineCapabilities = {
   dxfSupported: boolean;
   dwgSupported: boolean;
   dwgResolver: 'env-template' | 'binary' | 'none';
@@ -2412,7 +1877,7 @@ async function fileExistsWithContent(filePath: string): Promise<boolean> {
   }
 }
 
-async function getCadPipelineCapabilities(): Promise<CadPipelineCapabilities> {
+export async function getCadPipelineCapabilities(): Promise<CadPipelineCapabilities> {
   const envTemplate = process.env.INFRALITH_DWG_TO_DXF_COMMAND?.trim();
   const availableConverters: string[] = [];
 
@@ -2540,12 +2005,6 @@ async function convertDwgToDxfString(dwgBase64: string): Promise<string> {
           ? await runCommand(attempt.command, [], { shell: true })
           : await runCommand(attempt.command, attempt.args);
 
-        const producedPath = outputCandidates.find((candidate) => candidate && candidate.length > 0);
-        if (!producedPath) {
-          errors.push(`${attempt.name}: no output candidates configured`);
-          continue;
-        }
-
         let finalPath: string | null = null;
         for (const candidate of outputCandidates) {
           if (await fileExistsWithContent(candidate)) {
@@ -2593,7 +2052,7 @@ export async function processDwgTo3D(dwgBase64: string): Promise<GeometricRecons
 /**
  * Construction-grade geometric reconstruction engine.
  * Converts 2D architectural floor plans into metrically consistent parametric 3D models.
- * Uses a hybrid approach: OpenCV for vectorization and Azure GPT-4o Vision for semantic understanding.
+ * Uses Azure layout analysis and Azure OpenAI Vision for semantic reconstruction.
  */
 export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricReconstruction> {
   const traceId = createTraceId('vision');
@@ -2602,17 +2061,12 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     payloadChars: imageUrl.length,
   });
   traceLog('Infralith Vision Engine', traceId, '0/9', 'Routing blueprint to Azure OpenAI Vision');
-
-  // STAGE 1: Pre-process with OpenCV vectorization to get structural hints
-  let vectorizationHints = null;
-  let debugImage: string | undefined;
+  // STAGE 1: Extract OCR/layout hints
   let layoutHints: BlueprintLayoutHints | null = null;
-
   const layoutHintMode = getLayoutHintMode();
-  traceLog('Infralith Vision Engine', traceId, '1/9', 'running structural pre-processing (OpenCV + OCR/layout hints)', {
+  traceLog('Infralith Vision Engine', traceId, '1/9', 'running structural pre-processing (OCR/layout hints only)', {
     layoutHintMode,
   });
-
   const preprocessed = await preprocessBlueprintImage(imageUrl, traceId);
   const structuralInputImage = preprocessed.image;
   traceLog('Infralith Vision Engine', traceId, '1/9', 'pre-process result', {
@@ -2621,7 +2075,6 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     height: preprocessed.height,
     payloadChars: structuralInputImage.length,
   });
-
   let localLayoutHints: BlueprintLayoutHints | null = null;
   if (layoutHintMode !== 'azure') {
     localLayoutHints = await runLocalOcrLayoutHints(structuralInputImage, preprocessed.width, preprocessed.height, traceId);
@@ -2629,202 +2082,70 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       traceLog('Infralith Vision Engine', traceId, '1/9', 'local OCR layout hints extracted', summarizeLayoutHints(localLayoutHints));
     }
   }
-
   const shouldCallAzureLayout =
     layoutHintMode === 'azure' ||
     layoutHintMode === 'hybrid' ||
     (layoutHintMode === 'auto' && !isLocalLayoutStrong(localLayoutHints));
-
-  const [vectorizationAttempt, layoutAttempt] = await Promise.allSettled([
-    runVectorizationScript(structuralInputImage, traceId),
-    shouldCallAzureLayout ? analyzeBlueprintLayoutFromBase64(structuralInputImage) : Promise.resolve(null),
-  ]);
-
-  if (vectorizationAttempt.status === "fulfilled") {
-    vectorizationHints = buildVectorizationHints(vectorizationAttempt.value);
-    debugImage = vectorizationAttempt.value.debug_image;
-    traceLog('Infralith Vision Engine', traceId, '1/9', 'vectorization output', {
-      ...summarizeVectorizationHints(vectorizationHints),
-      hasDebugImage: !!debugImage,
-    });
+  if (shouldCallAzureLayout) {
+    try {
+      const azureLayoutHints = await withMonitoredTimeout(
+        () => analyzeBlueprintLayoutFromBase64(structuralInputImage),
+        {
+          component: 'Infralith Vision Engine',
+          traceId,
+          step: '1/9',
+          label: 'azure layout hint extraction',
+          timeoutMs: LAYOUT_STAGE_TIMEOUT_MS,
+        }
+      );
+      layoutHints = mergeLayoutHintSources(localLayoutHints, azureLayoutHints);
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'layout hint output', {
+        source: localLayoutHints ? 'merged-local-azure' : 'azure',
+        ...summarizeLayoutHints(layoutHints),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      layoutHints = localLayoutHints;
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'layout hint extraction failed, continuing with local hints', {
+        reason: message,
+        hasLocalHints: !!localLayoutHints,
+      }, 'warn');
+    }
   } else {
-    const e: any = vectorizationAttempt.reason;
-    traceLog('Infralith Vision Engine', traceId, '1/9', 'vectorization pre-processing failed, falling back to vision-only', {
-      reason: e?.message || String(e),
-    }, 'warn');
-  }
-
-  if (layoutAttempt.status === "fulfilled") {
-    const azureLayoutHints = layoutAttempt.value;
-    layoutHints = mergeLayoutHintSources(localLayoutHints, azureLayoutHints);
+    layoutHints = localLayoutHints;
     traceLog('Infralith Vision Engine', traceId, '1/9', 'layout hint output', {
-      source: shouldCallAzureLayout ? (localLayoutHints ? 'merged-local-azure' : 'azure') : (localLayoutHints ? 'local' : 'none'),
+      source: localLayoutHints ? 'local' : 'none',
       ...summarizeLayoutHints(layoutHints),
     });
-  } else {
-    const e: any = layoutAttempt.reason;
-    layoutHints = localLayoutHints;
-    traceLog('Infralith Vision Engine', traceId, '1/9', 'layout hint extraction failed, continuing', {
-      reason: e?.message || String(e),
-      hasLocalHints: !!localLayoutHints,
-    }, 'warn');
   }
-
-  // STAGE 2: Send image and vector hints to the AI Vision model
-  const prompt = `
-    You are the Infralith Engineering Engine—a world - class architectural auditor and spatial synthesis AI powered by advanced computer vision.
-    You will analyze the provided 2D architectural floor plan image with the precision of a licensed structural engineer.
-
-    CRITICAL ANTI - HALLUCINATION DIRECTIVE:
-    ABSOLUTELY DO NOT INVENT A "DEFAULT" OR "GENERIC" BUILDING.You MUST perfectly trace and replicate the actual geometric footprint, rooms, walls, and layout visible in the provided image.If the image is complex or unclear, do your absolute best to map ONLY what is visibly there.NEVER fall back to a generic square or pre - made house layout.
-
-    ADDITIONAL CONTEXT(FROM PRE - PROCESSING):
-    I have run a computer vision(OpenCV) pre - processing pipeline that extracts:
-    - wall polygons
-    - straight wall segments
-    Use this as a STRONG GEOMETRIC HINT for tracing walls and preserving exact footprint.
-    OPENCV VECTOR HINTS:
-    ${vectorizationHints ? JSON.stringify(vectorizationHints, null, 2) : "Not available."}
-
-    OCR LAYOUT HINTS (LOCAL/AZURE):
-    I also extracted OCR line polygons and dimension anchors from local/Azure layout analyzers. Use these as an additional constraint for wall tracing and scale calibration.
-    LAYOUT HINTS:
-    ${layoutHints ? JSON.stringify(layoutHints, null, 2) : "Not available."}
-
-    CORE VISION ANALYSIS PROTOCOL:
-0. STRUCTURE-FIRST PHASED EXECUTION (MANDATORY):
-- PHASE 1 (FULL BUILDING SHELL FIRST): Build the full structural shell first across all detected floors:
-  exterior perimeter, interior/load-bearing walls, floor_level assignment, and vertical alignment.
-- PHASE 2 (OPENINGS): After shell completion, place doors/windows and bind each to a valid host_wall_id.
-- PHASE 3 (SPACES + DETAIL): After openings, compute rooms and furnitures.
-- If detail conflicts with structure, preserve structure and adjust/remove the conflicting detail.
-
-1. EXACT VISUAL WALL TRACING: Scan the image systematically.Identify every dark continuous line segment as a wall.
-       - Thick lines = Exterior walls(0.23m thickness)
-  - Thin lines = Interior partition walls(0.115m thickness)
-    - Trace each wall's start and end coordinates in METERS using the image as a reference plane. The generated geometry MUST match the image's overall shape and room divisions exactly.
-
-    2. STRATEGIC DIMENSION EXTRACTION:
-- ANCHOR SEARCH: Locate any numeric labels(e.g., "4.5m", "12'0\"", "3600mm").Use these as ground - truth anchors to set the global Scale Factor.
-       - CONTEXTUAL VALIDATION: If a room label reads "Master Bed (4.5m x 3.8m)", ENFORCE those values as absolute truth.
-       - BLUR MITIGATION: If text is unreadable, reverse - engineer the scale from "Standard Architectural Ratios":
-         * Standard interior door = 0.9m wide
-  * Kitchen counter depth = 0.6m
-    * Standard staircase width = 1.2m
-
-3. MULTI - FLOOR RECONSTRUCTION:
-- BUILDING CORE ORIGIN: Identify shared vertical shafts(stairs, lift shafts, or prominent structural corners) visible across all floor blocks.
-       - ALIGNMENT: Assign these core anchors to coordinate(0, 0).All other walls are positioned relative to this origin.
-       - VERTICAL STACKING: If the image contains multiple floor plan blocks(Ground + Level 1, etc.), stack them by floor_level(0, 1, 2...).
-       - STRUCTURAL INTEGRITY CHECK: Flag any upper - floor walls that lack a supporting wall directly below within 0.15m tolerance.
-
-    4. OPENING DETECTION:
-- DOORS: Look for gaps in walls with arc symbols(door swing).Record host_wall_id, center position, width(default 0.9m), height(2.1m).
-       - WINDOWS: Look for triple - line symbols in exterior walls.Record host_wall_id, position, width, sill_height(default 0.9m).
-
-    5. ROOM IDENTIFICATION & FURNISHING:
-- For each enclosed space, construct a closed COUNTER - CLOCKWISE polygon of(x, y) points.
-       - Calculate the enclosed area in square meters.
-       - Assign room names from visible labels(e.g., "Bedroom", "Kitchen", "WC").
-       - DETECT FURNITURE: Look for ANY objects inside rooms(beds, sofas, tables, dining, toilets, kitchen islands, wardrobes, rugs, plants, lamps, TVs).
-       - Generate them densely in the 'furnitures' array with approximate metric size(width / depth / height).Type must be the specific item name.Output a completely UNIQUE and highly detailed 'description' for the Procedural Voxel Engine to generate it(e.g. "Minimalist deep blue velvet sofa with silver legs", or "Rustic oak wood round dining table with 4 beige chairs").Create as many varied objects as you can infer from the floor plans.DO NOT limit yourself to a few assets.
-
-    LUXURY AESTHETIC PALETTE(CRITICAL: RANDOMIZE AND VARY THESE):
-- Do NOT use the exact same colors every time.Create a cohesive luxury palette specific to THIS building's unique vibe.
-  - Pick random but beautiful, harmonious HEX colors for Exterior Walls, Interior Walls, Floors, Doors, Windows, and Roof.
-    - Ensure variation(e.g.some buildings are modern dark mode, some are light minimalist, some are warm terracotta).
-
-    GEOMETRIC CONSTRAINTS(strictly enforce):
-- All coordinates in METERS.
-    - Wall height: 2.8m per floor level.
-    - SNAP all adjacent wall endpoints within 0.15m to nearest shared point.
-    - Every room MUST have a fully closed polygon forming its floor slab.
-    - Room polygons MUST be Counter - Clockwise(CCW) ordered to prevent "bow-tie" rendering in Three.js.
-    - Identify the outermost building boundary and ALWAYS map it into roof.polygon.
-    - If roof style is unclear, set roof.type="flat" and still return roof.polygon from that outer boundary.
-
-    THINKING PROCESS(reason step - by - step before generating output):
-- Step 1: Identify the scale factor from dimension labels or standard ratios.
-    - Step 2: Complete full structural shell first for every detected floor (walls + floor_level).
-    - Step 3: Detect all door and window openings and link each to its host wall.
-    - Step 4: Define all enclosed room polygons in CCW order.
-    - Step 5: Validate the building core alignment across all floors.
-    - Step 6: Place furnitures after rooms are finalized.
-    - Step 7: Perform a structural audit.Generate 2 - 5 specific, actionable conflict reports.
-
-  OUTPUT — Respond ONLY with a valid JSON object matching this schema exactly:
-{
-  "building_name": "Descriptive project name from blueprint title block (or inferred)",
-    "exterior_color": "#hex",
-      "walls": [{ "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "color": "#hex", "is_exterior": true, "floor_level": 0 }],
-        "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
-          "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#2c3e50", "floor_level": 0 }],
-            "rooms": [{ "id": "r1", "name": "Room Name", "polygon": [[x, y], ...], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }],
-              "furnitures": [{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
-                "roof": { "type": "flat", "polygon": [[x, y], ...], "height": 1.5, "base_height": 2.8, "color": "#a0522d" },
-  "conflicts": [{ "type": "structural", "severity": "high", "description": "Specific engineering finding.", "location": [x, y] }]
-}
-
-    STRICT RULE: Output the JSON object ONLY.No markdown, no prose, no code fences.
-  `;
-
+  // STAGE 2: Send image + layout hints to the AI Vision model
+  const prompt = buildBlueprintVisionPrompt(layoutHints);
   try {
     traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
-
-    if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints)) {
-      const strictPrompt = `${prompt}
-
-CRITICAL QUALITY CORRECTION (MANDATORY):
-Your previous reconstruction appears underfit for this blueprint complexity.
-You MUST increase geometric fidelity and match the extracted hints.
-
-HARD CONSTRAINTS FOR THIS RETRY:
-- Do not return a simple rectangular default.
-- Trace significantly more wall segments where hints show structural complexity.
-- If the plan indicates multiple enclosed spaces, output corresponding room polygons.
-- Respect line and segment geometry from OPENCV VECTOR HINTS and OCR anchors from LAYOUT HINTS.
-`;
+    if (shouldRetryForUnderfit(result, layoutHints)) {
+      const strictPrompt = buildBlueprintRetryPrompt(prompt);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', undefined, 'warn');
       result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', summarizeReconstruction(result));
     }
-
-    if (shouldRetryForUnderfit(result, vectorizationHints, layoutHints) && vectorizationHints) {
-      const vectorFallback = buildVectorFallbackReconstruction(vectorizationHints, layoutHints);
-      if (vectorFallback) {
-        traceLog('Infralith Vision Engine', traceId, '5/9', 'applying deterministic vector fallback reconstruction', undefined, 'warn');
-        result = vectorFallback;
-        traceLog('Infralith Vision Engine', traceId, '5/9', 'vector fallback summary', summarizeReconstruction(result));
-      }
-    }
-
-    if (!result || !result.walls || result.walls.length === 0) {
+    if (!hasNonEmptyWalls(result)) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
-
     result = normalizeReconstructionGeometry(result);
     result = inferRoofFromWallFootprint(result);
-
-    // Apply strict deterministic architectural building code checks
     traceLog('Infralith Vision Engine', traceId, '6/9', 'applying deterministic building-code validation');
     const validatedResult = applyBuildingCodes(result);
     traceLog('Infralith Vision Engine', traceId, '7/9', 'validation complete', summarizeReconstruction(validatedResult));
-
     const finalPayload: GeometricReconstruction = {
       ...validatedResult,
-      debug_image: debugImage, // Pass along the debug image from the vectorization step
-      is_vision_only: !vectorizationHints // Flag if vectorization failed and we fell back
+      is_vision_only: !layoutHints,
     };
-
     traceLog('Infralith Vision Engine', traceId, '8/9', 'final payload assembled', {
       is_vision_only: finalPayload.is_vision_only,
-      hasDebugImage: !!finalPayload.debug_image,
-      vectorHints: summarizeVectorizationHints(vectorizationHints),
       layoutHints: summarizeLayoutHints(layoutHints),
     });
-
     const durationMs = Date.now() - startedAt;
     traceLog('Infralith Vision Engine', traceId, '9/9', `returning reconstruction in ${durationMs}ms`, {
       is_vision_only: finalPayload.is_vision_only,
@@ -2836,7 +2157,6 @@ HARD CONSTRAINTS FOR THIS RETRY:
     throw e;
   }
 }
-
 /**
  * Generate a 3D building from a text description.
  * Uses Azure OpenAI to generate complete parametric geometry with luxury finishes.
@@ -2848,73 +2168,11 @@ export async function generateBuildingFromDescription(description: string): Prom
     promptSeedChars: description.length,
   });
 
-  const prompt = `
-    You are the Infralith Architect AI—the world's most advanced parametric architectural modeling engine.
-    Your task: Generate a COMPLETE, REALISTIC, and STRUCTURALLY SOUND 3D building from the user's description.
-
-    User's Vision: "${description}"
-
-    CORE DESIGN PRINCIPLES:
-1. METRIC PRECISION: Use real - world dimensions.
-       - Standard bedroom: 12 - 16 sqm | Living room: 20 - 30 sqm | Kitchen: 10 - 15 sqm | WC: 3 - 5 sqm | Foyer: 4 - 6 sqm
-2. TOPOLOGICAL INTEGRITY: All exterior walls must form a 100 % closed perimeter.Absolutely no gaps.
-    3. ACCESSIBLE LAYOUT: Every room must be reachable via at least one door.No "sealed rooms".
-    4. MULTI - LEVEL LOGIC: For multi - floor buildings:
-- Floor 1 load - bearing walls must align above Floor 0 walls.
-       - Maintain a consistent(0, 0) building core origin across all levels.
-       - Include staircase space(approx 3m x 1.5m) connecting floors.
-    5. WINDOW PLACEMENT: Windows on exterior walls only.Minimum 1 window per habitable room.
-    6. STRUCTURE-FIRST PHASING (MANDATORY):
-- First generate the complete building shell (all floors + all walls) before any detail.
-- Then generate openings (doors/windows) anchored to shell walls.
-- Then generate rooms and furnitures.
-- If detail conflicts with shell, keep shell and fix detail.
-
-    ROOM POLYGON RULE: All room polygons MUST be Counter - Clockwise(CCW) ordered.
-
-    STRUCTURAL THINKING PROCESS:
-- Step 0: Complete full structural shell first (all floors, all walls, aligned core).
-- Step 0.5: Validate shell continuity before adding details.
-- Step 1: Sketch the floor plan mentally.Define the exterior perimeter first.
-    - Step 2: Partition the interior into logical rooms.Validate no wall gaps exist.
-    - Step 3: Place doors at room boundaries.Ensure all rooms accessible.
-    - Step 4: Place windows on exterior walls only.
-    - Step 5: For multi - floor: Verify Floor 1 aligns with Floor 0's load-bearing structure.
-  - Step 6: Final audit — list any structural concerns in "conflicts".
-
-    FURNISHING(MANDATORY AND UNIQUE):
-- Fully furnish every room using the 'furnitures' array.Include beds, wardrobes, TVs, kitchen islands, sofas, rugs, plants, dining tables, toilets, etc.
-    - Do not limit yourself to a few assets.Fill the space logically!
-  - Provide a completely UNIQUE 'description' for each item so the Procedural Voxel Engine builds distinct, amazing 3D assets(e.g., "Sleek matte black refrigerator with french doors", "Curved emerald green luxury sofa").
-
-    LUXURY MATERIAL PALETTE(CRITICAL: RANDOMIZE AND VARY THESE):
-- Do NOT use a fixed set of colors.Invent a unique, breathtaking, and cohesive aesthetic color palette for THIS specific description.
-    - Output random but extremely beautiful HEX colors for exterior walls, interior walls, floors(varying by room), doors, windows, and roof.
-
-    GEOMETRIC REQUIREMENTS:
-- Wall thickness: 0.23m(exterior) or 0.115m(interior).Height: 2.8m per floor.
-    - All coordinates in METERS.Building core at(0, 0).
-
-  OUTPUT — Respond ONLY with a valid JSON object:
-{
-  "building_name": "Premium Project Name",
-    "exterior_color": "#f8f1e7",
-      "walls": [{ "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "color": "#f8f1e7", "is_exterior": true, "floor_level": 0 }],
-        "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
-          "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#2c3e50", "floor_level": 0 }],
-            "rooms": [{ "id": "r1", "name": "Space Name", "polygon": [[x, y], ...], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }],
-              "furnitures": [{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
-                "roof": { "type": "flat", "polygon": [[x, y], ...], "height": 1.5, "base_height": 2.8, "color": "#a0522d" },
-  "conflicts": []
-}
-
-    STRICT RULE: Output the JSON object ONLY.No markdown, no prose, no code fences.
-  `;
-
+  const prompt = buildTextToBuildingPrompt(description);
   try {
     traceLog('Infralith Architect Engine', traceId, '1/2', 'sending text-to-bim request');
     const result = await generateAzureObject<GeometricReconstruction>(prompt);
-    if (!result || !result.walls || result.walls.length === 0) {
+    if (!hasNonEmptyWalls(result)) {
       throw new Error("Architectural Generation Failed: The AI was unable to synthesize a valid structure from the given description.");
     }
     const normalized = applyBuildingCodes(inferRoofFromWallFootprint(normalizeReconstructionGeometry(result)));
@@ -2940,34 +2198,7 @@ export async function generateRealTimeAsset(description: string): Promise<AIAsse
     description,
   });
 
-  const prompt = `
-    You are an expert technical 3D voxel modeler.Generate a precise, detailed procedural 3D asset for: "${description}".
-    The model must be constructed using a series of rectangular rectangular bounding boxes(parts).
-
-    CRITICAL CONSTRAINTS:
-1. Bounding Box: The ENTIRE asset must fit exactly within a normalized 1x1x1 cube space(from - 0.5 to 0.5 on each axis).
-    2. Coordinates: The position refers to the CENTER of the part relative to origin(0, 0, 0).
-    3. Sizes: The size provides the[width, height, depth] of the part.
-    4. Composition: Break the object down into logical components(e.g.for a door: the outer frame, inner door leaf, middle window, door handle, hinges).Use at least 4 - 8 distinct parts for "enterprise" level detail.
-    5. Aesthetics: Select high - end, realistic HEX colors.
-
-    Make it look extremely premium, detailed, and structurally correct.
-
-    OUTPUT STRICTLY THIS SHAPE (NO BUILDING FIELDS):
-    {
-      "name": "asset name",
-      "parts": [
-        {
-          "name": "part name",
-          "position": [x, y, z],
-          "size": [w, h, d],
-          "color": "#hex",
-          "material": "wood|metal|glass|plastic|stone|cloth"
-        }
-      ]
-    }
-  `;
-
+  const prompt = buildAssetPrompt(description);
   try {
     traceLog('Procedural Voxel Engine', traceId, '1/3', 'sending text-to-object request');
     let result = await generateAzureObject<AIAsset>(prompt, AIAssetSchema);
@@ -2976,13 +2207,7 @@ export async function generateRealTimeAsset(description: string): Promise<AIAsse
     }
 
     if (result.parts.length < 4) {
-      const retryPrompt = `${prompt}
-
-CORRECTION:
-- Previous result was under-detailed.
-- Return at least 4 distinct parts.
-- Each part must have unique position and size.
-`;
+      const retryPrompt = buildAssetRetryPrompt(prompt);
       traceLog('Procedural Voxel Engine', traceId, '2/3', 'under-detailed asset detected, retrying', {
         initialPartCount: result.parts.length,
       }, 'warn');
