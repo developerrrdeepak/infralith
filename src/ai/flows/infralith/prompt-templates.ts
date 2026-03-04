@@ -110,7 +110,7 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
 };
 
 export const buildBlueprintVisionPrompt = (layoutHints: BlueprintLayoutHints | null): string => `
-You are Infralith Blueprint Reconstruction Engine v6.
+You are Infralith Blueprint Reconstruction Engine v7.
 Goal: convert a 2D floorplan image into a metrically consistent, topologically valid geometric reconstruction for BIM pre-processing.
 
 PRIORITY ORDER:
@@ -128,6 +128,12 @@ ANTI-HALLUCINATION HARD RULES:
 INPUT EVIDENCE SUMMARY:
 AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS:
 ${summarizeLayoutHintsForPrompt(layoutHints)}
+
+RESEARCH-INFORMED STRATEGY (MANDATORY):
+- Graph-first vectorization: infer junctions and wall edges before semantic room naming.
+- Coarse-to-fine reconstruction: first outer shell and major partitions, then local walls/openings.
+- Topology constraints over raw pixel heuristics: keep planarity, closed loops, and host-linked openings.
+- Semantic assignment after geometry: attach room names only after enclosed polygons are stable.
 
 MANDATORY PIPELINE:
 1) NORMALIZE + SCALE + GLOBAL FRAME
@@ -147,6 +153,7 @@ MANDATORY PIPELINE:
 - Build walls from the graph, then snap near-junction endpoints within 0.15m.
 - Preserve non-Manhattan edges when evidence supports them; do not force orthogonality.
 - Remove duplicates, zero-length edges, and obvious overlaps.
+- If two candidate wall paths conflict, prefer the one that preserves larger closed regions and fewer dangling segments.
 
 3) FLOOR PARTITIONING
 - Separate distinct floor blocks and assign integer floor_level from 0.
@@ -165,6 +172,7 @@ MANDATORY PIPELINE:
 - Room polygons must be closed, non-self-intersecting, and counter-clockwise.
 - Compute room area from polygon geometry (m^2).
 - Use visible labels when available; otherwise use deterministic names ("Room 1", "Room 2", ...).
+- Keep one room polygon per enclosed region unless explicit evidence shows sub-partitions.
 
 6) ROOF FOOTPRINT
 - Set roof polygon from the outer building shell.
@@ -183,6 +191,7 @@ MANDATORY PIPELINE:
 - Emit confidence in [0,1] for walls, doors, windows, and rooms when estimable.
 - If dimension anchors are present, avoid trivial single-rectangle fallback unless evidence is truly rectangular.
 - If floor labels suggest multi-floor content, set floor levels consistently or emit explicit high-severity conflict.
+- Prefer explicit conflict over geometric guessing when OCR text and drawing lines disagree.
 - If any major gate is uncertain or fails, add conflict with precise location.
 
 9) CONFLICTS

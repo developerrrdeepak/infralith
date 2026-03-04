@@ -205,27 +205,39 @@ const trimOcr = (ocrText: string) => {
 };
 
 const buildPrompt = (trimmedOcr: string, hints: OcrHints) => `
-You are Blueprint Parser v4 for a construction intelligence workflow.
-Your output is consumed directly by compliance, risk, and cost agents.
+You are Blueprint Metadata Parser v6.
+Your output is used directly by compliance, risk, and costing pipelines.
 
 TASK:
-Extract structured blueprint metadata from OCR evidence with strict anti-hallucination behavior.
+Extract high-trust structured metadata from noisy OCR text of architectural documents.
 
-RULES:
-1) Use only OCR evidence from this prompt.
-2) If any field is unclear, return null (or [] for materials).
-3) Do not invent values, dimensions, quantities, standards, or material lines.
-4) Normalize:
-   - totalFloors as integer count
-   - height in meters
-   - totalArea in square meters
-5) Seismic 
-zone must be canonical when present: II | III | IV | V
+METHOD (MANDATORY):
+1) Evidence pass:
+   - Locate candidate text spans for each field from OCR.
+   - Prefer explicit labels near values (for example "Total Floors:", "Height:", "Seismic Zone:").
+2) Normalization pass:
+   - totalFloors/floors as integer count.
+   - height/area units normalized to meters and square meters.
+   - seismic zone canonicalized to II | III | IV | V when possible.
+3) Consistency pass:
+   - If multiple conflicting values appear and no clear winner exists, return null for that field.
+   - Never guess missing values.
 
-github 6) Materials must be unique explicit BOQ/schedule items only.
-7) Return JSON only. No markdown. No explanation.
+ANTI-HALLUCINATION RULES:
+- Use only OCR content in this prompt.
+- If evidence is weak or ambiguous, return null (or [] for materials).
+- Do not invent standards, quantities, material rows, project names, or dimensions.
+- Preserve only values that are explicitly present in OCR.
 
-OUTPUT SHAPE (keys only from this schema):
+MATERIAL EXTRACTION RULES:
+- Include only explicit BOQ/schedule-like material rows with an identifiable item and quantity signal.
+- Exclude narrative statements, notes, and generic mention lines.
+- Deduplicate semantically identical rows.
+
+OUTPUT CONTRACT:
+- Return one valid JSON object only.
+- No markdown, no prose, no extra keys.
+- Use exactly these keys:
 {
   "projectScope": string|null,
   "projectName": string|null,
@@ -252,7 +264,7 @@ OUTPUT SHAPE (keys only from this schema):
   ]
 }
 
-HINTS FROM SAME OCR (use only if consistent with OCR):
+HINTS FROM SAME OCR (use only when consistent with OCR text):
 ${JSON.stringify(hints, null, 2)}
 
 OCR TEXT START
