@@ -899,6 +899,60 @@ const buildServerCutWallSolids = (
 const normalizeReconstructionGeometry = (payload: GeometricReconstruction): GeometricReconstruction => {
   if (!Array.isArray(payload?.walls) || payload.walls.length === 0) return payload;
 
+  const toFloorLevel = (value: unknown): number => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+  };
+
+  const floorLevels = Array.from(new Set(payload.walls.map((wall) => toFloorLevel(wall.floor_level))));
+  if (floorLevels.length > 1) {
+    const orderedLevels = [...floorLevels].sort((a, b) => a - b);
+    const mergedWalls: GeometricReconstruction['walls'] = [];
+    const mergedDoors: GeometricReconstruction['doors'] = [];
+    const mergedWindows: GeometricReconstruction['windows'] = [];
+    const mergedRooms: GeometricReconstruction['rooms'] = [];
+    const mergedFurnitures: GeometricReconstruction['furnitures'] = [];
+    const mergedWallSolids: GeometricReconstruction['walls'] = [];
+    const mergedConflicts: GeometricReconstruction['conflicts'] = [...(payload.conflicts || [])];
+
+    for (const level of orderedLevels) {
+      const floorWalls = payload.walls.filter((wall) => toFloorLevel(wall.floor_level) === level);
+      if (floorWalls.length === 0) continue;
+
+      const floorPayload: GeometricReconstruction = {
+        ...payload,
+        walls: floorWalls,
+        doors: (payload.doors || []).filter((door) => toFloorLevel(door.floor_level) === level),
+        windows: (payload.windows || []).filter((win) => toFloorLevel(win.floor_level) === level),
+        rooms: (payload.rooms || []).filter((room) => toFloorLevel(room.floor_level) === level),
+        furnitures: (payload.furnitures || []).filter((item) => toFloorLevel(item.floor_level) === level),
+        wallSolids: undefined,
+        roof: undefined,
+        conflicts: [],
+      };
+
+      const floorNormalized = normalizeReconstructionGeometry(floorPayload);
+      mergedWalls.push(...(floorNormalized.walls || []));
+      mergedDoors.push(...(floorNormalized.doors || []));
+      mergedWindows.push(...(floorNormalized.windows || []));
+      mergedRooms.push(...(floorNormalized.rooms || []));
+      mergedFurnitures.push(...(floorNormalized.furnitures || []));
+      mergedWallSolids.push(...(floorNormalized.wallSolids || []));
+      mergedConflicts.push(...(floorNormalized.conflicts || []));
+    }
+
+    return {
+      ...payload,
+      walls: mergedWalls,
+      wallSolids: mergedWallSolids.length > 0 ? mergedWallSolids : undefined,
+      doors: mergedDoors,
+      windows: mergedWindows,
+      rooms: mergedRooms,
+      furnitures: mergedFurnitures,
+      conflicts: mergedConflicts,
+    };
+  }
+
   const snapTolerance = 0.12;
   const axisSnapRatio = 0.2;
 
@@ -1480,6 +1534,390 @@ async function runLocalOcrLayoutHints(
     traceLog('Local OCR', traceId, 'error', 'failed to extract OCR layout hints', { message }, 'warn');
     return null;
   }
+}
+
+type FloorCropPlan = {
+  label: string;
+  level: number;
+  top: number;
+  height: number;
+};
+
+const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, number, number, number] | null => {
+  if (!Array.isArray(polygon) || polygon.length < 6) return null;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = 0; i < polygon.length - 1; i += 2) {
+    const x = Number(polygon[i]);
+    const y = Number(polygon[i + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    xs.push(x);
+    ys.push(y);
+  }
+  if (xs.length === 0 || ys.length === 0) return null;
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+};
+
+const resolveHintImageSize = (
+  layoutHints: BlueprintLayoutHints | null,
+  fallbackWidth = 0,
+  fallbackHeight = 0
+): { width: number; height: number } => {
+  const width = Number(fallbackWidth);
+  const height = Number(fallbackHeight);
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return { width: Math.round(width), height: Math.round(height) };
+  }
+
+  const page = layoutHints?.pages?.[0];
+  const pageWidth = Number(page?.width || 0);
+  const pageHeight = Number(page?.height || 0);
+  if (Number.isFinite(pageWidth) && Number.isFinite(pageHeight) && pageWidth > 0 && pageHeight > 0) {
+    return { width: Math.round(pageWidth), height: Math.round(pageHeight) };
+  }
+
+  return { width: 0, height: 0 };
+};
+
+const floorLabelToLevel = (label: string, fallback: number): number => {
+  const text = String(label || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text) return fallback;
+  if (/\b(basement|cellar|lower\s*ground|stilt|ground)\b/.test(text)) return 0;
+  if (/\bfirst\b/.test(text)) return 1;
+  if (/\bsecond\b/.test(text)) return 2;
+  if (/\bthird\b/.test(text)) return 3;
+  if (/\bfourth\b/.test(text)) return 4;
+  if (/\bfifth\b/.test(text)) return 5;
+
+  const numeric = text.match(/\b(?:level|lvl|floor|flr)\s*[-_:]?\s*(\d{1,2})\b/);
+  if (numeric?.[1]) {
+    const parsed = Number(numeric[1]);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return fallback;
+};
+
+const deriveFloorCropPlans = (
+  layoutHints: BlueprintLayoutHints | null,
+  imageWidth: number,
+  imageHeight: number
+): FloorCropPlan[] => {
+  if (!layoutHints || imageWidth <= 0 || imageHeight <= 0) return [];
+
+  const anchors = (layoutHints.floorLabelAnchors || [])
+    .map((anchor, index) => {
+      const bbox = polygonToBoundingBox(anchor?.polygon || []);
+      if (!bbox) return null;
+      const [, y0, , y1] = bbox;
+      const cy = (y0 + y1) / 2;
+      return {
+        text: String(anchor?.text || '').trim(),
+        centerY: cy,
+        level: floorLabelToLevel(String(anchor?.text || ''), index),
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> =>
+      !!entry &&
+      Number.isFinite(entry.centerY) &&
+      entry.centerY >= 0 &&
+      entry.centerY <= imageHeight
+    )
+    .sort((a, b) => a.centerY - b.centerY);
+
+  if (anchors.length < 2) return [];
+
+  const deduped: typeof anchors = [];
+  const minGap = Math.max(40, imageHeight * 0.06);
+  for (const anchor of anchors) {
+    const last = deduped[deduped.length - 1];
+    if (!last || Math.abs(anchor.centerY - last.centerY) > minGap) {
+      deduped.push(anchor);
+      continue;
+    }
+    if ((anchor.text || '').length > (last.text || '').length) {
+      deduped[deduped.length - 1] = anchor;
+    }
+  }
+
+  if (deduped.length < 2) return [];
+
+  const plans: FloorCropPlan[] = [];
+  const usedLevels = new Set<number>();
+  for (let i = 0; i < deduped.length; i += 1) {
+    const current = deduped[i];
+    const prev = deduped[i - 1];
+    const next = deduped[i + 1];
+    const top = i === 0 ? 0 : Math.max(0, Math.round((prev.centerY + current.centerY) / 2));
+    const bottom = i === deduped.length - 1
+      ? imageHeight
+      : Math.min(imageHeight, Math.round((current.centerY + next.centerY) / 2));
+    const bandHeight = bottom - top;
+    if (bandHeight < Math.max(120, imageHeight * 0.14)) continue;
+
+    let level = Number.isFinite(current.level) ? current.level : i;
+    while (usedLevels.has(level)) level += 1;
+    usedLevels.add(level);
+
+    plans.push({
+      label: current.text || `Floor ${level}`,
+      level,
+      top,
+      height: bandHeight,
+    });
+  }
+
+  return plans.slice(0, 6);
+};
+
+async function cropImageBand(base64Image: string, top: number, height: number): Promise<string | null> {
+  if (sharpUnsupported) return null;
+
+  try {
+    const sharpModule = await dynamicImport('sharp');
+    const sharp = sharpModule?.default ?? sharpModule;
+    if (typeof sharp !== 'function') {
+      throw new Error('Sharp module is invalid.');
+    }
+
+    const inputBuffer = Buffer.from(stripDataUrl(base64Image), 'base64');
+    if (!inputBuffer.length) return null;
+    const instance = sharp(inputBuffer, { limitInputPixels: false }).rotate();
+    const metadata = await instance.metadata();
+    const width = Number(metadata?.width || 0);
+    const imageHeight = Number(metadata?.height || 0);
+    if (width <= 0 || imageHeight <= 0) return null;
+
+    const safeTop = Math.max(0, Math.min(imageHeight - 1, Math.floor(top)));
+    const maxHeight = imageHeight - safeTop;
+    const safeHeight = Math.max(1, Math.min(maxHeight, Math.floor(height)));
+    if (safeHeight < Math.max(96, imageHeight * 0.12)) return null;
+
+    const cropped = await sharp(inputBuffer, { limitInputPixels: false })
+      .rotate()
+      .extract({ left: 0, top: safeTop, width, height: safeHeight })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    return ensureDataUrlPng(cropped.toString('base64'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isModuleImportError(message)) {
+      sharpUnsupported = true;
+      if (!sharpWarned) {
+        sharpWarned = true;
+        console.warn('[Infralith Vision Engine] Sharp not installed. Multi-floor crop decomposition disabled.');
+      }
+      return null;
+    }
+    return null;
+  }
+}
+
+const remapFloorLevelAndIds = (
+  payload: GeometricReconstruction,
+  targetLevel: number,
+  prefix: string
+): GeometricReconstruction => {
+  const wallIdMap = new Map<string, string>();
+  const roomIdMap = new Map<string, string>();
+  const walls = (payload.walls || []).map((wall) => {
+    const nextId = `${prefix}w-${String(wall.id)}`;
+    wallIdMap.set(String(wall.id), nextId);
+    return {
+      ...wall,
+      id: nextId,
+      floor_level: targetLevel,
+    };
+  });
+
+  const rooms = (payload.rooms || []).map((room) => {
+    const nextId = `${prefix}r-${String(room.id)}`;
+    roomIdMap.set(String(room.id), nextId);
+    return {
+      ...room,
+      id: nextId,
+      floor_level: targetLevel,
+    };
+  });
+
+  const doors = (payload.doors || []).map((door) => ({
+    ...door,
+    id: `${prefix}d-${String(door.id)}`,
+    host_wall_id: wallIdMap.get(String(door.host_wall_id)) || `${prefix}w-${String(door.host_wall_id)}`,
+    floor_level: targetLevel,
+  }));
+
+  const windows = (payload.windows || []).map((win) => ({
+    ...win,
+    id: `${prefix}win-${String(win.id)}`,
+    host_wall_id: wallIdMap.get(String(win.host_wall_id)) || `${prefix}w-${String(win.host_wall_id)}`,
+    floor_level: targetLevel,
+  }));
+
+  const furnitures = (payload.furnitures || []).map((item) => ({
+    ...item,
+    id: `${prefix}f-${String(item.id)}`,
+    room_id: item.room_id != null
+      ? (roomIdMap.get(String(item.room_id)) || `${prefix}r-${String(item.room_id)}`)
+      : item.room_id,
+    floor_level: targetLevel,
+  }));
+
+  const wallSolids = (payload.wallSolids || []).map((solid) => ({
+    ...solid,
+    id: `${prefix}ws-${String(solid.id)}`,
+    source_wall_id: solid.source_wall_id != null
+      ? (wallIdMap.get(String(solid.source_wall_id)) || `${prefix}w-${String(solid.source_wall_id)}`)
+      : solid.source_wall_id,
+    floor_level: targetLevel,
+  }));
+
+  return {
+    ...payload,
+    walls,
+    wallSolids,
+    rooms,
+    doors,
+    windows,
+    furnitures,
+    roof: undefined,
+    conflicts: (payload.conflicts || []).map((conflict) => ({
+      ...conflict,
+      description: `[floor:${targetLevel}] ${conflict.description}`,
+    })),
+    meta: {
+      ...payload.meta,
+      floor_count: 1,
+    },
+  };
+};
+
+const combineFloorReconstructions = (
+  floorResults: Array<{ level: number; label: string; payload: GeometricReconstruction }>
+): GeometricReconstruction | null => {
+  if (floorResults.length === 0) return null;
+  const ordered = [...floorResults].sort((a, b) => a.level - b.level);
+  const first = ordered[0].payload;
+  const maxLevel = Math.max(...ordered.map((item) => item.level));
+
+  const combined: GeometricReconstruction = {
+    ...first,
+    meta: {
+      ...(first.meta || {}),
+      floor_count: Math.max(1, maxLevel + 1),
+    },
+    walls: [],
+    wallSolids: [],
+    doors: [],
+    windows: [],
+    rooms: [],
+    furnitures: [],
+    roof: undefined,
+    topology_checks: undefined,
+    conflicts: [],
+  };
+
+  for (const entry of ordered) {
+    const prefix = `fl${entry.level}-`;
+    const remapped = remapFloorLevelAndIds(entry.payload, entry.level, prefix);
+    combined.walls.push(...(remapped.walls || []));
+    combined.wallSolids?.push(...(remapped.wallSolids || []));
+    combined.doors.push(...(remapped.doors || []));
+    combined.windows.push(...(remapped.windows || []));
+    combined.rooms.push(...(remapped.rooms || []));
+    combined.furnitures?.push(...(remapped.furnitures || []));
+    combined.conflicts.push(...(remapped.conflicts || []));
+  }
+
+  if ((combined.wallSolids || []).length === 0) {
+    combined.wallSolids = undefined;
+  }
+
+  return combined;
+};
+
+async function attemptSegmentedMultiFloorReconstruction(
+  basePrompt: string,
+  structuralImage: string,
+  fallbackImage: string,
+  layoutHints: BlueprintLayoutHints | null,
+  widthHint: number,
+  heightHint: number,
+  traceId: string
+): Promise<GeometricReconstruction | null> {
+  const { width, height } = resolveHintImageSize(layoutHints, widthHint, heightHint);
+  const plans = deriveFloorCropPlans(layoutHints, width, height);
+  if (plans.length < 2) return null;
+
+  traceLog('Infralith Vision Engine', traceId, '4/9', 'attempting segmented multi-floor reconstruction', {
+    plannedBands: plans.length,
+    plans: plans.map((plan) => ({ level: plan.level, label: plan.label, top: plan.top, height: plan.height })),
+  }, 'warn');
+
+  const floorResults: Array<{ level: number; label: string; payload: GeometricReconstruction }> = [];
+  const decompositionConflicts: GeometricReconstruction['conflicts'] = [];
+
+  for (const plan of plans) {
+    const cropped =
+      (await cropImageBand(structuralImage, plan.top, plan.height)) ||
+      (await cropImageBand(fallbackImage, plan.top, plan.height));
+    if (!cropped) {
+      decompositionConflicts.push({
+        type: 'structural',
+        severity: 'medium',
+        description: `Unable to crop floor band for label "${plan.label}".`,
+        location: [0, 0],
+      });
+      continue;
+    }
+
+    const floorPrompt = `${basePrompt}
+
+FLOOR-FOCUSED EXTRACTION OVERRIDE:
+- This image is a crop associated with label "${plan.label}".
+- Reconstruct only this single floor plan from this cropped image.
+- Set all returned floor_level values to 0 in this response.
+- Do not mix geometry from other floors outside this crop.
+`;
+
+    try {
+      let floorResult = await generateAzureVisionObject<GeometricReconstruction>(floorPrompt, cropped);
+      const floorFidelity = evaluateReconstructionFidelity(floorResult, null);
+      if (floorFidelity.shouldRetry && (floorResult?.walls?.length || 0) < 8) {
+        const strictFloorPrompt = buildBlueprintRetryPrompt(floorPrompt, floorFidelity.reasons);
+        floorResult = await generateAzureVisionObject<GeometricReconstruction>(strictFloorPrompt, cropped);
+      }
+
+      if (!hasNonEmptyWalls(floorResult)) {
+        decompositionConflicts.push({
+          type: 'structural',
+          severity: 'high',
+          description: `No wall geometry detected for floor label "${plan.label}" during segmented reconstruction.`,
+          location: [0, 0],
+        });
+        continue;
+      }
+
+      floorResults.push({
+        level: plan.level,
+        label: plan.label,
+        payload: normalizeReconstructionGeometry(floorResult),
+      });
+    } catch (error) {
+      decompositionConflicts.push({
+        type: 'structural',
+        severity: 'high',
+        description: `Segmented reconstruction failed for "${plan.label}": ${error instanceof Error ? error.message : String(error)}`,
+        location: [0, 0],
+      });
+    }
+  }
+
+  if (floorResults.length < 2) return null;
+  const combined = combineFloorReconstructions(floorResults);
+  if (!combined) return null;
+  combined.conflicts = [...(combined.conflicts || []), ...decompositionConflicts];
+  traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor reconstruction assembled', summarizeReconstruction(combined));
+  return combined;
 }
 
 async function renderDxfPreviewCanvas(walls: GeometricReconstruction['walls'], traceId = 'n/a'): Promise<string | undefined> {
@@ -2319,7 +2757,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   const prompt = buildBlueprintVisionPrompt(layoutHints);
   try {
     traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
-    let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, imageUrl);
+    let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, structuralInputImage);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
 
     const maxRetries = 2;
@@ -2327,13 +2765,15 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     let fidelity = evaluateReconstructionFidelity(result, layoutHints);
     while (fidelity.shouldRetry && retryCount < maxRetries) {
       retryCount += 1;
+      const retryImage = retryCount % 2 === 1 ? imageUrl : structuralInputImage;
       const strictPrompt = buildBlueprintRetryPrompt(prompt, fidelity.reasons);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', {
         retryCount,
         maxRetries,
+        imageVariant: retryImage === imageUrl ? 'original' : 'preprocessed',
         reasons: fidelity.reasons,
       }, 'warn');
-      result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, imageUrl);
+      result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, retryImage);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', {
         retryCount,
         ...summarizeReconstruction(result),
@@ -2345,6 +2785,35 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
         reasons: fidelity.reasons,
       }, 'warn');
     }
+
+    const hintedFloorCount = estimateFloorHintCount(layoutHints);
+    const inferredFloorCount = estimateResultFloorCount(result);
+    if (hintedFloorCount >= 2 && inferredFloorCount <= 1) {
+      const segmentedResult = await attemptSegmentedMultiFloorReconstruction(
+        prompt,
+        structuralInputImage,
+        imageUrl,
+        layoutHints,
+        preprocessed.width,
+        preprocessed.height,
+        traceId
+      );
+      if (segmentedResult && hasNonEmptyWalls(segmentedResult)) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery replaced monolithic output', {
+          hintedFloorCount,
+          previousFloorCount: inferredFloorCount,
+          recoveredFloorCount: estimateResultFloorCount(segmentedResult),
+          ...summarizeReconstruction(segmentedResult),
+        }, 'warn');
+        result = segmentedResult;
+      } else {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery did not produce a valid replacement', {
+          hintedFloorCount,
+          inferredFloorCount,
+        }, 'warn');
+      }
+    }
+
     if (!hasNonEmptyWalls(result)) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
