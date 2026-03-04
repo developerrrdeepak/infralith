@@ -5,11 +5,10 @@ import { auditLog, AuditEntry, AuditAction } from '@/lib/audit-log';
 import { useAppContext } from '@/contexts/app-context';
 import { cn } from '@/lib/utils';
 import {
-    ClipboardList, Shield, Filter, Download, RefreshCw, CheckCircle2,
+    ClipboardList, Shield, Download, RefreshCw, CheckCircle2,
     LogIn, LogOut, Upload, BarChart2, Eye, FileDown, ThumbsUp, ThumbsDown,
     Bell, Settings, Trash2, UserPlus, Megaphone, MessageSquare, Lock, AlertCircle
 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
 const ACTION_META: Record<AuditAction, { label: string; icon: any; color: string }> = {

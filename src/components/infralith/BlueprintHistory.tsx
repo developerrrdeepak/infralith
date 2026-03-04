@@ -8,13 +8,11 @@ import {
     AlertCircle,
     XCircle,
     Database,
-    UploadCloud,
-    ChevronRight
+    UploadCloud
 } from 'lucide-react';
 import { useAppContext } from '@/contexts/app-context';
-import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { infralithService } from '@/lib/services';
 import { format } from 'date-fns';
 
@@ -28,7 +26,6 @@ type BlueprintRecord = {
 
 export default function BlueprintHistory() {
     const { user, handleNavigate } = useAppContext();
-    const { toast } = useToast();
     const [history, setHistory] = useState<BlueprintRecord[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 

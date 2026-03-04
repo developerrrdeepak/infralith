@@ -1,8 +1,8 @@
 
 'use client';
 
-import { Activity, AlertTriangle, ArrowRight, BarChart3, CheckSquare, Coins, FileText, Upload, Zap, MessagesSquare, ShieldAlert, BadgeInfo, FileSearch, Building2, Settings, User as UserIcon, LayoutDashboard, Users, ClipboardList, Map, Database, RefreshCw, CheckCircle, Bot, Search, Send, ShieldCheck, Box, Video, Layers, History } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { Activity, BarChart3, CheckSquare, Upload, Zap, MessagesSquare, BadgeInfo, Settings, User as UserIcon, Users, Map, ShieldCheck, Layers, History } from 'lucide-react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAppContext } from '@/contexts/app-context';

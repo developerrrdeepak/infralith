@@ -160,7 +160,7 @@ const InspectorGroup = ({ title, children, isOpen, onToggle }: any) => (
     </div>
 );
 
-const InspectorItem = ({ icon, label, sublabel, active, visible, onSelect, onToggleVisibility, onEdit, onDelete }: any) => (
+const InspectorItem = ({ icon, label, sublabel, active, visible, onSelect, onToggleVisibility, onEdit }: any) => (
     <div
         className={cn(
             "group flex items-center gap-3 p-2 rounded-xl transition-all cursor-pointer",
@@ -188,14 +188,6 @@ const InspectorItem = ({ icon, label, sublabel, active, visible, onSelect, onTog
                     className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
                 >
                     <Edit2 className="h-3 w-3" />
-                </button>
-            )}
-            {onDelete && (
-                <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                    className="p-1 text-slate-400 hover:text-red-500 rounded-md"
-                >
-                    <Trash2 className="h-3 w-3" />
                 </button>
             )}
         </div>
@@ -1526,7 +1518,6 @@ function BlueprintWorkspace() {
                                                     onSelect={() => setSelectedElement({ type: 'room', data: room })}
                                                     onToggleVisibility={() => toggleElementVisibility('room', room.id)}
                                                     onEdit={() => setSelectedElement({ type: 'room', data: room })}
-                                                    onDelete={() => { }} // TODO: Implement delete
                                                 />
                                             ))}
 

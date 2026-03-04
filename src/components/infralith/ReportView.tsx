@@ -2,12 +2,11 @@
 
 import {
     Download, FileText, Share2, Printer, CheckCircle, ShieldCheck,
-    AlertTriangle, Clock, Settings, Wand2, Smartphone, Plane, Sparkles,
-    Mic, Loader2, Send, Activity, Zap, Building2, BarChart3, ListChecks,
-    FlaskConical, Wrench, ClipboardList, ChevronsRight, ChevronRight,
-    TrendingUp, TrendingDown, TriangleAlert, Info, Scale
+    Clock, Settings, Wand2, Smartphone, Plane, Sparkles,
+    Mic, Loader2, Send, Activity, Zap, BarChart3,
+    ClipboardList, ChevronsRight, ChevronRight,
+    TriangleAlert, Scale
 } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useState } from 'react';

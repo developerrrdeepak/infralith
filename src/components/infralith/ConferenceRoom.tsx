@@ -1,7 +1,7 @@
 
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import {
     Video,
     Mic,
@@ -9,7 +9,6 @@ import {
     VideoOff,
     PhoneOff,
     Users,
-    MessageSquare,
     Settings,
     Monitor,
     Hand,
@@ -26,7 +25,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useAppContext } from '@/contexts/app-context';
 import { cn } from '@/lib/utils';
 
@@ -36,7 +35,7 @@ export default function ConferenceRoom() {
     const [isVideoOn, setIsVideoOn] = useState(true);
     const [isSummarizing, setIsSummarizing] = useState(false);
     const [summaryResult, setSummaryResult] = useState<any | null>(null);
-    const [transcripts, setTranscripts] = useState([
+    const [transcripts] = useState([
         { author: "Marcus Thorne", text: "We need to address the structural load variance in Sector 4." },
         { author: "Dr. Sarah Chen", text: "Agreed. The seismic isolation clips should be upgraded to Type-A." },
         { author: "Devid Lin", text: "I can update the procurement list for those by EOD." }

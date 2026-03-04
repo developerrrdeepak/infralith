@@ -5,11 +5,10 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -99,7 +98,7 @@ const SkillsInput = ({ field }: { field: any }) => {
 };
 
 export default function ProfilePage() {
-    const { user, handleProfileUpdate, isLoadingAuth, handleNavigate, handleDeleteAccount } = useAppContext();
+    const { user, handleProfileUpdate, isLoadingAuth, handleDeleteAccount } = useAppContext();
     const { toast } = useToast();
     const [isEditMode, setIsEditMode] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);

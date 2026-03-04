@@ -1,7 +1,7 @@
 
 'use client';
 
-import React, { useState, useRef, Suspense, useMemo } from 'react';
+import { useState, useRef, Suspense, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import {
     OrbitControls,
@@ -10,8 +10,6 @@ import {
     Float,
     ContactShadows,
     Environment,
-    MeshDistortMaterial,
-    Text,
     Grid,
     Edges
 } from '@react-three/drei';
@@ -19,21 +17,17 @@ import * as THREE from 'three';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     MessageSquare,
-    ShieldAlert,
     X,
     Maximize2,
     AlertTriangle,
-    CheckCircle2,
-    User,
     Send,
     Activity,
     Box,
-    MapPin,
     Layers,
     Share2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useAppContext } from '@/contexts/app-context';

@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Settings, Sun, Moon, Monitor, Bell, BellOff, Shield, Database,
   Palette, LogOut, Trash2, User, Globe, ChevronRight,
-  CheckCircle, Cloud, Cpu, AlertTriangle, Zap
+  CheckCircle, Cloud, Cpu, AlertTriangle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 

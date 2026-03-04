@@ -1,7 +1,7 @@
 
 'use client';
 
-import { Activity, AlertTriangle, ShieldAlert, Zap } from 'lucide-react';
+import { ShieldAlert } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useAppContext } from '@/contexts/app-context';

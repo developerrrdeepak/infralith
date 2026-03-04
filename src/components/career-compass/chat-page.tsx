@@ -1,7 +1,7 @@
 'use client';
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { MessagesSquare, SendIcon, Loader2, Paperclip, X, FileText, Bot } from "lucide-react";
+import { MessagesSquare, SendIcon, Paperclip, X, FileText, Bot } from "lucide-react";
 import ChatHistoryPanel from "./chat-history-panel";
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";

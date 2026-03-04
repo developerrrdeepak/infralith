@@ -32,7 +32,7 @@ export async function POST(req: Request) {
       .map((item) => item.role);
 
     const fallback = ['Structural Engineer', 'Civil Engineer', 'Project Manager'];
-    const roles = rankedRoles.filter((role, index) => index < 3);
+    const roles = rankedRoles.slice(0, 3);
 
     return NextResponse.json({ roles: roles.length > 0 ? roles : fallback });
   } catch (error) {

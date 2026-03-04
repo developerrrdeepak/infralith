@@ -1,10 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/contexts/app-context';
@@ -12,8 +9,8 @@ import { useNotifications } from './NotificationBell';
 import { auditLog } from '@/lib/audit-log';
 import {
     BarChart3, Users, Activity, TrendingUp, TrendingDown, ShieldCheck, FileText,
-    Clock, Database, Zap, AlertTriangle, CheckCircle, Globe, Server, Cpu, ArrowUpRight,
-    ClipboardList, ThumbsUp, ThumbsDown, Upload, LogIn
+    Database, Zap, AlertTriangle, CheckCircle, Globe, Cpu, ArrowUpRight,
+    ClipboardList
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -313,7 +310,7 @@ export default function AnalyticsPanel() {
                             <p className="text-sm font-semibold">No events yet. Platform activity will appear here.</p>
                         </div>
                     ) : (
-                        recentEntries.map((ev, i) => (
+                        recentEntries.map((ev) => (
                             <div key={ev.id} className="grid grid-cols-[auto_1fr_1fr_auto] gap-4 px-7 py-3.5 text-xs items-center hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                                 <span className="text-slate-400 font-mono whitespace-nowrap">
                                     {new Date(ev.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}

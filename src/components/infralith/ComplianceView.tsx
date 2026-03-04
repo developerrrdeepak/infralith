@@ -1,7 +1,7 @@
 
 'use client';
 
-import { CheckCircle2, AlertTriangle, XCircle, Database, ShieldCheck, FileText } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Database, FileText } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';

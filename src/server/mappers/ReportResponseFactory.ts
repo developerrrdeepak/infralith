@@ -69,7 +69,7 @@ export class ReportResponseFactory {
             timestamp: report.timestamp,
             projectScope: report.projectScope || 'Unknown Project Overview',
             // Example mapping internal AI analysis to purely technical engineering findings
-            conflicts: report.complianceReport?.violations.map((rule, idx) => ({
+            conflicts: report.complianceReport?.violations.map((rule) => ({
                 location: 'Structural Layout',
                 measuredValue: 'Observed Metric',
                 requiredValue: rule.comment || 'Required Baseline',

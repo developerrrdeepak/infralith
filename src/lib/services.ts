@@ -220,7 +220,7 @@ export const inviteService = {
 
 // --- AUTH SERVICE (Mocked for Enterprise context) ---
 export const authService = {
-  login: async (email: string, password: string) => {
+  login: async (email: string, _password: string) => {
     // Enterprise Auth now handled by Azure AD / NextAuth
     console.log("Mock login for:", email);
     return { uid: 'mock-uid', email };
@@ -547,7 +547,7 @@ export const dmService = {
     setStorageItem(`inbox_${userId}`, inbox);
   },
 
-  createGroup: async (creatorId: string, creatorName: string, creatorAvatar: string, groupName: string, participantIds: string[]) => {
+  createGroup: async (creatorId: string, creatorName: string, _creatorAvatar: string, groupName: string, participantIds: string[]) => {
     const chatId = `group_${Date.now()}`;
     const allParticipantIds = [...new Set([creatorId, ...participantIds])];
 

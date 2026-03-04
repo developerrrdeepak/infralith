@@ -3,12 +3,11 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { useToast } from '@/hooks/use-toast';
 import {
     Loader2, ShieldCheck, AlertCircle, SlidersHorizontal,
-    Calculator, CheckCircle2, TrendingDown, Zap, Clock, ThumbsUp, ThumbsDown, Bell
+    Calculator, CheckCircle2, TrendingDown, Zap, Clock, ThumbsUp, ThumbsDown
 } from 'lucide-react';
 import { useAppContext } from '@/contexts/app-context';
 import { useNotifications } from './NotificationBell';

@@ -1,14 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Play, Pause, RotateCcw, Cpu, Thermometer, Wind, Droplets,
-    AlertTriangle, CheckCircle2, Clock, Users, Truck, HardHat,
-    Activity, Zap, BarChart3, Map, Calendar, TrendingUp
+    AlertTriangle, Clock, Users,
+    Activity, BarChart3, Map, TrendingUp
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 type SiteZone = {

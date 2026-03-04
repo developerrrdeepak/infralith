@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 import { GeometricReconstruction, RoomGeometry, WallGeometry } from '@/ai/flows/infralith/reconstruction-types';
 
 type CloudOperationResult = {

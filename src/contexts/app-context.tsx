@@ -1,12 +1,11 @@
 
 'use client';
-import { authService, resumeService, SignUpData, chatHistoryService, ChatSession, Message, userDbService, UserProfileData, evaluationService, infralithService } from '@/lib/services';
+import { authService, resumeService, SignUpData, chatHistoryService, ChatSession, Message, UserProfileData, evaluationService, infralithService } from '@/lib/services';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { runInfralithWorkflow } from '@/ai/flows/infralith/workflow-orchestrator';
-import { WorkflowResult } from '@/ai/flows/infralith/types';
 import { PIPELINE_STAGE_COUNT, PIPELINE_STAGE_ERROR } from '@/ai/flows/infralith/pipeline';
 import { auditLog } from '@/lib/audit-log';
 

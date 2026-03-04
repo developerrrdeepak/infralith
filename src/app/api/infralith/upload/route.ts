@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     }
 
     try {
-        const data = await req.json();
+        await req.json();
         console.log(`Blueprint upload triggered by ${session.user.name} (${session.user.email})`);
 
         // In a real app, this would trigger an Azure Function or Logic App

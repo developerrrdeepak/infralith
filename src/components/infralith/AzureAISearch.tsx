@@ -19,13 +19,12 @@ import {
     MessageCircle
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { searchCosmosDB } from '@/ai/flows/infralith/search-agent';
-import { motion, AnimatePresence } from 'framer-motion';
-import { cn } from '@/lib/utils';
+import { motion } from 'framer-motion';
 
 export default function AzureAISearchView() {
     const [query, setQuery] = useState('');

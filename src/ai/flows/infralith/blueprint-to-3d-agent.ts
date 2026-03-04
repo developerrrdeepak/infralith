@@ -2115,7 +2115,7 @@ const flattenDxfEntities = (parsed: any): FlattenedDxfEntity[] => {
   return flattened;
 };
 
-export async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
+async function processDxfTo3D(dxfContent: string): Promise<GeometricReconstruction> {
   const traceId = createTraceId('dxf');
   const startedAt = Date.now();
   traceLog('Infralith CAD Engine', traceId, '0/5', 'DXF parse request received', {
@@ -2295,7 +2295,7 @@ type CommandResult = {
 
 const KNOWN_DWG_CONVERTERS = ['dwg2dxf', 'dwgread', 'ODAFileConverter', 'TeighaFileConverter'] as const;
 
-export type CadPipelineCapabilities = {
+type CadPipelineCapabilities = {
   dxfSupported: boolean;
   dwgSupported: boolean;
   dwgResolver: 'env-template' | 'binary' | 'none';
@@ -2412,7 +2412,7 @@ async function fileExistsWithContent(filePath: string): Promise<boolean> {
   }
 }
 
-export async function getCadPipelineCapabilities(): Promise<CadPipelineCapabilities> {
+async function getCadPipelineCapabilities(): Promise<CadPipelineCapabilities> {
   const envTemplate = process.env.INFRALITH_DWG_TO_DXF_COMMAND?.trim();
   const availableConverters: string[] = [];
 

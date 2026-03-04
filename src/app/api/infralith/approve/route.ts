@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     }
 
     try {
-        const { approved, projectId } = await req.json();
+        const { approved } = await req.json();
         console.log(`Project ${approved ? 'Approval' : 'Rejection'} by ${session.user.name} (${session.user.email})`);
 
         // Log action to database for audit trail

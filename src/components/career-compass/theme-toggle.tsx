@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useAppContext } from '@/contexts/app-context';
 
 export default function ThemeToggle() {
-  const { theme, toggleTheme } = useAppContext();
+  const { toggleTheme } = useAppContext();
 
   return (
     <Button variant="ghost" size="icon" onClick={toggleTheme}>

@@ -1,10 +1,10 @@
 
 'use client';
 
-import { DollarSign, Clock, Users, Building, TrendingUp, Wallet } from 'lucide-react';
+import { DollarSign, Clock, Users, Building } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { cn } from '@/lib/utils';
 import { useAppContext } from '@/contexts/app-context';
 

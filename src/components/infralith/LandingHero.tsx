@@ -4,19 +4,11 @@
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { useAppContext } from '@/contexts/app-context';
-import { ShieldCheck, Zap, BarChart3, HardHat, ArrowRight, Newspaper, LineChart, FileText, Bot, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Zap, BarChart3, ArrowRight, Newspaper, LineChart, FileText, Bot, CheckCircle2 } from 'lucide-react';
 import Typewriter from '../career-compass/typewriter';
 import QuickTile from '../career-compass/quick-tile';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import TrendingNewsWidget from '../career-compass/trending-news-widget';
-
-const chartData = [
-    { name: 'Steel Index', value: 340 },
-    { name: 'Concrete', value: 210 },
-    { name: 'Labor Cost', value: 450 },
-    { name: 'Energy Index', value: 300 },
-    { name: 'Regulatory', value: 150 },
-];
 
 const mockNews = [
     {

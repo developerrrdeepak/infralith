@@ -10,7 +10,6 @@ import { Send, MessageCircle, AlertCircle, Check, Trash2, X, Plus, Image as Imag
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -23,7 +22,6 @@ export default function DMPage() {
   const [selectedChat, setSelectedChat] = useState<ChatSummary | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -140,7 +138,6 @@ export default function DMPage() {
         toast({ variant: 'destructive', title: 'Image too large', description: 'Please select an image smaller than 2MB' });
         return;
       }
-      setImageFile(file);
       const reader = new FileReader();
       reader.onloadend = () => setImagePreview(reader.result as string);
       reader.readAsDataURL(file);
@@ -150,7 +147,6 @@ export default function DMPage() {
   };
 
   const removeSelectedImage = () => {
-    setImageFile(null);
     setImagePreview(null);
   };
 
@@ -161,7 +157,6 @@ export default function DMPage() {
     const imgData = imagePreview;
 
     setNewMessage('');
-    setImageFile(null);
     setImagePreview(null);
 
     await dmService.sendMessage(

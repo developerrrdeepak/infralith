@@ -1,7 +1,6 @@
 'use client';
 import InfralithLayout from "@/components/career-compass/career-compass-layout";
 import PageLoader from "@/components/career-compass/page-loader";
-import TwinklingStars from "@/components/career-compass/twinkling-stars";
 import { useAppContext } from "@/contexts/app-context";
 
 export default function Home() {
