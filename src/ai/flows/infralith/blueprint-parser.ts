@@ -4,29 +4,29 @@ import { analyzeBlueprintDocument, generateAzureObject } from '@/ai/azure-ai';
 import { z } from 'zod';
 
 const blueprintParseSchema = z.object({
-    projectScope: z.string().optional(),
-    projectName: z.string().optional(),
-    totalFloors: z.union([z.number(), z.string()]).optional(),
-    floors: z.union([z.number(), z.string()]).optional(),
-    height: z.union([z.number(), z.string()]).optional(),
-    totalArea: z.union([z.number(), z.string()]).optional(),
-    area: z.union([z.number(), z.string()]).optional(),
-    seismicZone: z.string().optional(),
-    zone: z.string().optional(),
+    projectScope: z.string().nullable(),
+    projectName: z.string().nullable(),
+    totalFloors: z.union([z.number(), z.string()]).nullable(),
+    floors: z.union([z.number(), z.string()]).nullable(),
+    height: z.union([z.number(), z.string()]).nullable(),
+    totalArea: z.union([z.number(), z.string()]).nullable(),
+    area: z.union([z.number(), z.string()]).nullable(),
+    seismicZone: z.string().nullable(),
+    zone: z.string().nullable(),
     materials: z.array(
         z.object({
-            item: z.string().optional(),
-            name: z.string().optional(),
-            material: z.string().optional(),
-            quantity: z.union([z.number(), z.string()]).optional(),
-            amount: z.union([z.number(), z.string()]).optional(),
-            unit: z.string().optional(),
-            measurement: z.string().optional(),
-            spec: z.string().optional(),
-            specification: z.string().optional(),
-            standard: z.string().optional(),
+            item: z.string().nullable(),
+            name: z.string().nullable(),
+            material: z.string().nullable(),
+            quantity: z.union([z.number(), z.string()]).nullable(),
+            amount: z.union([z.number(), z.string()]).nullable(),
+            unit: z.string().nullable(),
+            measurement: z.string().nullable(),
+            spec: z.string().nullable(),
+            specification: z.string().nullable(),
+            standard: z.string().nullable(),
         })
-    ).optional(),
+    ).nullable(),
 });
 
 const MAX_OCR_CHARS_FOR_PROMPT = 24000;
@@ -319,13 +319,6 @@ export async function parseBlueprint(file: string | File) {
 
     const hints = extractHintsFromOcr(ocrText);
     const prompt = buildPrompt(trimOcr(ocrText), hints);
-
-    try {
-        const result = await generateAzureObject<z.infer<typeof blueprintParseSchema>>(prompt, blueprintParseSchema);
-        return normalizeResult(result, hints);
-    } catch (error) {
-        console.error('Blueprint Parser Error:', error);
-        // Keep workflow running by returning deterministic extraction when LLM call fails.
-        return normalizeResult(null, hints);
-    }
+    const result = await generateAzureObject<z.infer<typeof blueprintParseSchema>>(prompt, blueprintParseSchema);
+    return normalizeResult(result, hints);
 }

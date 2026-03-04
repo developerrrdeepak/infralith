@@ -59,6 +59,7 @@ const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
 const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 
 type LayoutHintMode = 'auto' | 'azure' | 'local' | 'hybrid';
+const MIN_LAYOUT_SIGNALS_REQUIRED = 1;
 
 const asBool = (value: string | undefined, fallback: boolean): boolean => {
   if (value == null || value.trim() === '') return fallback;
@@ -2359,6 +2360,19 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       source: localLayoutHints ? 'local' : 'none',
       ...summarizeLayoutHints(layoutHints),
     });
+  }
+  const lineSignalCount = layoutHints?.linePolygons?.length || 0;
+  const dimensionSignalCount = layoutHints?.dimensionAnchors?.length || 0;
+  const totalLayoutSignals = lineSignalCount + dimensionSignalCount;
+  if (!layoutHints || totalLayoutSignals < MIN_LAYOUT_SIGNALS_REQUIRED) {
+    const message = 'Layout parsing failed: no usable line/dimension signals extracted. Please upload a clearer plan or check OCR/layout services.';
+    traceLog('Infralith Vision Engine', traceId, '1/9', message, {
+      hasLayoutHints: !!layoutHints,
+      lineSignals: lineSignalCount,
+      dimensionSignals: dimensionSignalCount,
+      mode: layoutHintMode,
+    }, 'error');
+    throw new Error(message);
   }
   // STAGE 2: Send image + layout hints to the AI Vision model
   const prompt = buildBlueprintVisionPrompt(layoutHints);

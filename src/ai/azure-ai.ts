@@ -466,38 +466,350 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
 /**
  * Analyze Document using Document Intelligence (OCR)
  */
-export async function analyzeBlueprintDocument(_file: string | File | ArrayBuffer): Promise<string> {
-    const client = getDocumentClient();
-    if (!client) {
-        console.warn("Azure Document Intelligence credentials missing. Returning simulated OCR text.");
-        return `
-            PROJECT: Project Alpha Commercial
-            FLOORS: 40
-            BUILDING HEIGHT: 160m
-            TOTAL AREA: 120000 sqm
-            SEISMIC ZONE: IV
-            MATERIAL BILL OF QUANTITIES:
-            - High-Tensile Steel | 6000 Tons | FE-500D
-            - Ready-Mix Concrete | 45000 CUM | M40
-        `;
+const DATA_URL_PREFIX = /^data:/i;
+const HTTP_URL_PREFIX = /^https?:\/\//i;
+const LEGACY_DOC_EXTENSION = '.doc';
+const DOCUMENT_TEXT_LIMIT = 180_000;
+
+type PreparedDocumentInput =
+    | { kind: 'text'; text: string; source: string; }
+    | {
+        kind: 'binary';
+        source: string;
+        fileName: string;
+        extension: string;
+        mimeType: string;
+        buffer?: Buffer;
+        url?: string;
+    };
+
+const normalizeDocumentText = (value: string, maxChars = DOCUMENT_TEXT_LIMIT): string => {
+    const normalized = String(value || '')
+        .replace(/\r/g, '')
+        .replace(/\t/g, ' ')
+        .replace(/[ \u00A0]{2,}/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    if (normalized.length <= maxChars) return normalized;
+    return `${normalized.slice(0, maxChars)}\n...[TEXT TRIMMED]...`;
+};
+
+const getErrorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : String(error);
+
+const isMissingModuleError = (message: string) =>
+    /module not found|cannot find module|err_module_not_found|can't resolve/i.test(message);
+
+const dynamicImportModule = async (modulePath: string): Promise<any> => {
+    const importer = new Function('modulePath', 'return import(modulePath);') as (modulePath: string) => Promise<any>;
+    return importer(modulePath);
+};
+
+const extractExtension = (fileName: string): string => {
+    const lower = fileName.toLowerCase();
+    const idx = lower.lastIndexOf('.');
+    return idx >= 0 ? lower.slice(idx) : '';
+};
+
+const inferMimeTypeFromExtension = (extension: string): string => {
+    switch (extension.toLowerCase()) {
+        case '.pdf': return 'application/pdf';
+        case '.docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        case '.png': return 'image/png';
+        case '.jpg':
+        case '.jpeg': return 'image/jpeg';
+        case '.webp': return 'image/webp';
+        case '.bmp': return 'image/bmp';
+        case '.tif':
+        case '.tiff': return 'image/tiff';
+        case '.txt': return 'text/plain';
+        case '.html':
+        case '.htm': return 'text/html';
+        default: return '';
+    }
+};
+
+const parseDataUrlMimeType = (value: string): string => {
+    const match = value.match(/^data:([^;,]+)[;,]/i);
+    return match?.[1]?.toLowerCase() || '';
+};
+
+const stripDataUrlBase64 = (value: string): string => {
+    const marker = 'base64,';
+    const index = value.indexOf(marker);
+    if (index === -1) return value;
+    return value.slice(index + marker.length);
+};
+
+const isPdfInput = (mimeType: string, extension: string, buffer?: Buffer) => {
+    if (mimeType.includes('application/pdf') || extension === '.pdf') return true;
+    return !!buffer && buffer.length >= 5 && buffer.slice(0, 5).toString('utf8') === '%PDF-';
+};
+
+const isDocxInput = (mimeType: string, extension: string, buffer?: Buffer) => {
+    if (extension === '.docx') return true;
+    if (mimeType.includes('wordprocessingml.document')) return true;
+    if (!buffer || buffer.length < 4) return false;
+    return buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04;
+};
+
+const isImageInput = (mimeType: string, extension: string) => {
+    if (mimeType.startsWith('image/')) return true;
+    return ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff'].includes(extension);
+};
+
+const isPlainTextInput = (mimeType: string, extension: string) => {
+    if (mimeType.startsWith('text/')) return true;
+    return ['.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm'].includes(extension);
+};
+
+const fileNameFromUrl = (url: string) => {
+    try {
+        const parsed = new URL(url);
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        return segments[segments.length - 1] || 'remote-document';
+    } catch {
+        return 'remote-document';
+    }
+};
+
+const prepareDocumentInput = async (input: string | File | ArrayBuffer): Promise<PreparedDocumentInput> => {
+    if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!trimmed) {
+            throw new Error('Blueprint input is empty.');
+        }
+        if (HTTP_URL_PREFIX.test(trimmed)) {
+            const fileName = fileNameFromUrl(trimmed);
+            const extension = extractExtension(fileName);
+            return {
+                kind: 'binary',
+                source: 'url',
+                url: trimmed,
+                fileName,
+                extension,
+                mimeType: inferMimeTypeFromExtension(extension),
+            };
+        }
+        if (DATA_URL_PREFIX.test(trimmed)) {
+            const mimeType = parseDataUrlMimeType(trimmed);
+            const extension = extractExtension(`payload.${mimeType.split('/')[1] || ''}`);
+            return {
+                kind: 'binary',
+                source: 'data-url',
+                fileName: `upload${extension}`,
+                extension,
+                mimeType,
+                buffer: Buffer.from(stripDataUrlBase64(trimmed), 'base64'),
+            };
+        }
+        return {
+            kind: 'text',
+            source: 'raw-string',
+            text: normalizeDocumentText(trimmed),
+        };
     }
 
-    try {
-        console.log(`[Azure Document Intelligence] Analyzing document...`);
-        // If file is a string like a URL, or arraybuffer, handle accordingly, 
-        // Here we just simulate since it's a mock implementation.
-        return `
-            PROJECT: Project Alpha Commercial
-            FLOORS: 40
-            BUILDING HEIGHT: 160m
-            TOTAL AREA: 120000 sqm
-            SEISMIC ZONE: IV
-            MATERIAL BILL OF QUANTITIES:
-            - High-Tensile Steel | 6000 Tons | FE-500D
-            - Ready-Mix Concrete | 45000 CUM | M40
-        `;
-    } catch (e: any) {
-        console.error(`[Azure Document Intelligence] Failed: ${e?.message || e}. Falling back to simulation.`);
-        return "Simulated OCR Data: 40 Floors, 120000 Sqm, Seismic Zone IV.";
+    if (typeof File !== 'undefined' && input instanceof File) {
+        const fileName = input.name || 'upload.bin';
+        const extension = extractExtension(fileName);
+        const mimeType = (input.type || inferMimeTypeFromExtension(extension)).toLowerCase();
+        const buffer = Buffer.from(await input.arrayBuffer());
+        return {
+            kind: 'binary',
+            source: 'file',
+            fileName,
+            extension,
+            mimeType,
+            buffer,
+        };
     }
+
+    const buffer = Buffer.from(input as ArrayBuffer);
+    return {
+        kind: 'binary',
+        source: 'array-buffer',
+        fileName: 'upload.bin',
+        extension: '',
+        mimeType: '',
+        buffer,
+    };
+};
+
+const collectTextFromLayoutResult = (result: any): string => {
+    const pages = Array.isArray(result?.pages) ? result.pages : [];
+    const tables = Array.isArray(result?.tables) ? result.tables : [];
+    const chunks: string[] = [];
+
+    for (const page of pages) {
+        const pageNumber = Number(page?.pageNumber || 0);
+        const lines = Array.isArray(page?.lines) ? page.lines : [];
+        const lineTexts = lines
+            .map((line: any) => String(line?.content || '').trim())
+            .filter(Boolean);
+
+        if (lineTexts.length > 0) {
+            chunks.push(`PAGE ${pageNumber || chunks.length + 1}`);
+            chunks.push(...lineTexts);
+        }
+
+        const pageTables = tables.filter((table: any) =>
+            Array.isArray(table?.boundingRegions) &&
+            table.boundingRegions.some((region: any) => Number(region?.pageNumber || 0) === pageNumber)
+        );
+
+        pageTables.forEach((table: any, tableIndex: number) => {
+            const rowCount = Math.max(1, Number(table?.rowCount || 0));
+            const rows: string[][] = Array.from({ length: rowCount }, () => []);
+            const cells = Array.isArray(table?.cells) ? table.cells : [];
+
+            for (const cell of cells) {
+                const rowIndex = Number(cell?.rowIndex || 0);
+                const columnIndex = Number(cell?.columnIndex || 0);
+                if (!rows[rowIndex]) rows[rowIndex] = [];
+                rows[rowIndex][columnIndex] = String(cell?.content || '').replace(/\s+/g, ' ').trim();
+            }
+
+            const renderedRows = rows
+                .map((row) => row.filter((value) => value != null && value !== '').join(' | '))
+                .filter(Boolean);
+
+            if (renderedRows.length > 0) {
+                chunks.push(`TABLE ${tableIndex + 1} PAGE ${pageNumber || chunks.length + 1}`);
+                chunks.push(...renderedRows);
+            }
+        });
+    }
+
+    if (chunks.length > 0) {
+        return normalizeDocumentText(chunks.join('\n'));
+    }
+
+    return normalizeDocumentText(String(result?.content || ''));
+};
+
+const extractPdfTextLocally = async (buffer: Buffer): Promise<string | null> => {
+    try {
+        const module: any = await import('pdf-parse');
+        const parse = module?.default || module;
+        if (typeof parse !== 'function') return null;
+        const parsed = await parse(buffer);
+        const text = normalizeDocumentText(String(parsed?.text || ''));
+        return text || null;
+    } catch (error) {
+        const message = getErrorMessage(error);
+        if (isMissingModuleError(message)) return null;
+        throw error;
+    }
+};
+
+const extractDocxTextLocally = async (buffer: Buffer): Promise<string | null> => {
+    try {
+        const module: any = await import('mammoth');
+        const mammoth = module?.default || module;
+        if (typeof mammoth?.extractRawText !== 'function') return null;
+        const result = await mammoth.extractRawText({ buffer });
+        const text = normalizeDocumentText(String(result?.value || ''));
+        return text || null;
+    } catch (error) {
+        const message = getErrorMessage(error);
+        if (isMissingModuleError(message)) return null;
+        throw error;
+    }
+};
+
+const extractImageTextLocally = async (buffer: Buffer): Promise<string | null> => {
+    try {
+        const module: any = await dynamicImportModule('tesseract.js');
+        const recognize = module?.recognize || module?.default?.recognize;
+        if (typeof recognize !== 'function') return null;
+        const result = await recognize(buffer, 'eng', { logger: () => undefined });
+        const text = normalizeDocumentText(String(result?.data?.text || ''));
+        if (text) return text;
+
+        const lines = Array.isArray(result?.data?.lines) ? result.data.lines : [];
+        const fallbackText = normalizeDocumentText(
+            lines.map((line: any) => String(line?.text || '').trim()).filter(Boolean).join('\n')
+        );
+        return fallbackText || null;
+    } catch (error) {
+        const message = getErrorMessage(error);
+        if (isMissingModuleError(message)) return null;
+        throw error;
+    }
+};
+
+const extractTextLocally = async (input: Extract<PreparedDocumentInput, { kind: 'binary'; }>): Promise<string | null> => {
+    const mimeType = (input.mimeType || '').toLowerCase();
+    const extension = (input.extension || '').toLowerCase();
+    const buffer = input.buffer;
+
+    if (extension === LEGACY_DOC_EXTENSION) {
+        throw new Error('Legacy .doc files are not supported for reliable parsing. Convert to .docx or PDF.');
+    }
+    if (!buffer || buffer.length === 0) return null;
+
+    if (isPdfInput(mimeType, extension, buffer)) {
+        return extractPdfTextLocally(buffer);
+    }
+    if (isDocxInput(mimeType, extension, buffer)) {
+        return extractDocxTextLocally(buffer);
+    }
+    if (isImageInput(mimeType, extension)) {
+        return extractImageTextLocally(buffer);
+    }
+    if (isPlainTextInput(mimeType, extension)) {
+        return normalizeDocumentText(buffer.toString('utf8'));
+    }
+    return null;
+};
+
+export async function analyzeBlueprintDocument(file: string | File | ArrayBuffer): Promise<string> {
+    const prepared = await prepareDocumentInput(file);
+    if (prepared.kind === 'text') {
+        return prepared.text;
+    }
+
+    const client = getDocumentClient();
+    let azureError: unknown = null;
+
+    if (client) {
+        try {
+            const startedAt = Date.now();
+            const poller = prepared.url
+                ? await client.beginAnalyzeDocumentFromUrl('prebuilt-layout', prepared.url)
+                : await client.beginAnalyzeDocument('prebuilt-layout', prepared.buffer as Buffer);
+            const result: any = await poller.pollUntilDone();
+            const text = collectTextFromLayoutResult(result);
+            if (text) {
+                console.log('[Azure Document Intelligence] OCR extraction complete', {
+                    source: prepared.source,
+                    fileName: prepared.fileName,
+                    chars: text.length,
+                    durationMs: Date.now() - startedAt,
+                });
+                return text;
+            }
+            throw new Error('Layout analysis completed but no text content was extracted.');
+        } catch (error) {
+            azureError = error;
+            console.warn('[Azure Document Intelligence] OCR extraction failed', {
+                source: prepared.source,
+                fileName: prepared.fileName,
+                error: getErrorMessage(error),
+            });
+        }
+    } else {
+        console.warn('[Azure Document Intelligence] credentials missing. Attempting local OCR/text extraction fallback.');
+    }
+
+    const localText = await extractTextLocally(prepared);
+    if (localText) {
+        return localText;
+    }
+
+    const azureMessage = azureError ? ` Azure error: ${getErrorMessage(azureError)}` : '';
+    throw new Error(
+        `Unable to extract blueprint text from "${prepared.fileName}". Configure Azure Document Intelligence credentials or upload a parsable PDF/DOCX/image.${azureMessage}`
+    );
 }
