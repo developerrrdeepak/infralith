@@ -89,6 +89,148 @@ const traceLog = (
     data === undefined ? console.log(prefix) : console.log(prefix, data);
 };
 
+const ERROR_TEXT_SCAN_LIMIT = 260_000;
+
+type JsonCandidate = {
+    text: string;
+    strategy: string;
+};
+
+const extractErrorText = (error: unknown): string => {
+    const candidate = (error as any)?.text;
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
+    const nested = (error as any)?.responseBody;
+    if (typeof nested === "string" && nested.trim()) return nested;
+    return "";
+};
+
+const stripMarkdownCodeFence = (text: string): string => {
+    const trimmed = text.trim();
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) return fenced[1].trim();
+    return trimmed;
+};
+
+const firstJsonStartIndex = (text: string): number => {
+    const obj = text.indexOf("{");
+    const arr = text.indexOf("[");
+    if (obj === -1) return arr;
+    if (arr === -1) return obj;
+    return Math.min(obj, arr);
+};
+
+const extractBalancedJsonCandidate = (text: string): JsonCandidate | null => {
+    const start = firstJsonStartIndex(text);
+    if (start < 0) return null;
+
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch === "\\") {
+                escaped = true;
+                continue;
+            }
+            if (ch === "\"") inString = false;
+            continue;
+        }
+        if (ch === "\"") {
+            inString = true;
+            continue;
+        }
+        if (ch === "{") {
+            stack.push("}");
+            continue;
+        }
+        if (ch === "[") {
+            stack.push("]");
+            continue;
+        }
+        if (ch === "}" || ch === "]") {
+            if (!stack.length) continue;
+            const expected = stack.pop();
+            if (expected !== ch) return null;
+            if (stack.length === 0) {
+                end = i;
+                break;
+            }
+        }
+    }
+
+    if (end >= start) {
+        return {
+            text: text.slice(start, end + 1),
+            strategy: "balanced-extract",
+        };
+    }
+
+    if (!stack.length) return null;
+    let suffix = "";
+    while (stack.length) suffix += stack.pop();
+    return {
+        text: `${text.slice(start).trimEnd()}${suffix}`,
+        strategy: "balanced-autoclose",
+    };
+};
+
+const parseCandidateWithSchema = <T>(candidate: string, schema: z.ZodTypeAny): T | null => {
+    try {
+        const parsed = JSON.parse(candidate);
+        const validated = schema.safeParse(parsed);
+        if (!validated.success) return null;
+        return validated.data as T;
+    } catch {
+        return null;
+    }
+};
+
+const recoverStructuredObjectFromErrorText = <T>(
+    error: unknown,
+    schema: z.ZodTypeAny,
+    component: string,
+    traceId: string
+): T | null => {
+    const rawText = extractErrorText(error);
+    if (!rawText) return null;
+
+    const capped = rawText.length > ERROR_TEXT_SCAN_LIMIT ? rawText.slice(0, ERROR_TEXT_SCAN_LIMIT) : rawText;
+    const stripped = stripMarkdownCodeFence(capped);
+    const candidates: JsonCandidate[] = [];
+    const balanced = extractBalancedJsonCandidate(stripped);
+    if (balanced) candidates.push(balanced);
+    if (stripped) candidates.push({ text: stripped, strategy: "raw-text" });
+
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+        const normalized = candidate.text.trim();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        const recovered = parseCandidateWithSchema<T>(normalized, schema);
+        if (!recovered) continue;
+        traceLog(component, traceId, "recovery", "recovered structured object from malformed model output", {
+            strategy: candidate.strategy,
+            rawChars: rawText.length,
+            usedChars: normalized.length,
+        }, "warn");
+        return recovered;
+    }
+    return null;
+};
+
+const VISION_SYSTEM_PROMPT =
+    "You are an expert Architectural Intelligence Agent. Return exactly one valid JSON object that strictly matches the provided schema. No markdown, no comments, no prose, and no trailing characters.";
+
+const TEXT_SYSTEM_PROMPT =
+    "You are an expert Engineering Intelligence Agent. Return exactly one valid JSON object that strictly matches the provided schema. No markdown, no comments, no prose, and no trailing characters.";
+
 const toFlatPolygon = (polygon: any): number[] => {
     if (!Array.isArray(polygon)) return [];
     if (polygon.length > 0 && typeof polygon[0] === 'number') {
@@ -366,6 +508,7 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
         });
 
         let lastError: unknown = null;
+        const schema = dynamicSchema || GeometricReconstructionSchema;
         for (let i = 0; i < deploymentOrder.length; i++) {
             const deployment = deploymentOrder[i];
             const isRouter = deployment === routerDeploymentName;
@@ -379,9 +522,9 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
             try {
                 const result = await generateObject({
                     model: getAzureModel(true, deployment),
-                    schema: dynamicSchema || GeometricReconstructionSchema,
+                    schema,
                     temperature: 0.1, // Reduced to prevent unclosed JSON from hallucinated extreme details
-                    system: "You are an expert Architectural Intelligence Agent. Generate a precise JSON reconstruction of the project.",
+                    system: VISION_SYSTEM_PROMPT,
                     messages: [
                         {
                             role: "user",
@@ -398,6 +541,18 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
                 traceLog("Azure Vision via AI SDK", traceId, "4/4", "returning structured object");
                 return result.object as unknown as T;
             } catch (error: any) {
+                const recovered = recoverStructuredObjectFromErrorText<T>(
+                    error,
+                    schema,
+                    "Azure Vision via AI SDK",
+                    traceId
+                );
+                if (recovered) {
+                    const durationMs = Date.now() - startedAt;
+                    traceLog("Azure Vision via AI SDK", traceId, "3/4", `response recovered in ${durationMs}ms`, summarizeStructured(recovered as any));
+                    traceLog("Azure Vision via AI SDK", traceId, "4/4", "returning recovered structured object");
+                    return recovered;
+                }
                 lastError = error;
                 const canRetry = i < deploymentOrder.length - 1 && isDeploymentLookupError(error);
                 if (!canRetry) throw error;
@@ -437,6 +592,7 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
         });
 
         let lastError: unknown = null;
+        const schema = dynamicSchema || GeometricReconstructionSchema;
         for (let i = 0; i < deploymentOrder.length; i++) {
             const deployment = deploymentOrder[i];
             const isRouter = deployment === routerDeploymentName;
@@ -450,9 +606,9 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
             try {
                 const result = await generateObject({
                     model: getAzureModel(false, deployment),
-                    schema: dynamicSchema || GeometricReconstructionSchema,
+                    schema,
                     temperature: 0.2, // Lower variety for strict structured output without hallucinated massive structures
-                    system: "You are an expert Engineering Intelligence Agent. Generate a precise JSON analysis or reconstruction based on the input context.",
+                    system: TEXT_SYSTEM_PROMPT,
                     prompt: prompt
                 });
 
@@ -461,6 +617,18 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
                 traceLog("Azure AI SDK", traceId, "3/3", "returning structured object");
                 return result.object as unknown as T;
             } catch (error: any) {
+                const recovered = recoverStructuredObjectFromErrorText<T>(
+                    error,
+                    schema,
+                    "Azure AI SDK",
+                    traceId
+                );
+                if (recovered) {
+                    const durationMs = Date.now() - startedAt;
+                    traceLog("Azure AI SDK", traceId, "2/3", `response recovered in ${durationMs}ms`, summarizeStructured(recovered as any));
+                    traceLog("Azure AI SDK", traceId, "3/3", "returning recovered structured object");
+                    return recovered;
+                }
                 lastError = error;
                 const canRetry = i < deploymentOrder.length - 1 && isDeploymentLookupError(error);
                 if (!canRetry) throw error;

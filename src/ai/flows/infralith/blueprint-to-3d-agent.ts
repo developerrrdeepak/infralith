@@ -133,6 +133,107 @@ const collectFloorKeysFromText = (rawText: string): string[] => {
   return [...detected];
 };
 
+type PolygonBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
+const toPolygonBounds = (polygon: number[]): PolygonBounds | null => {
+  if (!Array.isArray(polygon) || polygon.length < 4) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let seen = false;
+  for (let i = 0; i + 1 < polygon.length; i += 2) {
+    const x = Number(polygon[i]);
+    const y = Number(polygon[i + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    seen = true;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  if (!seen) return null;
+  return { minX, maxX, minY, maxY };
+};
+
+type AxisRange = { min: number; max: number; };
+
+const estimateBandCountFromRanges = (ranges: AxisRange[], span: number): number => {
+  if (ranges.length < 8 || !Number.isFinite(span) || span <= 0) return 0;
+  const sorted = [...ranges].sort((a, b) => a.min - b.min);
+  const lengths = sorted
+    .map((entry) => Math.max(0, entry.max - entry.min))
+    .sort((a, b) => a - b);
+  const medianLength = lengths[Math.floor(lengths.length / 2)] || 0;
+  const gapThreshold = Math.max(span * 0.08, medianLength * 2.2, 14);
+  const clusterMinSpan = Math.max(span * 0.12, 24);
+  const clusterMinCount = Math.max(4, Math.ceil(sorted.length * 0.14));
+
+  const clusters: Array<{ min: number; max: number; count: number; }> = [];
+  for (const range of sorted) {
+    const current = clusters[clusters.length - 1];
+    if (!current) {
+      clusters.push({ min: range.min, max: range.max, count: 1 });
+      continue;
+    }
+    if (range.min <= current.max + gapThreshold) {
+      current.max = Math.max(current.max, range.max);
+      current.count += 1;
+      continue;
+    }
+    clusters.push({ min: range.min, max: range.max, count: 1 });
+  }
+
+  const significant = clusters.filter((cluster) => {
+    const clusterSpan = Math.max(0, cluster.max - cluster.min);
+    return cluster.count >= clusterMinCount && clusterSpan >= clusterMinSpan;
+  });
+
+  return significant.length;
+};
+
+const inferPanelCountFromLineGeometry = (layoutHints: BlueprintLayoutHints | null): number => {
+  if (!layoutHints) return 0;
+  const bounds = (layoutHints.linePolygons || [])
+    .map((polygon) => toPolygonBounds(polygon))
+    .filter((entry): entry is PolygonBounds => !!entry);
+  if (bounds.length < 10) return 0;
+
+  const minX = Math.min(...bounds.map((b) => b.minX));
+  const maxX = Math.max(...bounds.map((b) => b.maxX));
+  const minY = Math.min(...bounds.map((b) => b.minY));
+  const maxY = Math.max(...bounds.map((b) => b.maxY));
+  const inferredWidth = Math.max(1, maxX - minX);
+  const inferredHeight = Math.max(1, maxY - minY);
+
+  const pageWidth = Math.max(
+    inferredWidth,
+    ...((layoutHints.pages || []).map((page) => Number(page?.width) || 0))
+  );
+  const pageHeight = Math.max(
+    inferredHeight,
+    ...((layoutHints.pages || []).map((page) => Number(page?.height) || 0))
+  );
+
+  const verticalBands = estimateBandCountFromRanges(
+    bounds.map((b) => ({ min: b.minY, max: b.maxY })),
+    pageHeight
+  );
+  const horizontalBands = estimateBandCountFromRanges(
+    bounds.map((b) => ({ min: b.minX, max: b.maxX })),
+    pageWidth
+  );
+
+  const inferred = Math.max(verticalBands, horizontalBands);
+  if (inferred < 2) return 0;
+  return Math.min(inferred, 8);
+};
+
 const asBool = (value: string | undefined, fallback: boolean): boolean => {
   if (value == null || value.trim() === '') return fallback;
   const normalized = value.trim().toLowerCase();
@@ -329,7 +430,9 @@ const inferExpectedFloorCountFromHints = (layoutHints: BlueprintLayoutHints | nu
       detected.add(floorKey);
     }
   }
-  return detected.size;
+  const labelDrivenCount = detected.size;
+  const geometryDrivenCount = inferPanelCountFromLineGeometry(layoutHints);
+  return Math.max(labelDrivenCount, geometryDrivenCount);
 };
 
 const inferOpeningSignalCountFromHints = (layoutHints: BlueprintLayoutHints | null): number => {
