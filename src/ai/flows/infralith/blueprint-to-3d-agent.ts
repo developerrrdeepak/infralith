@@ -290,6 +290,332 @@ const estimateResultFloorCount = (result: GeometricReconstruction): number => {
   return Math.max(hinted, fromGeometry);
 };
 
+const toFloorBucket = (value: unknown): number => {
+  const parsed = toFiniteScalar(value);
+  if (parsed == null) return 0;
+  return Math.max(0, Math.round(parsed));
+};
+
+const roomPolygonSignature = (points: [number, number][] | null | undefined): string => {
+  if (!Array.isArray(points) || points.length < 3) return 'na';
+  const xs = points.map((pt) => Number(pt?.[0]));
+  const ys = points.map((pt) => Number(pt?.[1]));
+  if (xs.some((v) => !Number.isFinite(v)) || ys.some((v) => !Number.isFinite(v))) return 'na';
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const area = Math.abs(polygonArea(points));
+  return `${(maxX - minX).toFixed(2)}x${(maxY - minY).toFixed(2)}|${area.toFixed(2)}`;
+};
+
+type FloorComplexity = {
+  level: number;
+  walls: number;
+  interiorWalls: number;
+  rooms: number;
+  doors: number;
+  windows: number;
+};
+
+const collectFloorComplexity = (result: GeometricReconstruction): FloorComplexity[] => {
+  const levels = new Map<number, FloorComplexity>();
+  const ensure = (levelValue: unknown): FloorComplexity => {
+    const level = toFloorBucket(levelValue);
+    const existing = levels.get(level);
+    if (existing) return existing;
+    const created: FloorComplexity = {
+      level,
+      walls: 0,
+      interiorWalls: 0,
+      rooms: 0,
+      doors: 0,
+      windows: 0,
+    };
+    levels.set(level, created);
+    return created;
+  };
+
+  for (const wall of result?.walls || []) {
+    const bucket = ensure(wall?.floor_level);
+    bucket.walls += 1;
+    if (wall?.is_exterior === false) bucket.interiorWalls += 1;
+  }
+  for (const room of result?.rooms || []) ensure(room?.floor_level).rooms += 1;
+  for (const door of result?.doors || []) ensure(door?.floor_level).doors += 1;
+  for (const win of result?.windows || []) ensure(win?.floor_level).windows += 1;
+
+  if (levels.size === 0) {
+    return [{
+      level: 0,
+      walls: 0,
+      interiorWalls: 0,
+      rooms: 0,
+      doors: 0,
+      windows: 0,
+    }];
+  }
+
+  return [...levels.values()].sort((a, b) => a.level - b.level);
+};
+
+const isLikelySparseMultiFloorShell = (
+  result: GeometricReconstruction,
+  floorSignals: number
+): boolean => {
+  if (floorSignals < 2) return false;
+  const inferredFloorCount = estimateResultFloorCount(result);
+  if (inferredFloorCount < 2) return false;
+
+  const floorStats = collectFloorComplexity(result);
+  if (floorStats.length < 2) return false;
+
+  const sparseFloorCount = floorStats.filter((stats) =>
+    stats.walls <= 5 &&
+    stats.interiorWalls <= 1 &&
+    stats.rooms <= 1 &&
+    stats.doors === 0 &&
+    stats.windows === 0
+  ).length;
+  const interiorWallTotal = floorStats.reduce((sum, stats) => sum + stats.interiorWalls, 0);
+  const roomSignatures = new Set((result?.rooms || []).map((room) => roomPolygonSignature(room?.polygon || [])));
+  const repeatedRoomFootprints = roomSignatures.size <= Math.max(1, Math.floor((result?.rooms?.length || 0) / 2));
+  const tooFewRoomsForMultiFloor = (result?.rooms?.length || 0) <= floorStats.length + 1;
+
+  return (
+    sparseFloorCount >= Math.ceil(floorStats.length * 0.66) &&
+    interiorWallTotal <= Math.max(2, floorStats.length) &&
+    repeatedRoomFootprints &&
+    tooFewRoomsForMultiFloor
+  );
+};
+
+const scoreReconstructionDensity = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null
+): number => {
+  const wallCount = result?.walls?.length || 0;
+  const roomCount = result?.rooms?.length || 0;
+  const doorCount = result?.doors?.length || 0;
+  const windowCount = result?.windows?.length || 0;
+  const floorSignals = estimateFloorHintCount(layoutHints);
+  const inferredFloorCount = estimateResultFloorCount(result);
+  const highConflicts = (result?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
+  const scaleConfidence = toFiniteScalar(result?.meta?.scale_confidence) ?? 0;
+  const topology = result?.topology_checks;
+
+  let score = 0;
+  score += Math.min(32, wallCount * 2.2);
+  score += Math.min(28, roomCount * 4);
+  score += Math.min(12, doorCount * 1.2 + windowCount * 0.9);
+  score += Math.min(8, scaleConfidence * 8);
+
+  if (floorSignals >= 2) {
+    const targetFloors = Math.min(4, floorSignals);
+    if (inferredFloorCount >= targetFloors) score += 8;
+  }
+
+  if (topology?.closed_wall_loops === true) score += 3;
+  if ((topology?.dangling_walls ?? 0) === 0) score += 2;
+  if ((topology?.unhosted_openings ?? 0) === 0) score += 2;
+  if (topology?.room_polygon_validity_pass === true) score += 2;
+
+  if (isLikelyRectangularFallback(result)) score -= 20;
+  if (isLikelySparseMultiFloorShell(result, floorSignals)) score -= 24;
+  score -= Math.min(16, highConflicts * 5);
+
+  return Math.round(score * 100) / 100;
+};
+
+const getOpeningCount = (result: GeometricReconstruction): number =>
+  (result?.doors?.length || 0) + (result?.windows?.length || 0);
+
+const asPoint2D = (value: unknown): [number, number] | null => {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const x = Number(value[0]);
+  const y = Number(value[1]);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return [x, y];
+};
+
+const pointToSegmentDistance = (
+  point: [number, number],
+  start: [number, number],
+  end: [number, number]
+): number => {
+  const [px, py] = point;
+  const [x1, y1] = start;
+  const [x2, y2] = end;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const l2 = dx * dx + dy * dy;
+  if (l2 <= 1e-9) return Math.hypot(px - x1, py - y1);
+
+  let t = ((px - x1) * dx + (py - y1) * dy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = x1 + t * dx;
+  const cy = y1 + t * dy;
+  return Math.hypot(px - cx, py - cy);
+};
+
+const resolveNearestWallId = (
+  payload: GeometricReconstruction,
+  position: [number, number],
+  preferredFloor: number
+): string | number | null => {
+  const walls = payload?.walls || [];
+  if (walls.length === 0) return null;
+  const sameFloor = walls.filter((wall) => toFloorBucket(wall?.floor_level) === preferredFloor);
+  const candidates = sameFloor.length > 0 ? sameFloor : walls;
+
+  let best: { id: string | number; distance: number } | null = null;
+  for (const wall of candidates) {
+    const start = asPoint2D(wall?.start);
+    const end = asPoint2D(wall?.end);
+    if (!start || !end) continue;
+    const distance = pointToSegmentDistance(position, start, end);
+    if (!Number.isFinite(distance)) continue;
+    if (!best || distance < best.distance) {
+      best = { id: wall.id, distance };
+    }
+  }
+
+  if (!best) return null;
+  const tolerance = 1.2;
+  return best.distance <= tolerance ? best.id : null;
+};
+
+const buildUniqueId = (existing: Set<string>, base: string): string => {
+  let candidate = base;
+  let idx = 1;
+  while (existing.has(candidate)) {
+    candidate = `${base}-${idx}`;
+    idx += 1;
+  }
+  existing.add(candidate);
+  return candidate;
+};
+
+const mergeOpeningsFromRecovery = (
+  base: GeometricReconstruction,
+  recovered: GeometricReconstruction
+): GeometricReconstruction => {
+  const wallIdSet = new Set((base?.walls || []).map((wall) => String(wall.id)));
+  const doorIds = new Set((base?.doors || []).map((door) => String(door.id)));
+  const windowIds = new Set((base?.windows || []).map((win) => String(win.id)));
+
+  const mergedDoors = [...(base?.doors || [])];
+  const mergedWindows = [...(base?.windows || [])];
+  const seenDoorKeys = new Set(
+    mergedDoors.map((door) => {
+      const floor = toFloorBucket(door?.floor_level);
+      const point = asPoint2D(door?.position) || [0, 0];
+      const width = toFiniteScalar(door?.width) ?? 0;
+      const height = toFiniteScalar(door?.height) ?? 0;
+      return `${floor}|${String(door?.host_wall_id)}|${point[0].toFixed(2)}|${point[1].toFixed(2)}|${width.toFixed(2)}|${height.toFixed(2)}`;
+    })
+  );
+  const seenWindowKeys = new Set(
+    mergedWindows.map((win) => {
+      const floor = toFloorBucket(win?.floor_level);
+      const point = asPoint2D(win?.position) || [0, 0];
+      const width = toFiniteScalar(win?.width) ?? 0;
+      const sill = toFiniteScalar(win?.sill_height) ?? 0;
+      return `${floor}|${String(win?.host_wall_id)}|${point[0].toFixed(2)}|${point[1].toFixed(2)}|${width.toFixed(2)}|${sill.toFixed(2)}`;
+    })
+  );
+
+  for (const door of recovered?.doors || []) {
+    const position = asPoint2D(door?.position);
+    const width = toFiniteScalar(door?.width);
+    const height = toFiniteScalar(door?.height);
+    if (!position || width == null || height == null || width <= 0.2 || height <= 0.8) continue;
+
+    const floorLevel = toFloorBucket(door?.floor_level);
+    let hostWallId: string | number | null = null;
+    if (door?.host_wall_id != null && wallIdSet.has(String(door.host_wall_id))) {
+      hostWallId = door.host_wall_id;
+    } else {
+      hostWallId = resolveNearestWallId(base, position, floorLevel);
+    }
+    if (hostWallId == null) continue;
+
+    const dedupeKey = `${floorLevel}|${String(hostWallId)}|${position[0].toFixed(2)}|${position[1].toFixed(2)}|${width.toFixed(2)}|${height.toFixed(2)}`;
+    if (seenDoorKeys.has(dedupeKey)) continue;
+    seenDoorKeys.add(dedupeKey);
+
+    const preferredId = `recovery-door-${String(door.id ?? mergedDoors.length + 1)}`;
+    const id = buildUniqueId(doorIds, preferredId);
+    mergedDoors.push({
+      ...door,
+      id,
+      host_wall_id: hostWallId,
+      position,
+      width,
+      height,
+      floor_level: floorLevel,
+    });
+  }
+
+  for (const win of recovered?.windows || []) {
+    const position = asPoint2D(win?.position);
+    const width = toFiniteScalar(win?.width);
+    const sillHeight = toFiniteScalar(win?.sill_height);
+    if (!position || width == null || sillHeight == null || width <= 0.2 || sillHeight < 0) continue;
+
+    const floorLevel = toFloorBucket(win?.floor_level);
+    let hostWallId: string | number | null = null;
+    if (win?.host_wall_id != null && wallIdSet.has(String(win.host_wall_id))) {
+      hostWallId = win.host_wall_id;
+    } else {
+      hostWallId = resolveNearestWallId(base, position, floorLevel);
+    }
+    if (hostWallId == null) continue;
+
+    const dedupeKey = `${floorLevel}|${String(hostWallId)}|${position[0].toFixed(2)}|${position[1].toFixed(2)}|${width.toFixed(2)}|${sillHeight.toFixed(2)}`;
+    if (seenWindowKeys.has(dedupeKey)) continue;
+    seenWindowKeys.add(dedupeKey);
+
+    const preferredId = `recovery-window-${String(win.id ?? mergedWindows.length + 1)}`;
+    const id = buildUniqueId(windowIds, preferredId);
+    mergedWindows.push({
+      ...win,
+      id,
+      host_wall_id: hostWallId,
+      position,
+      width,
+      sill_height: sillHeight,
+      floor_level: floorLevel,
+    });
+  }
+
+  return {
+    ...base,
+    doors: mergedDoors,
+    windows: mergedWindows,
+  };
+};
+
+const shouldAttemptOpeningRecovery = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null
+): boolean => {
+  const floorSignals = estimateFloorHintCount(layoutHints);
+  const inferredFloorCount = Math.max(1, estimateResultFloorCount(result));
+  const walls = result?.walls?.length || 0;
+  const rooms = result?.rooms?.length || 0;
+  const openings = getOpeningCount(result);
+  const openingsPerFloor = openings / inferredFloorCount;
+  const roomsPerFloor = rooms / inferredFloorCount;
+
+  if (Math.max(floorSignals, inferredFloorCount) < 2) return false;
+  if (walls < 10 || rooms < 6) return false;
+  if (openings >= Math.max(6, Math.round(walls * 0.45))) return false;
+
+  return openingsPerFloor < Math.max(0.7, roomsPerFloor * 0.5);
+};
+
 const countDirectionBuckets = (walls: GeometricReconstruction['walls']): number => {
   const directions = new Set<number>();
   for (const wall of walls || []) {
@@ -346,6 +672,12 @@ const evaluateReconstructionFidelity = (
   }
   if (floorSignals >= 2 && inferredFloorCount <= 1) {
     reasons.add(`Floor labels indicate multi-level drawing (${floorSignals} signals) but output floor_count is ${inferredFloorCount}.`);
+  }
+  if (floorSignals >= 2 && isLikelySparseMultiFloorShell(result, floorSignals)) {
+    reasons.add('Multi-floor hints detected, but each floor collapsed to sparse outer-shell geometry without interior partitions.');
+  }
+  if (floorSignals >= 3 && roomCount <= floorSignals) {
+    reasons.add(`Detected ${floorSignals} floor hints but only ${roomCount} room polygon(s) across all floors.`);
   }
   if (dimensionSignals >= 5 && (scaleConfidence == null || scaleConfidence < 0.3)) {
     reasons.add('Scale confidence remained too low despite visible dimension anchors.');
@@ -2760,6 +3092,11 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, structuralInputImage);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
 
+    let bestResult = result;
+    let bestScore = scoreReconstructionDensity(result, layoutHints);
+    let bestOpenings = getOpeningCount(result);
+    let bestCandidateLabel = 'initial';
+
     const maxRetries = 2;
     let retryCount = 0;
     let fidelity = evaluateReconstructionFidelity(result, layoutHints);
@@ -2778,17 +3115,145 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
         retryCount,
         ...summarizeReconstruction(result),
       });
+
+      const retryScore = scoreReconstructionDensity(result, layoutHints);
+      const retryOpenings = getOpeningCount(result);
+      const shouldPromoteRetry =
+        retryScore > bestScore + 2 ||
+        (retryScore >= bestScore - 1 && retryOpenings > bestOpenings + 2);
+      if (shouldPromoteRetry) {
+        bestResult = result;
+        bestScore = retryScore;
+        bestOpenings = retryOpenings;
+        bestCandidateLabel = `retry-${retryCount}`;
+      }
+
       fidelity = evaluateReconstructionFidelity(result, layoutHints);
     }
+
+    if (bestResult !== result) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'selected strongest retry candidate before post-processing', {
+        selected: bestCandidateLabel,
+        bestScore,
+        bestOpenings,
+      }, 'warn');
+      result = bestResult;
+      fidelity = evaluateReconstructionFidelity(result, layoutHints);
+    }
+
     if (fidelity.shouldRetry) {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'fidelity gaps remain after retries; proceeding with deterministic normalization', {
         reasons: fidelity.reasons,
       }, 'warn');
     }
 
+    if (shouldAttemptOpeningRecovery(result, layoutHints)) {
+      const baseScore = scoreReconstructionDensity(result, layoutHints);
+      const baseOpenings = getOpeningCount(result);
+      const openingRecoveryPromptSeed = `${prompt}
+
+OPENING-RECOVERY OVERRIDE:
+- Preserve all valid walls/rooms from the blueprint and avoid collapsing geometry.
+- Detect visible door symbols, arc swings, wall gaps, and window spans across all floors.
+- Populate doors[] and windows[] with proper host_wall_id mapping to reconstructed walls.
+- Prefer low-confidence openings over returning empty openings arrays when evidence exists.
+`;
+      const openingRecoveryPrompt = buildBlueprintRetryPrompt(
+        openingRecoveryPromptSeed,
+        [
+          `Current reconstruction has ${result?.walls?.length || 0} wall(s), ${result?.rooms?.length || 0} room(s), but only ${result?.doors?.length || 0} door(s) and ${result?.windows?.length || 0} window(s).`,
+          'Recover openings without dropping wall or room topology.',
+        ]
+      );
+
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery pass triggered', {
+        baseScore,
+        baseOpenings,
+      }, 'warn');
+
+      try {
+        const openingCandidate = await generateAzureVisionObject<GeometricReconstruction>(openingRecoveryPrompt, imageUrl);
+        if (hasNonEmptyWalls(openingCandidate)) {
+          const openingCandidateScore = scoreReconstructionDensity(openingCandidate, layoutHints);
+          const openingCandidateCount = getOpeningCount(openingCandidate);
+          const mergedCandidate = mergeOpeningsFromRecovery(result, openingCandidate);
+          const mergedScore = scoreReconstructionDensity(mergedCandidate, layoutHints);
+          const mergedOpenings = getOpeningCount(mergedCandidate);
+
+          let chosenPayload = result;
+          let chosenScore = baseScore;
+          let chosenOpenings = baseOpenings;
+          let chosenSource: 'base' | 'merged' | 'opening-pass' = 'base';
+
+          if (mergedOpenings > baseOpenings && mergedScore >= baseScore - 2) {
+            chosenPayload = mergedCandidate;
+            chosenScore = mergedScore;
+            chosenOpenings = mergedOpenings;
+            chosenSource = 'merged';
+          }
+
+          if (
+            openingCandidateScore > chosenScore + 4 ||
+            (openingCandidateCount > chosenOpenings + 2 && openingCandidateScore >= chosenScore - 1)
+          ) {
+            chosenPayload = openingCandidate;
+            chosenScore = openingCandidateScore;
+            chosenOpenings = openingCandidateCount;
+            chosenSource = 'opening-pass';
+          }
+
+          if (chosenSource !== 'base') {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery improved selected reconstruction', {
+              source: chosenSource,
+              baseScore,
+              chosenScore,
+              baseOpenings,
+              chosenOpenings,
+              ...summarizeReconstruction(chosenPayload),
+            }, 'warn');
+            result = chosenPayload;
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery kept as fallback only; base result remained stronger', {
+              baseScore,
+              openingCandidateScore,
+              mergedScore,
+              baseOpenings,
+              openingCandidateCount,
+              mergedOpenings,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery pass failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
+
     const hintedFloorCount = estimateFloorHintCount(layoutHints);
     const inferredFloorCount = estimateResultFloorCount(result);
-    if (hintedFloorCount >= 2 && inferredFloorCount <= 1) {
+    const sparseMultiFloorShell = isLikelySparseMultiFloorShell(result, hintedFloorCount);
+    const densityFloorCount = Math.max(1, inferredFloorCount);
+    const roomDensityPerFloor = (result?.rooms?.length || 0) / densityFloorCount;
+    const wallDensityPerFloor = (result?.walls?.length || 0) / densityFloorCount;
+    const lowRoomDensity = hintedFloorCount >= 2 && roomDensityPerFloor < 1.4;
+    const lowWallDensity = hintedFloorCount >= 2 && wallDensityPerFloor < 4.8 && roomDensityPerFloor < 2.2;
+    const shouldAttemptSegmentation =
+      hintedFloorCount >= 2 &&
+      (inferredFloorCount <= 1 || sparseMultiFloorShell || lowRoomDensity || lowWallDensity);
+
+    if (shouldAttemptSegmentation) {
+      const monolithicScore = scoreReconstructionDensity(result, layoutHints);
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'segmentation candidate triggered for multi-floor quality recovery', {
+        hintedFloorCount,
+        inferredFloorCount,
+        sparseMultiFloorShell,
+        lowRoomDensity,
+        lowWallDensity,
+        roomDensityPerFloor,
+        wallDensityPerFloor,
+        monolithicScore,
+      }, 'warn');
       const segmentedResult = await attemptSegmentedMultiFloorReconstruction(
         prompt,
         structuralInputImage,
@@ -2799,13 +3264,25 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
         traceId
       );
       if (segmentedResult && hasNonEmptyWalls(segmentedResult)) {
-        traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery replaced monolithic output', {
-          hintedFloorCount,
-          previousFloorCount: inferredFloorCount,
-          recoveredFloorCount: estimateResultFloorCount(segmentedResult),
-          ...summarizeReconstruction(segmentedResult),
-        }, 'warn');
-        result = segmentedResult;
+        const segmentedScore = scoreReconstructionDensity(segmentedResult, layoutHints);
+        if (segmentedScore > monolithicScore + 4) {
+          traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery replaced monolithic output', {
+            hintedFloorCount,
+            previousFloorCount: inferredFloorCount,
+            recoveredFloorCount: estimateResultFloorCount(segmentedResult),
+            monolithicScore,
+            segmentedScore,
+            ...summarizeReconstruction(segmentedResult),
+          }, 'warn');
+          result = segmentedResult;
+        } else {
+          traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented result kept as fallback only; monolithic output scored higher', {
+            hintedFloorCount,
+            inferredFloorCount,
+            monolithicScore,
+            segmentedScore,
+          }, 'warn');
+        }
       } else {
         traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery did not produce a valid replacement', {
           hintedFloorCount,
