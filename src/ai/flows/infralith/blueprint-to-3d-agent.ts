@@ -87,8 +87,171 @@ const parseTimeoutMs = (
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 };
 
+const parseBoundedInt = (
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+};
+
+const parseBoundedFloat = (
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+};
+
 const STAGE_HEARTBEAT_MS = parseTimeoutMs(process.env.INFRALITH_STAGE_HEARTBEAT_MS, 20_000, 5_000, 120_000);
 const LAYOUT_STAGE_TIMEOUT_MS = parseTimeoutMs(process.env.INFRALITH_LAYOUT_TIMEOUT_MS, 65_000);
+const VISION_CONSENSUS_RUNS = parseBoundedInt(process.env.INFRALITH_VISION_CONSENSUS_RUNS, 3, 1, 5);
+const VISION_CONSENSUS_MIN_SCORE = parseBoundedFloat(process.env.INFRALITH_VISION_CONSENSUS_MIN_SCORE, 66, 20, 120);
+
+type SemanticMentionKey =
+  | 'kitchen'
+  | 'bedroom'
+  | 'bathroom'
+  | 'living'
+  | 'dining'
+  | 'stairs'
+  | 'study'
+  | 'utility'
+  | 'storage'
+  | 'garage'
+  | 'foyer'
+  | 'balcony'
+  | 'den';
+
+type SemanticMentionDef = {
+  key: SemanticMentionKey;
+  label: string;
+  patterns: RegExp[];
+};
+
+const SEMANTIC_MENTION_DEFS: SemanticMentionDef[] = [
+  { key: 'kitchen', label: 'Kitchen', patterns: [/\bkitchen\b/i, /\bpantry\b/i, /\bscullery\b/i] },
+  { key: 'bedroom', label: 'Bedroom', patterns: [/\bbed(?:room)?\b/i, /\bbdrm\b/i, /\bmaster suite\b/i] },
+  { key: 'bathroom', label: 'Bathroom/WC', patterns: [/\bbath(?:room)?\b/i, /\btoilet\b/i, /\bwc\b/i, /\bpowder\b/i, /\blav(?:atory)?\b/i, /\bwash(?:room)?\b/i] },
+  { key: 'living', label: 'Living/Family', patterns: [/\bliving\b/i, /\bfamily(?:\s*room)?\b/i, /\blounge\b/i, /\bgreat\s*room\b/i] },
+  { key: 'dining', label: 'Dining', patterns: [/\bdining\b/i, /\bbreakfast\b/i] },
+  { key: 'stairs', label: 'Stairs', patterns: [/\bstair(?:case)?s?\b/i, /\bstairwell\b/i, /\b(?:up|dn|down)\b/i] },
+  { key: 'study', label: 'Study/Office', patterns: [/\bstudy\b/i, /\boffice\b/i, /\bwork\s*room\b/i] },
+  { key: 'utility', label: 'Utility/Laundry', patterns: [/\butility\b/i, /\blaundry\b/i, /\bservice\b/i, /\bwash\s*area\b/i] },
+  { key: 'storage', label: 'Storage', patterns: [/\bstore(?:room)?\b/i, /\bstorage\b/i, /\bcloset\b/i] },
+  { key: 'garage', label: 'Garage', patterns: [/\bgarage\b/i, /\bcarport\b/i, /\b\d+\s*car\b/i] },
+  { key: 'foyer', label: 'Foyer/Entry', patterns: [/\bfoyer\b/i, /\bentry\b/i, /\blobby\b/i, /\bvestibule\b/i] },
+  { key: 'balcony', label: 'Balcony/Terrace', patterns: [/\bbalcony\b/i, /\bterrace\b/i, /\bpatio\b/i] },
+  { key: 'den', label: 'Den', patterns: [/\bden\b/i] },
+];
+
+const SEMANTIC_LABEL_BY_KEY: Record<SemanticMentionKey, string> = SEMANTIC_MENTION_DEFS.reduce((acc, item) => {
+  acc[item.key] = item.label;
+  return acc;
+}, {} as Record<SemanticMentionKey, string>);
+
+const normalizeSemanticText = (value: unknown): string =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[_\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const collectLayoutSemanticText = (layoutHints: BlueprintLayoutHints | null): string[] => {
+  if (!layoutHints) return [];
+  const texts: string[] = [];
+  for (const text of layoutHints.lineTexts || []) {
+    const normalized = normalizeSemanticText(text);
+    if (normalized) texts.push(normalized);
+  }
+  for (const anchor of layoutHints.floorLabelAnchors || []) {
+    const normalized = normalizeSemanticText(anchor?.text);
+    if (normalized) texts.push(normalized);
+  }
+  return texts;
+};
+
+const extractRequiredSemanticMentionKeys = (layoutHints: BlueprintLayoutHints | null): SemanticMentionKey[] => {
+  const textLines = collectLayoutSemanticText(layoutHints);
+  if (textLines.length === 0) return [];
+
+  const required = new Set<SemanticMentionKey>();
+  for (const line of textLines) {
+    for (const def of SEMANTIC_MENTION_DEFS) {
+      if (def.patterns.some((pattern) => pattern.test(line))) {
+        required.add(def.key);
+      }
+    }
+  }
+  return [...required];
+};
+
+const collectSemanticMentionsFromResult = (result: GeometricReconstruction): Set<SemanticMentionKey> => {
+  const present = new Set<SemanticMentionKey>();
+  const probes: string[] = [];
+  for (const room of result?.rooms || []) probes.push(normalizeSemanticText(room?.name));
+  for (const item of result?.furnitures || []) {
+    probes.push(normalizeSemanticText(item?.type));
+    probes.push(normalizeSemanticText(item?.description));
+  }
+
+  for (const text of probes) {
+    if (!text) continue;
+    for (const def of SEMANTIC_MENTION_DEFS) {
+      if (def.patterns.some((pattern) => pattern.test(text))) {
+        present.add(def.key);
+      }
+    }
+  }
+
+  return present;
+};
+
+const getMissingSemanticMentionKeys = (
+  required: SemanticMentionKey[],
+  result: GeometricReconstruction
+): SemanticMentionKey[] => {
+  if (!required.length) return [];
+  const present = collectSemanticMentionsFromResult(result);
+  return required.filter((key) => !present.has(key));
+};
+
+const describeSemanticMentionKeys = (keys: SemanticMentionKey[]): string[] =>
+  keys.map((key) => SEMANTIC_LABEL_BY_KEY[key] || key);
+
+const hasSemanticMentionKey = (result: GeometricReconstruction, key: SemanticMentionKey): boolean =>
+  !getMissingSemanticMentionKeys([key], result).includes(key);
+
+const hasMultiFloorExpectation = (
+  layoutHints: BlueprintLayoutHints | null,
+  result: GeometricReconstruction
+): boolean => {
+  const floorSignals = estimateFloorHintCount(layoutHints);
+  const inferredFloorCount = estimateResultFloorCount(result);
+  return floorSignals >= 2 || inferredFloorCount >= 2;
+};
+
+const shouldAttemptStairSymbolRecovery = (
+  layoutHints: BlueprintLayoutHints | null,
+  result: GeometricReconstruction,
+  requiredSemanticMentions: SemanticMentionKey[]
+): boolean => {
+  if (requiredSemanticMentions.includes('stairs')) return false;
+  if (!hasMultiFloorExpectation(layoutHints, result)) return false;
+  if (hasSemanticMentionKey(result, 'stairs')) return false;
+
+  const walls = result?.walls?.length || 0;
+  const rooms = result?.rooms?.length || 0;
+  if (walls < 8 || rooms < 4) return false;
+
+  return true;
+};
 
 const createTraceId = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -391,6 +554,527 @@ const isLikelySparseMultiFloorShell = (
   );
 };
 
+type InteriorLayoutSignal = {
+  placeholder: boolean;
+  reasons: string[];
+  denseFloors: number;
+  gridLikeFloors: number;
+  averageInteriorWallsPerFloor: number;
+};
+
+const collectRoomBounds = (
+  polygon: [number, number][] | null | undefined
+): { minX: number; maxX: number; minY: number; maxY: number; area: number } | null => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return null;
+  const xs = polygon.map((pt) => Number(pt?.[0]));
+  const ys = polygon.map((pt) => Number(pt?.[1]));
+  if (xs.some((value) => !Number.isFinite(value)) || ys.some((value) => !Number.isFinite(value))) return null;
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const area = Math.abs(polygonArea(polygon));
+  if (!Number.isFinite(area) || area <= 0) return null;
+
+  return { minX, maxX, minY, maxY, area };
+};
+
+const isMostlyAxisAlignedRectangle = (
+  polygon: [number, number][] | null | undefined,
+  fillTolerance = 0.08
+): boolean => {
+  const bounds = collectRoomBounds(polygon);
+  if (!bounds || !Array.isArray(polygon)) return false;
+  const width = bounds.maxX - bounds.minX;
+  const depth = bounds.maxY - bounds.minY;
+  if (width <= 0 || depth <= 0) return false;
+
+  const bboxArea = width * depth;
+  if (!Number.isFinite(bboxArea) || bboxArea <= 0) return false;
+
+  const fillRatio = bounds.area / bboxArea;
+  if (fillRatio < 1 - fillTolerance) return false;
+
+  let edgeAlignedVertices = 0;
+  const edgeTolerance = 0.06;
+  for (const point of polygon) {
+    const x = Number(point?.[0]);
+    const y = Number(point?.[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (
+      Math.abs(x - bounds.minX) <= edgeTolerance ||
+      Math.abs(x - bounds.maxX) <= edgeTolerance ||
+      Math.abs(y - bounds.minY) <= edgeTolerance ||
+      Math.abs(y - bounds.maxY) <= edgeTolerance
+    ) {
+      edgeAlignedVertices += 1;
+    }
+  }
+
+  return edgeAlignedVertices >= Math.max(4, polygon.length - 1);
+};
+
+const analyzeInteriorLayoutSignal = (result: GeometricReconstruction): InteriorLayoutSignal => {
+  const rooms = result?.rooms || [];
+  if (rooms.length === 0) {
+    return {
+      placeholder: false,
+      reasons: [],
+      denseFloors: 0,
+      gridLikeFloors: 0,
+      averageInteriorWallsPerFloor: 0,
+    };
+  }
+
+  const roomsByFloor = new Map<number, GeometricReconstruction['rooms']>();
+  for (const room of rooms) {
+    const floor = toFloorBucket(room?.floor_level);
+    if (!roomsByFloor.has(floor)) roomsByFloor.set(floor, []);
+    roomsByFloor.get(floor)?.push(room);
+  }
+
+  let denseFloors = 0;
+  let gridLikeFloors = 0;
+  let rectangularRoomCount = 0;
+  const shapeFrequency = new Map<string, number>();
+  const areaFrequency = new Map<string, number>();
+
+  for (const floorRooms of roomsByFloor.values()) {
+    if (floorRooms.length >= 3) {
+      denseFloors += 1;
+
+      const uniqueX = new Set<number>();
+      const uniqueY = new Set<number>();
+      let floorRectangularRooms = 0;
+      for (const room of floorRooms) {
+        const polygon = room?.polygon || [];
+        for (const point of polygon) {
+          const x = Number(point?.[0]);
+          const y = Number(point?.[1]);
+          if (Number.isFinite(x)) uniqueX.add(Number(x.toFixed(1)));
+          if (Number.isFinite(y)) uniqueY.add(Number(y.toFixed(1)));
+        }
+        if (isMostlyAxisAlignedRectangle(polygon)) floorRectangularRooms += 1;
+      }
+
+      const floorRectangularShare = floorRectangularRooms / Math.max(1, floorRooms.length);
+      if (floorRectangularShare >= 0.75 && uniqueX.size <= 6 && uniqueY.size <= 6) {
+        gridLikeFloors += 1;
+      }
+    }
+
+    for (const room of floorRooms) {
+      const bounds = collectRoomBounds(room?.polygon || []);
+      if (!bounds) continue;
+      if (isMostlyAxisAlignedRectangle(room?.polygon || [])) rectangularRoomCount += 1;
+      const width = bounds.maxX - bounds.minX;
+      const depth = bounds.maxY - bounds.minY;
+      const shapeKey = `${width.toFixed(2)}x${depth.toFixed(2)}`;
+      const areaKey = bounds.area.toFixed(1);
+      shapeFrequency.set(shapeKey, (shapeFrequency.get(shapeKey) || 0) + 1);
+      areaFrequency.set(areaKey, (areaFrequency.get(areaKey) || 0) + 1);
+    }
+  }
+
+  const floorStats = collectFloorComplexity(result);
+  const interiorWallTotal = floorStats.reduce((sum, stats) => sum + stats.interiorWalls, 0);
+  const averageInteriorWallsPerFloor = interiorWallTotal / Math.max(1, floorStats.length);
+
+  const maxAreaFrequency = Math.max(0, ...areaFrequency.values());
+  const repeatedShapePattern = shapeFrequency.size <= Math.max(2, Math.floor(rooms.length / 3));
+  const repeatedAreaPattern = maxAreaFrequency >= Math.ceil(rooms.length * 0.4);
+  const rectangularShare = rectangularRoomCount / Math.max(1, rooms.length);
+  const gridDominant = denseFloors >= 2 && gridLikeFloors >= Math.ceil(denseFloors * 0.6);
+  const simplificationConflict = (result?.conflicts || []).some((conflict) =>
+    /\b(?:simplified|quadrant|proportional|uniform\s+footprint|rectangular\s+footprint)\b/i.test(
+      String(conflict?.description || '')
+    )
+  );
+
+  const placeholder = (
+    rooms.length >= 6 &&
+    rectangularShare >= 0.8 &&
+    averageInteriorWallsPerFloor <= 2.5 &&
+    (gridDominant || (repeatedShapePattern && repeatedAreaPattern) || simplificationConflict)
+  );
+
+  const reasons: string[] = [];
+  if (gridDominant) {
+    reasons.push(`Room partitions form repetitive grid splits across floors (${gridLikeFloors}/${Math.max(denseFloors, 1)} dense floor(s)).`);
+  }
+  if (repeatedShapePattern && repeatedAreaPattern) {
+    reasons.push('Room dimensions/areas repeat excessively, indicating underfit interior partitioning.');
+  }
+  if (averageInteriorWallsPerFloor <= 2.5 && rooms.length >= 6) {
+    reasons.push(`Interior wall density is too low (${averageInteriorWallsPerFloor.toFixed(2)} interior walls/floor) for current room count.`);
+  }
+  if (simplificationConflict) {
+    reasons.push('Conflicts already indicate simplified proportional layout rather than evidence-backed partitions.');
+  }
+
+  return {
+    placeholder,
+    reasons,
+    denseFloors,
+    gridLikeFloors,
+    averageInteriorWallsPerFloor,
+  };
+};
+
+type RoomDimensionHint = {
+  text: string;
+  widthM: number;
+  depthM: number;
+  center: [number, number] | null;
+  floorLevel: number | null;
+};
+
+type RoomDimensionMismatch = {
+  hintText: string;
+  floorLevel: number | null;
+  expectedWidthM: number;
+  expectedDepthM: number;
+  matchedRoomId: string | number | null;
+  matchedRoomName: string | null;
+  sizeErrorRatio: number;
+  positionDistance: number | null;
+  hintCenter: [number, number] | null;
+  reason: string;
+};
+
+type RoomDimensionAssessment = {
+  hintCount: number;
+  matchedCount: number;
+  mismatches: RoomDimensionMismatch[];
+  reasons: string[];
+  shouldRetry: boolean;
+};
+
+const parseFloorLabelToLevel = (label: string): number | null => {
+  const text = String(label || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (/\b(basement|cellar|lower\s*ground|stilt|ground)\b/.test(text)) return 0;
+  if (/\bfirst\b/.test(text)) return 1;
+  if (/\bsecond\b/.test(text)) return 2;
+  if (/\bthird\b/.test(text)) return 3;
+  if (/\bfourth\b/.test(text)) return 4;
+  if (/\bfifth\b/.test(text)) return 5;
+
+  const numeric = text.match(/\b(?:level|lvl|floor|flr)\s*[-_:]?\s*(\d{1,2})\b/);
+  if (numeric?.[1]) {
+    const parsed = Number(numeric[1]);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return null;
+};
+
+const flatPolygonCenter = (polygon: number[] | null | undefined): [number, number] | null => {
+  if (!Array.isArray(polygon) || polygon.length < 6) return null;
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (let i = 0; i < polygon.length - 1; i += 2) {
+    const x = Number(polygon[i]);
+    const y = Number(polygon[i + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    sumX += x;
+    sumY += y;
+    count += 1;
+  }
+  if (count === 0) return null;
+  return [sumX / count, sumY / count];
+};
+
+const parseDimensionTokenMeters = (token: string, fullText: string): number | null => {
+  const raw = String(token || '').trim().toLowerCase();
+  if (!raw) return null;
+
+  const feetInch = raw.match(/(\d+(?:\.\d+)?)\s*'\s*(?:[-\s]?\s*(\d+(?:\.\d+)?)\s*(?:\"|in|inch|inches)?)?/);
+  if (feetInch) {
+    const feet = Number(feetInch[1] || 0);
+    const inches = Number(feetInch[2] || 0);
+    const meters = (feet * 0.3048) + (inches * 0.0254);
+    return Number.isFinite(meters) && meters > 0 ? meters : null;
+  }
+
+  const numericMatch = raw.match(/\d+(?:\.\d+)?/);
+  if (!numericMatch?.[0]) return null;
+  const numeric = Number(numericMatch[0]);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+
+  const context = `${raw} ${String(fullText || '').toLowerCase()}`;
+  if (/\bmm\b/.test(context)) return numeric / 1000;
+  if (/\bcm\b/.test(context)) return numeric / 100;
+  if (/\bm\b/.test(context)) return numeric;
+  if (/\b(ft|feet|foot)\b|\'/.test(context)) return numeric * 0.3048;
+  if (/\b(in|inch|inches)\b|\"/.test(context)) return numeric * 0.0254;
+
+  return null;
+};
+
+const extractDimensionPairFromText = (value: string): { widthM: number; depthM: number } | null => {
+  const text = String(value || '').replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const pairMatch = text.match(/(.{0,36}?\d[\d\s.'"\-]*(?:mm|cm|m|ft|feet|foot|in|inch|inches|["'])?)\s*[x×]\s*(\d[\d\s.'"\-]*(?:mm|cm|m|ft|feet|foot|in|inch|inches|["'])?.{0,20})/i);
+  if (!pairMatch?.[1] || !pairMatch?.[2]) return null;
+
+  const widthM = parseDimensionTokenMeters(pairMatch[1], text);
+  const depthM = parseDimensionTokenMeters(pairMatch[2], text);
+  if (widthM == null || depthM == null) return null;
+  if (widthM < 0.4 || depthM < 0.4 || widthM > 40 || depthM > 40) return null;
+
+  return {
+    widthM: Number(widthM.toFixed(3)),
+    depthM: Number(depthM.toFixed(3)),
+  };
+};
+
+const extractRoomDimensionHints = (layoutHints: BlueprintLayoutHints | null): RoomDimensionHint[] => {
+  if (!layoutHints) return [];
+  const floorAnchors = (layoutHints.floorLabelAnchors || [])
+    .map((anchor, index) => {
+      const center = flatPolygonCenter(anchor?.polygon || []);
+      if (!center) return null;
+      const fromLabel = parseFloorLabelToLevel(String(anchor?.text || ''));
+      return {
+        level: fromLabel ?? index,
+        centerY: center[1],
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => !!entry)
+    .sort((a, b) => a.centerY - b.centerY);
+
+  const hints: RoomDimensionHint[] = [];
+  const dedupe = new Set<string>();
+  for (const anchor of layoutHints.dimensionAnchors || []) {
+    if (hints.length >= 36) break;
+    const pair = extractDimensionPairFromText(String(anchor?.text || ''));
+    if (!pair) continue;
+    const center = flatPolygonCenter(anchor?.polygon || []);
+
+    let floorLevel: number | null = null;
+    if (center && floorAnchors.length > 0) {
+      let best: { level: number; distance: number } | null = null;
+      for (const floorAnchor of floorAnchors) {
+        const distance = Math.abs(center[1] - floorAnchor.centerY);
+        if (!best || distance < best.distance) {
+          best = { level: floorAnchor.level, distance };
+        }
+      }
+      floorLevel = best?.level ?? null;
+    }
+
+    const key = [
+      pair.widthM.toFixed(2),
+      pair.depthM.toFixed(2),
+      floorLevel == null ? 'na' : String(floorLevel),
+      center ? `${center[0].toFixed(1)}:${center[1].toFixed(1)}` : 'nocenter',
+      String(anchor?.text || '').toLowerCase().trim(),
+    ].join('|');
+    if (dedupe.has(key)) continue;
+    dedupe.add(key);
+
+    hints.push({
+      text: String(anchor?.text || '').trim(),
+      widthM: pair.widthM,
+      depthM: pair.depthM,
+      center,
+      floorLevel,
+    });
+  }
+
+  return hints;
+};
+
+const estimateRoomDimensionAlignment = (
+  layoutHints: BlueprintLayoutHints | null,
+  result: GeometricReconstruction
+): RoomDimensionAssessment => {
+  const hints = extractRoomDimensionHints(layoutHints);
+  const rooms = result?.rooms || [];
+  if (hints.length === 0 || rooms.length === 0) {
+    return {
+      hintCount: hints.length,
+      matchedCount: 0,
+      mismatches: [],
+      reasons: [],
+      shouldRetry: false,
+    };
+  }
+
+  const wallPoints = (result?.walls || []).flatMap((wall) => [wall.start, wall.end]);
+  let planWidth = 0;
+  let planDepth = 0;
+  if (wallPoints.length > 0) {
+    const xs = wallPoints.map((point) => Number(point?.[0])).filter((value) => Number.isFinite(value));
+    const ys = wallPoints.map((point) => Number(point?.[1])).filter((value) => Number.isFinite(value));
+    if (xs.length > 0 && ys.length > 0) {
+      planWidth = Math.max(...xs) - Math.min(...xs);
+      planDepth = Math.max(...ys) - Math.min(...ys);
+    }
+  }
+
+  const candidateHints = hints.filter((hint) => {
+    if (planWidth <= 0 || planDepth <= 0) return true;
+    const direct = Math.max(
+      Math.abs(planWidth - hint.widthM) / Math.max(hint.widthM, 1e-3),
+      Math.abs(planDepth - hint.depthM) / Math.max(hint.depthM, 1e-3)
+    );
+    const swapped = Math.max(
+      Math.abs(planWidth - hint.depthM) / Math.max(hint.depthM, 1e-3),
+      Math.abs(planDepth - hint.widthM) / Math.max(hint.widthM, 1e-3)
+    );
+    const footprintMatch = Math.min(direct, swapped);
+    const nearWholePlan = footprintMatch <= 0.2 && (
+      hint.widthM >= Math.min(planWidth, planDepth) * 0.8 ||
+      hint.depthM >= Math.min(planWidth, planDepth) * 0.8
+    );
+    return !nearWholePlan;
+  });
+
+  if (candidateHints.length === 0) {
+    return {
+      hintCount: hints.length,
+      matchedCount: 0,
+      mismatches: [],
+      reasons: [],
+      shouldRetry: false,
+    };
+  }
+
+  let matchedCount = 0;
+  const mismatches: RoomDimensionMismatch[] = [];
+
+  for (const hint of candidateHints) {
+    const floorRooms = hint.floorLevel == null
+      ? rooms
+      : rooms.filter((room) => toFloorBucket(room?.floor_level) === toFloorBucket(hint.floorLevel));
+    if (floorRooms.length === 0) {
+      mismatches.push({
+        hintText: hint.text,
+        floorLevel: hint.floorLevel,
+        expectedWidthM: hint.widthM,
+        expectedDepthM: hint.depthM,
+        matchedRoomId: null,
+        matchedRoomName: null,
+        sizeErrorRatio: 1,
+        positionDistance: null,
+        hintCenter: hint.center,
+        reason: `No room polygons found on floor ${hint.floorLevel ?? 'unknown'} for dimension hint "${hint.text}".`,
+      });
+      continue;
+    }
+
+    let bestMatch: {
+      roomId: string | number;
+      roomName: string;
+      sizeErrorRatio: number;
+      positionDistance: number | null;
+      score: number;
+    } | null = null;
+
+    for (const room of floorRooms) {
+      const bounds = collectRoomBounds(room?.polygon || []);
+      if (!bounds) continue;
+      const width = bounds.maxX - bounds.minX;
+      const depth = bounds.maxY - bounds.minY;
+      if (width <= 0 || depth <= 0) continue;
+
+      const direct = Math.max(
+        Math.abs(width - hint.widthM) / Math.max(hint.widthM, 1e-3),
+        Math.abs(depth - hint.depthM) / Math.max(hint.depthM, 1e-3)
+      );
+      const swapped = Math.max(
+        Math.abs(width - hint.depthM) / Math.max(hint.depthM, 1e-3),
+        Math.abs(depth - hint.widthM) / Math.max(hint.widthM, 1e-3)
+      );
+      const sizeErrorRatio = Math.min(direct, swapped);
+
+      let positionDistance: number | null = null;
+      if (hint.center) {
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerY = (bounds.minY + bounds.maxY) / 2;
+        positionDistance = Math.hypot(centerX - hint.center[0], centerY - hint.center[1]);
+      }
+      const positionPenalty = positionDistance == null
+        ? 0
+        : positionDistance / Math.max(1.5, Math.max(hint.widthM, hint.depthM) * 1.8);
+      const score = sizeErrorRatio + (positionPenalty * 0.25);
+
+      if (!bestMatch || score < bestMatch.score) {
+        bestMatch = {
+          roomId: room.id,
+          roomName: room.name,
+          sizeErrorRatio,
+          positionDistance,
+          score,
+        };
+      }
+    }
+
+    if (!bestMatch) {
+      mismatches.push({
+        hintText: hint.text,
+        floorLevel: hint.floorLevel,
+        expectedWidthM: hint.widthM,
+        expectedDepthM: hint.depthM,
+        matchedRoomId: null,
+        matchedRoomName: null,
+        sizeErrorRatio: 1,
+        positionDistance: null,
+        hintCenter: hint.center,
+        reason: `No valid room polygon could be matched for dimension hint "${hint.text}".`,
+      });
+      continue;
+    }
+
+    const sizeTolerance = 0.28;
+    const positionTolerance = Math.max(2.5, Math.max(hint.widthM, hint.depthM) * 2.2);
+    const sizeMismatch = bestMatch.sizeErrorRatio > sizeTolerance;
+    const positionMismatch =
+      bestMatch.positionDistance != null &&
+      bestMatch.positionDistance > positionTolerance;
+    if (sizeMismatch || positionMismatch) {
+      const mismatchReason = sizeMismatch
+        ? `Dimension hint "${hint.text}" expects ~${hint.widthM.toFixed(2)}m x ${hint.depthM.toFixed(2)}m but matched room "${bestMatch.roomName}" differs by ${(bestMatch.sizeErrorRatio * 100).toFixed(0)}%.`
+        : `Dimension hint "${hint.text}" maps far from room "${bestMatch.roomName}" (distance ${bestMatch.positionDistance?.toFixed(2)}m), indicating position mismatch.`;
+      mismatches.push({
+        hintText: hint.text,
+        floorLevel: hint.floorLevel,
+        expectedWidthM: hint.widthM,
+        expectedDepthM: hint.depthM,
+        matchedRoomId: bestMatch.roomId,
+        matchedRoomName: bestMatch.roomName,
+        sizeErrorRatio: bestMatch.sizeErrorRatio,
+        positionDistance: bestMatch.positionDistance,
+        hintCenter: hint.center,
+        reason: mismatchReason,
+      });
+      continue;
+    }
+
+    matchedCount += 1;
+  }
+
+  const mismatchRatio = mismatches.length / Math.max(1, candidateHints.length);
+  const shouldRetry =
+    candidateHints.length >= 2 &&
+    mismatches.length >= Math.max(1, Math.ceil(candidateHints.length * 0.34));
+  const reasons = mismatches.slice(0, 3).map((item) => item.reason);
+  if (mismatchRatio >= 0.5 && reasons.length < 3) {
+    reasons.push(`Room dimensions/positions mismatch in ${mismatches.length}/${candidateHints.length} parsed room-dimension hints.`);
+  }
+
+  return {
+    hintCount: candidateHints.length,
+    matchedCount,
+    mismatches,
+    reasons,
+    shouldRetry,
+  };
+};
+
 const scoreReconstructionDensity = (
   result: GeometricReconstruction,
   layoutHints: BlueprintLayoutHints | null
@@ -404,6 +1088,8 @@ const scoreReconstructionDensity = (
   const highConflicts = (result?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
   const scaleConfidence = toFiniteScalar(result?.meta?.scale_confidence) ?? 0;
   const topology = result?.topology_checks;
+  const interiorSignal = analyzeInteriorLayoutSignal(result);
+  const dimensionAssessment = estimateRoomDimensionAlignment(layoutHints, result);
 
   let score = 0;
   score += Math.min(32, wallCount * 2.2);
@@ -423,6 +1109,10 @@ const scoreReconstructionDensity = (
 
   if (isLikelyRectangularFallback(result)) score -= 20;
   if (isLikelySparseMultiFloorShell(result, floorSignals)) score -= 24;
+  if (interiorSignal.placeholder) score -= 18;
+  if (dimensionAssessment.hintCount >= 2) {
+    score -= Math.min(14, dimensionAssessment.mismatches.length * 3.5);
+  }
   score -= Math.min(16, highConflicts * 5);
 
   return Math.round(score * 100) / 100;
@@ -616,6 +1306,90 @@ const shouldAttemptOpeningRecovery = (
   return openingsPerFloor < Math.max(0.7, roomsPerFloor * 0.5);
 };
 
+const shouldAttemptInteriorLayoutRecovery = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null
+): boolean => {
+  const interiorSignal = analyzeInteriorLayoutSignal(result);
+  if (!interiorSignal.placeholder) return false;
+
+  const floorSignals = estimateFloorHintCount(layoutHints);
+  const inferredFloorCount = Math.max(1, estimateResultFloorCount(result));
+  const walls = result?.walls?.length || 0;
+  const rooms = result?.rooms?.length || 0;
+  if (walls < 8 || rooms < 5) return false;
+
+  return Math.max(floorSignals, inferredFloorCount) >= 2 || interiorSignal.gridLikeFloors >= 1;
+};
+
+const shouldAttemptRoomDimensionRecovery = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null
+): boolean => {
+  const assessment = estimateRoomDimensionAlignment(layoutHints, result);
+  if (!assessment.shouldRetry) return false;
+  if (assessment.hintCount < 2) return false;
+  if ((result?.rooms?.length || 0) < 2) return false;
+  return true;
+};
+
+const buildConsensusRecoveryReasons = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null,
+  score: number
+): string[] => {
+  const reasons = [...evaluateReconstructionFidelity(result, layoutHints).reasons];
+  const openings = getOpeningCount(result);
+  const walls = result?.walls?.length || 0;
+  const rooms = result?.rooms?.length || 0;
+  const floorSignals = estimateFloorHintCount(layoutHints);
+  const floorCount = Math.max(1, estimateResultFloorCount(result));
+  const interiorSignal = analyzeInteriorLayoutSignal(result);
+  const dimensionAssessment = estimateRoomDimensionAlignment(layoutHints, result);
+
+  if (score < VISION_CONSENSUS_MIN_SCORE) {
+    reasons.push(`Current geometric density score ${score.toFixed(1)} is below quality target ${VISION_CONSENSUS_MIN_SCORE.toFixed(1)}.`);
+  }
+  if (openings === 0 && walls >= 10 && rooms >= 5) {
+    reasons.push('Doors/windows are missing despite rich wall and room geometry; recover visible openings.');
+  }
+  if (floorSignals >= 2 && rooms < floorCount * 2) {
+    reasons.push(`Multi-floor plan detected (${floorSignals} hints) but room density is low (${rooms} room(s) across ${floorCount} floor level(s)).`);
+  }
+  if (interiorSignal.placeholder) {
+    reasons.push('Interior partitioning appears over-regularized; recover floor-specific interior walls and room polygons from visible line evidence.');
+  }
+  if (dimensionAssessment.shouldRetry) {
+    reasons.push(`Room dimension anchors show ${dimensionAssessment.mismatches.length}/${dimensionAssessment.hintCount} size or position mismatches; align room polygons to annotated dimensions.`);
+  }
+
+  const unique = Array.from(new Set(reasons.map((reason) => reason.trim()).filter(Boolean)));
+  return unique.slice(0, 6);
+};
+
+const shouldRunConsensusEnsemble = (
+  result: GeometricReconstruction,
+  layoutHints: BlueprintLayoutHints | null,
+  score: number
+): boolean => {
+  if (VISION_CONSENSUS_RUNS <= 1) return false;
+  const fidelity = evaluateReconstructionFidelity(result, layoutHints);
+  if (fidelity.shouldRetry) return true;
+  if (score < VISION_CONSENSUS_MIN_SCORE) return true;
+
+  const openings = getOpeningCount(result);
+  const rooms = result?.rooms?.length || 0;
+  const walls = result?.walls?.length || 0;
+  const inferredFloorCount = Math.max(1, estimateResultFloorCount(result));
+  const openingsPerFloor = openings / inferredFloorCount;
+  const roomsPerFloor = rooms / inferredFloorCount;
+
+  if (walls >= 10 && rooms >= 6 && openingsPerFloor < Math.max(0.6, roomsPerFloor * 0.45)) {
+    return true;
+  }
+  return false;
+};
+
 const countDirectionBuckets = (walls: GeometricReconstruction['walls']): number => {
   const directions = new Set<number>();
   for (const wall of walls || []) {
@@ -657,6 +1431,11 @@ const evaluateReconstructionFidelity = (
   const inferredFloorCount = estimateResultFloorCount(result);
   const scaleConfidence = toFiniteScalar(result?.meta?.scale_confidence);
   const topology = result?.topology_checks;
+  const requiredSemanticMentions = extractRequiredSemanticMentionKeys(layoutHints);
+  const missingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, result);
+  const stairsRecovered = hasSemanticMentionKey(result, 'stairs');
+  const interiorSignal = analyzeInteriorLayoutSignal(result);
+  const dimensionAssessment = estimateRoomDimensionAlignment(layoutHints, result);
 
   if (wallCount <= 3) {
     reasons.add(`Only ${wallCount} wall segment(s) were produced, which is structurally incomplete.`);
@@ -679,11 +1458,27 @@ const evaluateReconstructionFidelity = (
   if (floorSignals >= 3 && roomCount <= floorSignals) {
     reasons.add(`Detected ${floorSignals} floor hints but only ${roomCount} room polygon(s) across all floors.`);
   }
+  if (floorSignals >= 2 && inferredFloorCount >= 2 && roomCount >= 4 && !stairsRecovered) {
+    reasons.add('Multi-floor geometry is present but staircase/vertical-circulation semantics are still missing.');
+  }
+  if (missingSemanticMentions.length > 0) {
+    reasons.add(
+      `Blueprint labels indicate ${describeSemanticMentionKeys(missingSemanticMentions).join(', ')} but these semantic spaces are missing in the reconstruction.`
+    );
+  }
   if (dimensionSignals >= 5 && (scaleConfidence == null || scaleConfidence < 0.3)) {
     reasons.add('Scale confidence remained too low despite visible dimension anchors.');
   }
   if (isLikelyRectangularFallback(result) && (dimensionSignals >= 4 || ocrLineSignals >= 70)) {
     reasons.add('Model appears collapsed to a simple rectangular shell despite richer blueprint evidence.');
+  }
+  if (interiorSignal.placeholder) {
+    reasons.add('Interior partitioning appears over-regularized (repeating grid-like rooms), suggesting placeholder geometry instead of true room boundary extraction.');
+  }
+  if (dimensionAssessment.shouldRetry) {
+    reasons.add(
+      `Room dimension anchors mismatch (${dimensionAssessment.mismatches.length}/${dimensionAssessment.hintCount}); room sizes/positions are not aligned with annotated measurements.`
+    );
   }
 
   if (topology?.closed_wall_loops === false) {
@@ -3085,6 +3880,13 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       ...summarizeLayoutHints(layoutHints),
     });
   }
+  const requiredSemanticMentions = extractRequiredSemanticMentionKeys(layoutHints);
+  if (requiredSemanticMentions.length > 0) {
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'semantic anchors detected from blueprint text', {
+      requiredSemanticMentions: describeSemanticMentionKeys(requiredSemanticMentions),
+      count: requiredSemanticMentions.length,
+    }, 'warn');
+  }
   // STAGE 2: Send image + layout hints to the AI Vision model
   const prompt = buildBlueprintVisionPrompt(layoutHints);
   try {
@@ -3096,10 +3898,76 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     let bestScore = scoreReconstructionDensity(result, layoutHints);
     let bestOpenings = getOpeningCount(result);
     let bestCandidateLabel = 'initial';
+    let bestHighSeverityConflicts = (result?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
+    let bestFidelity = evaluateReconstructionFidelity(result, layoutHints);
+    let bestMissingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, result).length;
+
+    const promoteBestCandidate = (
+      candidate: GeometricReconstruction | null | undefined,
+      label: string,
+      options?: {
+        minScoreGain?: number;
+        allowOpeningBoost?: boolean;
+        allowFidelityBoost?: boolean;
+        allowConflictBoost?: boolean;
+        allowSemanticBoost?: boolean;
+      }
+    ) => {
+      if (!hasNonEmptyWalls(candidate)) return false;
+      const minScoreGain = options?.minScoreGain ?? 2;
+      const allowOpeningBoost = options?.allowOpeningBoost ?? true;
+      const allowFidelityBoost = options?.allowFidelityBoost ?? true;
+      const allowConflictBoost = options?.allowConflictBoost ?? true;
+      const allowSemanticBoost = options?.allowSemanticBoost ?? true;
+
+      const candidateScore = scoreReconstructionDensity(candidate, layoutHints);
+      const candidateOpenings = getOpeningCount(candidate);
+      const candidateFidelity = evaluateReconstructionFidelity(candidate, layoutHints);
+      const candidateHighSeverityConflicts = (candidate?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
+      const candidateMissingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, candidate).length;
+      const candidateRooms = candidate?.rooms?.length || 0;
+      const candidateWalls = candidate?.walls?.length || 0;
+      const bestRooms = bestResult?.rooms?.length || 0;
+      const bestWalls = bestResult?.walls?.length || 0;
+
+      const scoreImproved = candidateScore > bestScore + minScoreGain;
+      const openingImproved =
+        allowOpeningBoost &&
+        candidateScore >= bestScore - 1 &&
+        candidateOpenings > bestOpenings + 2;
+      const fidelityImproved =
+        allowFidelityBoost &&
+        candidateFidelity.reasons.length + 1 < bestFidelity.reasons.length &&
+        candidateScore >= bestScore - 1;
+      const conflictImproved =
+        allowConflictBoost &&
+        candidateHighSeverityConflicts + 1 < bestHighSeverityConflicts &&
+        candidateScore >= bestScore - 0.75;
+      const semanticImproved =
+        allowSemanticBoost &&
+        candidateMissingSemanticMentions + 1 < bestMissingSemanticMentions &&
+        candidateScore >= bestScore - 2;
+      const structuralDetailImproved =
+        candidateScore >= bestScore - 0.5 &&
+        (candidateRooms > bestRooms + 2 || candidateWalls > bestWalls + 4);
+
+      if (!(scoreImproved || openingImproved || fidelityImproved || conflictImproved || semanticImproved || structuralDetailImproved)) {
+        return false;
+      }
+
+      bestResult = candidate;
+      bestScore = candidateScore;
+      bestOpenings = candidateOpenings;
+      bestFidelity = candidateFidelity;
+      bestHighSeverityConflicts = candidateHighSeverityConflicts;
+      bestMissingSemanticMentions = candidateMissingSemanticMentions;
+      bestCandidateLabel = label;
+      return true;
+    };
 
     const maxRetries = 2;
     let retryCount = 0;
-    let fidelity = evaluateReconstructionFidelity(result, layoutHints);
+    let fidelity = bestFidelity;
     while (fidelity.shouldRetry && retryCount < maxRetries) {
       retryCount += 1;
       const retryImage = retryCount % 2 === 1 ? imageUrl : structuralInputImage;
@@ -3116,35 +3984,312 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
         ...summarizeReconstruction(result),
       });
 
-      const retryScore = scoreReconstructionDensity(result, layoutHints);
-      const retryOpenings = getOpeningCount(result);
-      const shouldPromoteRetry =
-        retryScore > bestScore + 2 ||
-        (retryScore >= bestScore - 1 && retryOpenings > bestOpenings + 2);
-      if (shouldPromoteRetry) {
-        bestResult = result;
-        bestScore = retryScore;
-        bestOpenings = retryOpenings;
-        bestCandidateLabel = `retry-${retryCount}`;
-      }
-
+      promoteBestCandidate(result, `retry-${retryCount}`, { minScoreGain: 2 });
       fidelity = evaluateReconstructionFidelity(result, layoutHints);
     }
 
-    if (bestResult !== result) {
+    if (bestResult !== result || bestCandidateLabel !== 'initial') {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'selected strongest retry candidate before post-processing', {
         selected: bestCandidateLabel,
         bestScore,
         bestOpenings,
       }, 'warn');
       result = bestResult;
-      fidelity = evaluateReconstructionFidelity(result, layoutHints);
     }
+    fidelity = evaluateReconstructionFidelity(result, layoutHints);
 
     if (fidelity.shouldRetry) {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'fidelity gaps remain after retries; proceeding with deterministic normalization', {
         reasons: fidelity.reasons,
       }, 'warn');
+    }
+
+    const initialMissingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, bestResult);
+    if (requiredSemanticMentions.length > 0 && initialMissingSemanticMentions.length > 0) {
+      const requiredLabels = describeSemanticMentionKeys(requiredSemanticMentions);
+      const missingLabels = describeSemanticMentionKeys(initialMissingSemanticMentions);
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'semantic enforcement pass triggered', {
+        requiredLabels,
+        missingLabels,
+      }, 'warn');
+
+      const semanticPromptSeed = `${prompt}
+
+SEMANTIC ANCHOR ENFORCEMENT (OCR-CONDITIONED):
+- Blueprint text indicates these spaces/components: ${requiredLabels.join(', ')}.
+- Ensure each mentioned space is represented in output when geometric evidence exists.
+- Represent spaces primarily via rooms[].name (e.g., Kitchen, Staircase, Bedroom, WC, Utility, Garage).
+- Preserve structural geometry/topology; improve semantics without collapsing walls.
+- If a mentioned space cannot be localized confidently, add an explicit high-severity conflict naming the missing space.
+`;
+      const semanticPrompt = buildBlueprintRetryPrompt(
+        semanticPromptSeed,
+        [
+          `Missing semantic anchors in current output: ${missingLabels.join(', ')}.`,
+          'Recover missing room/function labels while preserving existing geometry.',
+        ]
+      );
+
+      try {
+        const semanticCandidate = await generateAzureVisionObject<GeometricReconstruction>(semanticPrompt, imageUrl);
+        if (hasNonEmptyWalls(semanticCandidate)) {
+          const promotedSemantic = promoteBestCandidate(semanticCandidate, 'semantic-enforcement', {
+            minScoreGain: 0.6,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+          if (promotedSemantic) {
+            result = bestResult;
+            const remaining = describeSemanticMentionKeys(getMissingSemanticMentionKeys(requiredSemanticMentions, bestResult));
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'semantic enforcement improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              remainingMissingSemantic: remaining,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'semantic enforcement kept as fallback; current candidate remained stronger', {
+              selected: bestCandidateLabel,
+              bestScore,
+              missingSemantic: missingLabels,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'semantic enforcement pass failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
+
+    const missingAfterSemanticPass = getMissingSemanticMentionKeys(requiredSemanticMentions, bestResult);
+    const stairsRequired = requiredSemanticMentions.includes('stairs');
+    const stairsMissing = missingAfterSemanticPass.includes('stairs');
+    if (stairsRequired && stairsMissing && estimateResultFloorCount(bestResult) >= 2) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'staircase-specific enforcement triggered', {
+        missingSemantic: describeSemanticMentionKeys(missingAfterSemanticPass),
+      }, 'warn');
+
+      const stairPromptSeed = `${prompt}
+
+VERTICAL CIRCULATION ENFORCEMENT:
+- Blueprint evidence indicates staircase/up-down circulation.
+- Recover staircase core explicitly as one of:
+  1) room name containing "Stair", "Staircase", or "Stair Hall", OR
+  2) furniture/object type containing "stair" attached to the correct floor_level.
+- Preserve current wall/room topology and avoid deleting valid geometry.
+- If stair location is ambiguous, keep geometry conservative and add explicit high-severity conflict mentioning staircase uncertainty.
+`;
+      const stairPrompt = buildBlueprintRetryPrompt(
+        stairPromptSeed,
+        [
+          'Staircase is expected from blueprint annotations but missing in current output.',
+          'Recover stairs/landing semantics without collapsing interior layout.',
+        ]
+      );
+
+      try {
+        const stairCandidate = await generateAzureVisionObject<GeometricReconstruction>(stairPrompt, imageUrl);
+        if (hasNonEmptyWalls(stairCandidate)) {
+          const promotedStairCandidate = promoteBestCandidate(stairCandidate, 'staircase-enforcement', {
+            minScoreGain: 0.4,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+
+          if (promotedStairCandidate && hasSemanticMentionKey(bestResult, 'stairs')) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'staircase enforcement improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'staircase enforcement kept as fallback; current candidate remained stronger', {
+              selected: bestCandidateLabel,
+              bestScore,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'staircase enforcement failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
+
+    const stairSymbolRecoveryNeeded = shouldAttemptStairSymbolRecovery(layoutHints, bestResult, requiredSemanticMentions);
+    if (stairSymbolRecoveryNeeded) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'non-text stair-symbol recovery triggered for multi-floor layout', {
+        inferredFloorCount: estimateResultFloorCount(bestResult),
+        floorSignals: estimateFloorHintCount(layoutHints),
+      }, 'warn');
+
+      const stairSymbolPromptSeed = `${prompt}
+
+NON-TEXT STAIR SYMBOL RECOVERY:
+- Detect staircase/vertical-circulation from drawing geometry and symbols even when no text label is present.
+- Use visual patterns such as repeated narrow parallel treads, stair well cores, turn landings, and directional stair arrows.
+- Represent detected stairs via room names containing "Stair"/"Staircase" and/or furniture/object entries containing "stair".
+- Preserve existing valid walls, rooms, doors, and windows. Do not collapse geometry.
+- If a plausible stair core exists but exact boundary is uncertain, keep conservative geometry and emit an explicit medium/high conflict.
+`;
+      const stairSymbolPrompt = buildBlueprintRetryPrompt(
+        stairSymbolPromptSeed,
+        [
+          'Multi-floor blueprint likely requires vertical circulation but current output lacks staircase semantics.',
+          'Recover stairs from visual symbol patterns, not only text labels.',
+        ]
+      );
+
+      try {
+        const stairSymbolCandidate = await generateAzureVisionObject<GeometricReconstruction>(stairSymbolPrompt, imageUrl);
+        if (hasNonEmptyWalls(stairSymbolCandidate)) {
+          const promotedStairSymbol = promoteBestCandidate(stairSymbolCandidate, 'stair-symbol-recovery', {
+            minScoreGain: 0.3,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+
+          if (promotedStairSymbol && hasSemanticMentionKey(bestResult, 'stairs')) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'non-text stair-symbol recovery improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'non-text stair-symbol recovery kept as fallback; current candidate remained stronger', {
+              selected: bestCandidateLabel,
+              bestScore,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'non-text stair-symbol recovery failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
+
+    if (shouldAttemptInteriorLayoutRecovery(bestResult, layoutHints)) {
+      const interiorSignal = analyzeInteriorLayoutSignal(bestResult);
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'interior layout refinement triggered to avoid placeholder partitions', {
+        denseFloors: interiorSignal.denseFloors,
+        gridLikeFloors: interiorSignal.gridLikeFloors,
+        averageInteriorWallsPerFloor: Number(interiorSignal.averageInteriorWallsPerFloor.toFixed(2)),
+        reasons: interiorSignal.reasons,
+      }, 'warn');
+
+      const interiorPromptSeed = `${prompt}
+
+INTERIOR PARTITION REFINEMENT:
+- Current reconstruction appears over-regularized with repetitive equal-size room blocks.
+- Reconstruct interior walls and room polygons from visible wall-line evidence on each floor.
+- Do not clone the same split grid across floors unless the drawing explicitly matches.
+- Preserve validated exterior shell, scale, and floor_count while improving interior partition placement.
+- Keep stairs/bathrooms/circulation spaces when evidence exists.
+- If a boundary is uncertain, keep geometry conservative and emit explicit conflict instead of forcing symmetric quadrants.
+`;
+      const recoveryDiagnostics = interiorSignal.reasons.length > 0
+        ? interiorSignal.reasons
+        : ['Interior partition placement appears underfit and overly repetitive; refine using visible line evidence only.'];
+      const interiorPrompt = buildBlueprintRetryPrompt(interiorPromptSeed, recoveryDiagnostics.slice(0, 4));
+
+      try {
+        const interiorCandidate = await generateAzureVisionObject<GeometricReconstruction>(interiorPrompt, structuralInputImage);
+        if (hasNonEmptyWalls(interiorCandidate)) {
+          const promotedInterior = promoteBestCandidate(interiorCandidate, 'interior-layout-recovery', {
+            minScoreGain: 0.4,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+          if (promotedInterior) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'interior layout refinement improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'interior layout refinement kept as fallback; current candidate remained stronger', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'interior layout refinement failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
+
+    if (shouldAttemptRoomDimensionRecovery(bestResult, layoutHints)) {
+      const dimensionAssessment = estimateRoomDimensionAlignment(layoutHints, bestResult);
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'room dimension-position enforcement triggered', {
+        hintCount: dimensionAssessment.hintCount,
+        matchedCount: dimensionAssessment.matchedCount,
+        mismatches: dimensionAssessment.mismatches.length,
+      }, 'warn');
+
+      const dimensionPromptSeed = `${prompt}
+
+ROOM DIMENSION + POSITION ENFORCEMENT:
+- Blueprint contains room-size annotations (width x depth). Match room polygons to these dimensions where visible.
+- Place each room polygon near the annotated location and on the corresponding floor block.
+- Preserve validated exterior shell, floor_count, and structural graph while correcting interior room sizes/positions.
+- Do not fabricate rooms that are not supported by drawing evidence.
+- If any dimension annotation cannot be localized confidently, keep conservative geometry and emit explicit conflict with that annotation text.
+`;
+      const diagnostics = dimensionAssessment.reasons.length > 0
+        ? dimensionAssessment.reasons
+        : ['Room dimension hints are not matching current room polygon sizes/positions.'];
+      const dimensionPrompt = buildBlueprintRetryPrompt(dimensionPromptSeed, diagnostics.slice(0, 4));
+
+      try {
+        const dimensionCandidate = await generateAzureVisionObject<GeometricReconstruction>(dimensionPrompt, imageUrl);
+        if (hasNonEmptyWalls(dimensionCandidate)) {
+          const promotedDimension = promoteBestCandidate(dimensionCandidate, 'room-dimension-enforcement', {
+            minScoreGain: 0.3,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+          if (promotedDimension) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'room dimension-position enforcement improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'room dimension-position enforcement kept as fallback; current candidate remained stronger', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'room dimension-position enforcement failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
     }
 
     if (shouldAttemptOpeningRecovery(result, layoutHints)) {
@@ -3174,44 +4319,35 @@ OPENING-RECOVERY OVERRIDE:
       try {
         const openingCandidate = await generateAzureVisionObject<GeometricReconstruction>(openingRecoveryPrompt, imageUrl);
         if (hasNonEmptyWalls(openingCandidate)) {
+          const mergedCandidate = mergeOpeningsFromRecovery(result, openingCandidate);
           const openingCandidateScore = scoreReconstructionDensity(openingCandidate, layoutHints);
           const openingCandidateCount = getOpeningCount(openingCandidate);
-          const mergedCandidate = mergeOpeningsFromRecovery(result, openingCandidate);
           const mergedScore = scoreReconstructionDensity(mergedCandidate, layoutHints);
           const mergedOpenings = getOpeningCount(mergedCandidate);
 
-          let chosenPayload = result;
-          let chosenScore = baseScore;
-          let chosenOpenings = baseOpenings;
-          let chosenSource: 'base' | 'merged' | 'opening-pass' = 'base';
+          const promotedOpeningPass = promoteBestCandidate(openingCandidate, 'opening-pass', {
+            minScoreGain: 1.5,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+          });
+          const promotedMergedPass = promoteBestCandidate(mergedCandidate, 'opening-merge', {
+            minScoreGain: 0.8,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+          });
 
-          if (mergedOpenings > baseOpenings && mergedScore >= baseScore - 2) {
-            chosenPayload = mergedCandidate;
-            chosenScore = mergedScore;
-            chosenOpenings = mergedOpenings;
-            chosenSource = 'merged';
-          }
-
-          if (
-            openingCandidateScore > chosenScore + 4 ||
-            (openingCandidateCount > chosenOpenings + 2 && openingCandidateScore >= chosenScore - 1)
-          ) {
-            chosenPayload = openingCandidate;
-            chosenScore = openingCandidateScore;
-            chosenOpenings = openingCandidateCount;
-            chosenSource = 'opening-pass';
-          }
-
-          if (chosenSource !== 'base') {
+          if (promotedOpeningPass || promotedMergedPass) {
+            result = bestResult;
             traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery improved selected reconstruction', {
-              source: chosenSource,
+              selected: bestCandidateLabel,
               baseScore,
-              chosenScore,
+              chosenScore: bestScore,
               baseOpenings,
-              chosenOpenings,
-              ...summarizeReconstruction(chosenPayload),
+              chosenOpenings: bestOpenings,
+              ...summarizeReconstruction(result),
             }, 'warn');
-            result = chosenPayload;
           } else {
             traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery kept as fallback only; base result remained stronger', {
               baseScore,
@@ -3233,6 +4369,10 @@ OPENING-RECOVERY OVERRIDE:
     const hintedFloorCount = estimateFloorHintCount(layoutHints);
     const inferredFloorCount = estimateResultFloorCount(result);
     const sparseMultiFloorShell = isLikelySparseMultiFloorShell(result, hintedFloorCount);
+    const interiorLayoutSignal = analyzeInteriorLayoutSignal(result);
+    const placeholderInterior = interiorLayoutSignal.placeholder;
+    const dimensionAlignmentSignal = estimateRoomDimensionAlignment(layoutHints, result);
+    const significantDimensionMismatch = dimensionAlignmentSignal.shouldRetry && dimensionAlignmentSignal.hintCount >= 2;
     const densityFloorCount = Math.max(1, inferredFloorCount);
     const roomDensityPerFloor = (result?.rooms?.length || 0) / densityFloorCount;
     const wallDensityPerFloor = (result?.walls?.length || 0) / densityFloorCount;
@@ -3240,7 +4380,7 @@ OPENING-RECOVERY OVERRIDE:
     const lowWallDensity = hintedFloorCount >= 2 && wallDensityPerFloor < 4.8 && roomDensityPerFloor < 2.2;
     const shouldAttemptSegmentation =
       hintedFloorCount >= 2 &&
-      (inferredFloorCount <= 1 || sparseMultiFloorShell || lowRoomDensity || lowWallDensity);
+      (inferredFloorCount <= 1 || sparseMultiFloorShell || lowRoomDensity || lowWallDensity || placeholderInterior || significantDimensionMismatch);
 
     if (shouldAttemptSegmentation) {
       const monolithicScore = scoreReconstructionDensity(result, layoutHints);
@@ -3250,6 +4390,10 @@ OPENING-RECOVERY OVERRIDE:
         sparseMultiFloorShell,
         lowRoomDensity,
         lowWallDensity,
+        placeholderInterior,
+        significantDimensionMismatch,
+        interiorReasons: interiorLayoutSignal.reasons,
+        dimensionMismatchCount: dimensionAlignmentSignal.mismatches.length,
         roomDensityPerFloor,
         wallDensityPerFloor,
         monolithicScore,
@@ -3265,16 +4409,22 @@ OPENING-RECOVERY OVERRIDE:
       );
       if (segmentedResult && hasNonEmptyWalls(segmentedResult)) {
         const segmentedScore = scoreReconstructionDensity(segmentedResult, layoutHints);
-        if (segmentedScore > monolithicScore + 4) {
+        const promotedSegmented = promoteBestCandidate(segmentedResult, 'segmented-floor-recovery', {
+          minScoreGain: 4,
+          allowOpeningBoost: true,
+          allowFidelityBoost: true,
+          allowConflictBoost: true,
+        });
+        if (promotedSegmented) {
           traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery replaced monolithic output', {
             hintedFloorCount,
             previousFloorCount: inferredFloorCount,
-            recoveredFloorCount: estimateResultFloorCount(segmentedResult),
+            recoveredFloorCount: estimateResultFloorCount(bestResult),
             monolithicScore,
-            segmentedScore,
-            ...summarizeReconstruction(segmentedResult),
+            segmentedScore: bestScore,
+            ...summarizeReconstruction(bestResult),
           }, 'warn');
-          result = segmentedResult;
+          result = bestResult;
         } else {
           traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented result kept as fallback only; monolithic output scored higher', {
             hintedFloorCount,
@@ -3291,13 +4441,168 @@ OPENING-RECOVERY OVERRIDE:
       }
     }
 
+    const consensusEligible = shouldRunConsensusEnsemble(bestResult, layoutHints, bestScore);
+    if (consensusEligible) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus ensemble triggered for cross-blueprint robustness', {
+        consensusRuns: VISION_CONSENSUS_RUNS,
+        minScoreTarget: VISION_CONSENSUS_MIN_SCORE,
+        selected: bestCandidateLabel,
+        bestScore,
+        bestOpenings,
+      }, 'warn');
+
+      for (let consensusRun = 2; consensusRun <= VISION_CONSENSUS_RUNS; consensusRun += 1) {
+        const consensusReasons = buildConsensusRecoveryReasons(bestResult, layoutHints, bestScore);
+        const consensusPrompt = consensusReasons.length > 0
+          ? buildBlueprintRetryPrompt(prompt, consensusReasons)
+          : prompt;
+        const consensusImage = consensusRun % 2 === 0 ? imageUrl : structuralInputImage;
+        const consensusLabel = `consensus-${consensusRun}`;
+
+        try {
+          const consensusCandidate = await generateAzureVisionObject<GeometricReconstruction>(consensusPrompt, consensusImage);
+          if (!hasNonEmptyWalls(consensusCandidate)) {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus candidate returned no wall geometry', {
+              consensusLabel,
+              imageVariant: consensusImage === imageUrl ? 'original' : 'preprocessed',
+            }, 'warn');
+            continue;
+          }
+
+          const consensusScore = scoreReconstructionDensity(consensusCandidate, layoutHints);
+          const consensusOpenings = getOpeningCount(consensusCandidate);
+          const mergedConsensus = mergeOpeningsFromRecovery(bestResult, consensusCandidate);
+          const mergedConsensusScore = scoreReconstructionDensity(mergedConsensus, layoutHints);
+          const mergedConsensusOpenings = getOpeningCount(mergedConsensus);
+
+          const promotedRaw = promoteBestCandidate(consensusCandidate, consensusLabel, {
+            minScoreGain: 1.6,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+          });
+          const promotedMerged = promoteBestCandidate(mergedConsensus, `${consensusLabel}-merge`, {
+            minScoreGain: 0.6,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+          });
+
+          if (promotedRaw || promotedMerged) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus round improved selected reconstruction', {
+              consensusLabel,
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              consensusScore,
+              consensusOpenings,
+              mergedConsensusScore,
+              mergedConsensusOpenings,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus round kept as fallback; current best remained stronger', {
+              consensusLabel,
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              consensusScore,
+              consensusOpenings,
+              mergedConsensusScore,
+              mergedConsensusOpenings,
+            }, 'warn');
+          }
+
+          const postConsensusFidelity = evaluateReconstructionFidelity(bestResult, layoutHints);
+          const targetOpenings = Math.max(2, Math.floor((bestResult?.rooms?.length || 0) * 0.3));
+          if (!postConsensusFidelity.shouldRetry && bestScore >= VISION_CONSENSUS_MIN_SCORE && bestOpenings >= targetOpenings) {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus early-stop condition reached', {
+              consensusLabel,
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              targetOpenings,
+            }, 'warn');
+            break;
+          }
+        } catch (error) {
+          traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus round failed; continuing with current best', {
+            consensusLabel,
+            reason: error instanceof Error ? error.message : String(error),
+          }, 'warn');
+        }
+      }
+
+      result = bestResult;
+    }
+
     if (!hasNonEmptyWalls(result)) {
       throw new Error("Engineering Synthesis Failed: GPT-4o Vision could not construct a valid geometric structure from the provided blueprint. Please ensure the image is a clear architectural floor plan.");
     }
     result = normalizeReconstructionGeometry(result);
     result = inferRoofFromWallFootprint(result);
     traceLog('Infralith Vision Engine', traceId, '6/9', 'applying deterministic building-code validation');
-    const validatedResult = applyBuildingCodes(result);
+    let validatedResult = applyBuildingCodes(result);
+    const unresolvedSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, validatedResult);
+    const multiFloorExpected = hasMultiFloorExpectation(layoutHints, validatedResult);
+    const stairsResolved = hasSemanticMentionKey(validatedResult, 'stairs');
+    const unresolvedMentions = [...unresolvedSemanticMentions];
+    if (multiFloorExpected && !stairsResolved && !unresolvedMentions.includes('stairs')) {
+      unresolvedMentions.push('stairs');
+    }
+    if ((requiredSemanticMentions.length > 0 || multiFloorExpected) && unresolvedMentions.length > 0) {
+      const location =
+        validatedResult?.rooms?.[0]?.polygon?.[0] ||
+        validatedResult?.walls?.[0]?.start ||
+        [0, 0];
+      validatedResult = {
+        ...validatedResult,
+        conflicts: [
+          ...(validatedResult.conflicts || []),
+          {
+            type: 'structural',
+            severity: 'high',
+            description: `Blueprint semantics indicate ${describeSemanticMentionKeys(unresolvedMentions).join(', ')}, but these spaces/components were not resolved in the generated interior layout.`,
+            location: [Number(location[0] || 0), Number(location[1] || 0)] as [number, number],
+          },
+        ],
+      };
+      traceLog('Infralith Vision Engine', traceId, '7/9', 'semantic coverage gap persisted after generation', {
+        unresolved: describeSemanticMentionKeys(unresolvedMentions),
+      }, 'warn');
+    }
+    const dimensionAlignment = estimateRoomDimensionAlignment(layoutHints, validatedResult);
+    if (dimensionAlignment.hintCount >= 2 && dimensionAlignment.mismatches.length > 0) {
+      const firstMismatch = dimensionAlignment.mismatches[0];
+      const ratio = dimensionAlignment.mismatches.length / Math.max(1, dimensionAlignment.hintCount);
+      const severity: 'medium' | 'high' = ratio >= 0.5 ? 'high' : 'medium';
+      const location =
+        firstMismatch?.hintCenter ||
+        validatedResult?.rooms?.[0]?.polygon?.[0] ||
+        validatedResult?.walls?.[0]?.start ||
+        [0, 0];
+      const mismatchLabels = dimensionAlignment.mismatches
+        .slice(0, 2)
+        .map((item) => `"${item.hintText}"`)
+        .join(', ');
+      validatedResult = {
+        ...validatedResult,
+        conflicts: [
+          ...(validatedResult.conflicts || []),
+          {
+            type: 'structural',
+            severity,
+            description: `Room dimension/position alignment mismatch for ${dimensionAlignment.mismatches.length}/${dimensionAlignment.hintCount} parsed room-dimension hint(s)${mismatchLabels ? ` (examples: ${mismatchLabels})` : ''}.`,
+            location: [Number(location[0] || 0), Number(location[1] || 0)] as [number, number],
+          },
+        ],
+      };
+      traceLog('Infralith Vision Engine', traceId, '7/9', 'room dimension-position mismatch persisted after generation', {
+        hintCount: dimensionAlignment.hintCount,
+        mismatches: dimensionAlignment.mismatches.length,
+      }, 'warn');
+    }
     traceLog('Infralith Vision Engine', traceId, '7/9', 'validation complete', summarizeReconstruction(validatedResult));
     const finalPayload: GeometricReconstruction = {
       ...validatedResult,

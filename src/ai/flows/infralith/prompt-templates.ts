@@ -173,6 +173,8 @@ MANDATORY PIPELINE:
 - Compute room area from polygon geometry (m^2).
 - Use visible labels when available; otherwise use deterministic names ("Room 1", "Room 2", ...).
 - Keep one room polygon per enclosed region unless explicit evidence shows sub-partitions.
+- If room dimension annotations are visible (e.g., 12'x14', 3.5m x 4.2m), align room polygon width/depth and location to those annotations.
+- Avoid cloning uniform room-size grids across floors unless the blueprint explicitly shows identical partitions.
 
 6) ROOF FOOTPRINT
 - Set roof polygon from the outer building shell.
@@ -190,6 +192,7 @@ MANDATORY PIPELINE:
 - All doors/windows must have valid host_wall_id.
 - Emit confidence in [0,1] for walls, doors, windows, and rooms when estimable.
 - If dimension anchors are present, avoid trivial single-rectangle fallback unless evidence is truly rectangular.
+- If room-level dimension pairs are detected, enforce room size/position alignment to those annotations or add explicit conflict.
 - If floor labels suggest multi-floor content, set floor levels consistently or emit explicit high-severity conflict.
 - Prefer explicit conflict over geometric guessing when OCR text and drawing lines disagree.
 - If any major gate is uncertain or fails, add conflict with precise location.
