@@ -1,17 +1,19 @@
 'use server';
 
-import { WorkflowResult, DevOpsInsight, ModelVersion, ApprovalStep } from './types';
+import { WorkflowResult, DevOpsInsight, ModelVersion, ApprovalStep, ConstructionControlGate } from './types';
 import { parseBlueprint } from './blueprint-parser';
 import { checkCompliance } from './compliance-check';
 import { analyzeRisk } from './risk-analysis';
 import { predictCost } from './cost-prediction';
 import { runDevOpsAgent } from './devops-agent';
+import { formatRagPromptContext, retrieveConstructionContext } from './rag-retrieval';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 
 const ORCHESTRATOR_VERSION = '3.0.0'; // Bumped for Native OpenCV.js Migration
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
+const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
 
 function paramHash(): string {
     const seed = `blueprint-parser-v3|opencv-js-native|compliance-is456-nbc2016|risk-seismic-v2|cost-capex-india|devops-github-v1|${ORCHESTRATOR_VERSION}`;
@@ -51,25 +53,60 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     // 1. Context Generation
     const blueprint = await parseBlueprint(input);
+    const derivedProjectScope =
+        normalizeConflictText(blueprint?.projectScope, '') ||
+        normalizeConflictText(originalFileName.replace(/\.[^.]+$/, ''), '');
+    const ragQuery = buildRagQuery(blueprint, originalFileName);
+    const ragContext = await retrieveConstructionContext(ragQuery, { top: 10 });
+    const ragPromptContext = formatRagPromptContext(ragContext, 8_500);
 
     // 2. Parallel Domain Expert Analysis
     const [compliance, risk, cost] = await Promise.all([
-        checkCompliance(JSON.stringify(blueprint)),
-        analyzeRisk(JSON.stringify(blueprint)),
-        predictCost(JSON.stringify(blueprint))
+        checkCompliance(JSON.stringify(blueprint), ragPromptContext),
+        analyzeRisk(JSON.stringify(blueprint), ragPromptContext),
+        predictCost(JSON.stringify(blueprint), ragPromptContext),
     ]);
 
     const extractionQuality = buildExtractionQuality(blueprint);
+    if (ragContext.diagnostics.warning) {
+        extractionQuality.warnings.push(`RAG retrieval warning: ${ragContext.diagnostics.warning}`);
+    }
+    if (ragContext.diagnostics.errors.length > 0) {
+        extractionQuality.warnings.push(`RAG retrieval errors: ${ragContext.diagnostics.errors.slice(0, 2).join(' | ')}`);
+    }
+    if (ragContext.chunks.length === 0) {
+        extractionQuality.warnings.push('No external reference chunks retrieved. Report is grounded only on extracted project data.');
+    } else {
+        extractionQuality.warnings.push(`RAG grounded with ${ragContext.chunks.length} retrieved chunk(s) across index(es): ${ragContext.diagnostics.indexesQueried.join(', ') || 'N/A'}.`);
+    }
     const materialRows = Array.isArray(blueprint?.materials) ? blueprint.materials : [];
 
-    // 3. Map Conflicts
-    const conflicts = (compliance.violations || []).map((v: any) => ({
-        riskCategory: v.ruleId?.includes('13920') || v.ruleId?.includes('CRITICAL') ? 'Critical' : 'Warning',
-        regulationRef: v.ruleId || 'IS-456:2000',
-        location: inferConflictLocation(v.description || v.comment),
-        requiredValue: v.comment || 'Refer cited code tolerance',
-        measuredValue: v.description || 'Deviation detected'
-    }));
+    // 3. Map conflicts with grounded fields from compliance output.
+    const conflicts = (compliance.violations || []).map((v: any) => {
+        const description = normalizeConflictText(v?.description, NOT_AVAILABLE_TEXT);
+        const comment = normalizeConflictText(v?.comment, NOT_AVAILABLE_TEXT);
+        const measuredValue = normalizeConflictText(v?.measuredValue, description);
+        const requiredValue = normalizeConflictText(v?.requiredValue, comment);
+        const location = normalizeConflictText(v?.location, inferConflictLocation(`${description} ${comment}`));
+        const evidence = normalizeConflictText(v?.evidence, '');
+        const confidenceCandidate = Number(v?.confidence);
+        const confidenceScore = Number.isFinite(confidenceCandidate)
+            ? Number(clamp(confidenceCandidate, 0, 1).toFixed(2))
+            : undefined;
+
+        return {
+            riskCategory: inferConflictRiskCategory(v, compliance.overallStatus),
+            regulationRef: normalizeConflictText(v?.ruleId, NOT_AVAILABLE_TEXT),
+            location,
+            requiredValue,
+            measuredValue,
+            evidence,
+            confidenceScore,
+            citationIds: Array.isArray(v?.citationIds)
+                ? v.citationIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+                : [],
+        };
+    });
 
     if (risk.riskIndex > 70) {
         conflicts.push({
@@ -77,12 +114,15 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
             regulationRef: 'SAFETY-OVERRIDE',
             location: 'Project-Wide',
             requiredValue: 'Nominal Risk Index (< 50)',
-            measuredValue: `Critical index at ${risk.riskIndex}`
+            measuredValue: `Critical index at ${risk.riskIndex}`,
+            evidence: `Risk analyzer reported project riskIndex=${risk.riskIndex}.`,
+            confidenceScore: 0.9,
+            citationIds: [],
         });
     }
 
     const partialResult: any = {
-        projectScope: blueprint.projectScope,
+        projectScope: derivedProjectScope,
         riskReport: risk,
         complianceReport: compliance,
         conflicts: conflicts,
@@ -147,11 +187,18 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         0,
         100
     );
+    const constructionControlSummary = buildConstructionControlSummary({
+        conflicts,
+        blueprint,
+        risk,
+        cost,
+        extractionQuality,
+    });
 
     const result: WorkflowResult = {
         id: `INF-${Date.now().toString().slice(-6)}`,
         timestamp: new Date().toISOString(),
-        projectScope: blueprint.projectScope,
+        projectScope: derivedProjectScope,
         role: role === 'Admin' ? 'Admin' : 'Engineer',
 
         parsedBlueprint: blueprint,
@@ -177,6 +224,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
             mimeType: input.type || undefined,
             sizeBytes: input.size,
         },
+        constructionControlSummary,
 
         modelVersion,
         approvalChain,
@@ -189,11 +237,57 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const normalizeConflictText = (value: unknown, fallback: string): string => {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+    return normalized || fallback;
+};
+
+const inferConflictRiskCategory = (
+    violation: any,
+    overallStatus: 'Pass' | 'Warning' | 'Fail'
+): 'Critical' | 'Warning' => {
+    const severity = String(violation?.severity || '').toLowerCase();
+    const ruleId = String(violation?.ruleId || '').toLowerCase();
+    const description = String(violation?.description || '').toLowerCase();
+    const measuredValue = String(violation?.measuredValue || '').toLowerCase();
+
+    if (severity === 'critical') return 'Critical';
+    if (ruleId.includes('critical') || ruleId.includes('13920')) return 'Critical';
+    if (/collapse|life\s*safety|egress|instability|fire/.test(description)) return 'Critical';
+    if (/critical|unsafe/.test(measuredValue)) return 'Critical';
+    return overallStatus === 'Fail' ? 'Critical' : 'Warning';
+};
+
 const hasValue = (value: unknown) => {
     if (typeof value === 'number') return Number.isFinite(value) && value > 0;
     if (typeof value === 'string') return value.trim().length > 0;
     if (Array.isArray(value)) return value.length > 0;
     return value != null;
+};
+
+const buildRagQuery = (blueprint: any, originalFileName: string): string => {
+    const terms = [
+        asSearchTerm(blueprint?.projectScope),
+        asSearchTerm(blueprint?.seismicZone),
+        asSearchTerm(blueprint?.totalFloors),
+        asSearchTerm(blueprint?.height),
+        asSearchTerm(blueprint?.totalArea),
+        asSearchTerm(originalFileName.replace(/\.[^.]+$/, '')),
+    ].filter(Boolean);
+
+    const materialHints = Array.isArray(blueprint?.materials)
+        ? blueprint.materials
+            .slice(0, 4)
+            .map((item: any) => asSearchTerm(item?.item))
+            .filter(Boolean)
+        : [];
+
+    return [...terms, ...materialHints].join(' ').trim();
+};
+
+const asSearchTerm = (value: unknown): string => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    return text.length > 0 ? text : '';
 };
 
 const buildExtractionQuality = (blueprint: any) => {
@@ -209,10 +303,15 @@ const buildExtractionQuality = (blueprint: any) => {
     const extractedFields = checks.filter(([, ok]) => ok).map(([field]) => field);
     const missingFields = checks.filter(([, ok]) => !ok).map(([field]) => field);
     const coverageScore = Math.round((extractedFields.length / checks.length) * 100);
+    const criticalFields = new Set(['totalFloors', 'height', 'totalArea', 'seismicZone']);
+    const criticalMissingFields = missingFields.filter((field) => criticalFields.has(field));
     const warnings: string[] = [];
 
     if (missingFields.length > 0) {
         warnings.push(`Missing structured extraction: ${missingFields.join(', ')}.`);
+    }
+    if (criticalMissingFields.length > 0) {
+        warnings.push(`Critical document fields missing for reliable compliance: ${criticalMissingFields.join(', ')}.`);
     }
     if (!hasValue(blueprint?.materials)) {
         warnings.push('BOQ rows were not confidently extracted. Upload clearer schedule/quantity pages.');
@@ -220,12 +319,147 @@ const buildExtractionQuality = (blueprint: any) => {
     if (!hasValue(blueprint?.seismicZone) || blueprint?.seismicZone === 'Undefined') {
         warnings.push('Seismic zone is missing or ambiguous in uploaded document.');
     }
+    if (coverageScore < 70) {
+        warnings.push('Low extraction coverage. Report should be manually verified before approval decisions.');
+    }
 
     return {
         coverageScore,
         extractedFields,
         missingFields,
+        criticalMissingFields,
+        reviewRequired: coverageScore < 70 || criticalMissingFields.length > 0,
         warnings,
+        rawTextLength: Number.isFinite(Number(blueprint?._extractionMeta?.ocrChars))
+            ? Number(blueprint._extractionMeta.ocrChars)
+            : undefined,
+    };
+};
+
+const gateStatus = (
+    condition: { critical?: boolean; warning?: boolean }
+): 'Pass' | 'Warning' | 'Critical' => {
+    if (condition.critical) return 'Critical';
+    if (condition.warning) return 'Warning';
+    return 'Pass';
+};
+
+const describeTopConflictRefs = (conflicts: WorkflowResult['conflicts']): string => {
+    const refs = conflicts
+        .map((conflict) => String(conflict?.regulationRef || '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    return refs.length > 0 ? refs.join(', ') : 'No regulation references detected';
+};
+
+const buildConstructionControlSummary = ({
+    conflicts,
+    blueprint,
+    risk,
+    cost,
+    extractionQuality,
+}: {
+    conflicts: WorkflowResult['conflicts'];
+    blueprint: any;
+    risk: any;
+    cost: any;
+    extractionQuality: ReturnType<typeof buildExtractionQuality>;
+}): NonNullable<WorkflowResult['constructionControlSummary']> => {
+    const criticalConflicts = conflicts.filter((conflict) => conflict.riskCategory === 'Critical').length;
+    const warningConflicts = Math.max(0, conflicts.length - criticalConflicts);
+    const hasCostBreakdown = Array.isArray(cost?.breakdown) && cost.breakdown.length > 0;
+    const hasMaterials = Array.isArray(blueprint?.materials) && blueprint.materials.length > 0;
+    const hazards = Array.isArray(risk?.hazards) ? risk.hazards.length : 0;
+    const missingFields = extractionQuality.missingFields.length;
+    const criticalMissing = extractionQuality.criticalMissingFields?.length || 0;
+
+    const gates: ConstructionControlGate[] = [
+        {
+            key: 'progress',
+            title: 'Progress Control',
+            requirement: 'Track current completion, pending activities, and updated forecast every report cycle.',
+            status: gateStatus({
+                critical: extractionQuality.coverageScore < 55,
+                warning: extractionQuality.coverageScore < 75,
+            }),
+            evidence: `Coverage ${extractionQuality.coverageScore}% | Floors ${blueprint?.totalFloors ?? 'N/A'} | Area ${blueprint?.totalArea ?? 'N/A'} sq.m`,
+            action: extractionQuality.coverageScore < 75
+                ? 'Attach clearer drawings and baseline schedule snapshot for planned vs actual tracking.'
+                : 'Continue periodic progress updates with baseline comparison.',
+        },
+        {
+            key: 'cost',
+            title: 'Cost Control',
+            requirement: 'Report certified total cost, category breakdown, and duration outlook.',
+            status: gateStatus({
+                critical: !Number.isFinite(Number(cost?.total)) || Number(cost?.total) <= 0,
+                warning: !hasCostBreakdown,
+            }),
+            evidence: `CAPEX ${Number(cost?.total || 0).toLocaleString()} ${cost?.currency || 'INR'} | Breakdown rows ${hasCostBreakdown ? cost.breakdown.length : 0} | Duration ${cost?.duration || 'N/A'}`,
+            action: (!Number.isFinite(Number(cost?.total)) || Number(cost?.total) <= 0 || !hasCostBreakdown)
+                ? 'Add signed BOQ rates and package-wise cost split before procurement decisions.'
+                : 'Maintain variance tracking against sanctioned estimate.',
+        },
+        {
+            key: 'quality',
+            title: 'Quality Control',
+            requirement: 'Maintain material specifications, test evidence, and acceptance status in each cycle.',
+            status: gateStatus({
+                critical: !hasMaterials || criticalMissing >= 2,
+                warning: !hasMaterials || missingFields > 0,
+            }),
+            evidence: `Materials extracted ${hasMaterials ? blueprint.materials.length : 0} | Missing fields ${missingFields} (critical ${criticalMissing})`,
+            action: (!hasMaterials || missingFields > 0)
+                ? 'Upload schedule/test-sheet pages and map each key material to spec-grade evidence.'
+                : 'Continue QC traceability with batch and test references.',
+        },
+        {
+            key: 'safety',
+            title: 'Safety & Risk',
+            requirement: 'Monitor risk index, active hazards, and mandatory site safety controls.',
+            status: gateStatus({
+                critical: Number(risk?.riskIndex || 0) >= 70 || String(risk?.level || '').toLowerCase() === 'critical',
+                warning: Number(risk?.riskIndex || 0) >= 50 || String(risk?.level || '').toLowerCase() === 'high',
+            }),
+            evidence: `Risk index ${risk?.riskIndex ?? 'N/A'} (${risk?.level || 'N/A'}) | Hazards ${hazards}`,
+            action: Number(risk?.riskIndex || 0) >= 50
+                ? 'Issue mitigation owners with due dates and verify closure in next cycle.'
+                : 'Keep routine toolbox, hazard log, and permit controls active.',
+        },
+        {
+            key: 'compliance',
+            title: 'Code Compliance',
+            requirement: 'List code references, observed deviations, and closure actions with confidence.',
+            status: gateStatus({
+                critical: criticalConflicts > 0,
+                warning: warningConflicts > 0,
+            }),
+            evidence: `Critical ${criticalConflicts} | Warning ${warningConflicts} | Refs ${describeTopConflictRefs(conflicts)}`,
+            action: criticalConflicts > 0
+                ? 'Close critical code deviations before execution approvals.'
+                : warningConflicts > 0
+                    ? 'Track warnings to closure with responsible engineer.'
+                    : 'No active code non-conformance detected.',
+        },
+        {
+            key: 'document-control',
+            title: 'Document Control',
+            requirement: 'Ensure latest revision set, readable sheets, and traceable evidence lines.',
+            status: gateStatus({
+                critical: extractionQuality.reviewRequired && criticalMissing > 0,
+                warning: extractionQuality.reviewRequired,
+            }),
+            evidence: `ReviewRequired ${extractionQuality.reviewRequired ? 'Yes' : 'No'} | OCR chars ${extractionQuality.rawTextLength ?? 'N/A'} | Missing ${missingFields}`,
+            action: extractionQuality.reviewRequired
+                ? 'Re-upload high-resolution latest revision with explicit labels and stamped tables.'
+                : 'Document package is acceptable for AI-assisted reporting.',
+        },
+    ];
+
+    return {
+        reportingStandard: 'Construction control matrix aligned to progress, quality, safety, cost, and code closure.',
+        generatedAt: new Date().toISOString(),
+        gates,
     };
 };
 
@@ -237,5 +471,5 @@ const inferConflictLocation = (description: string) => {
     if (/foundation|footing|soil|settlement/i.test(text)) return 'Foundation Zone';
     if (/beam|column|slab|wall|truss/i.test(text)) return 'Primary Structural Frame';
     if (/fire|smoke|hydrant|sprinkler/i.test(text)) return 'Fire Safety System';
-    return 'Core Structure / Coordination Zone';
+    return NOT_AVAILABLE_TEXT;
 };

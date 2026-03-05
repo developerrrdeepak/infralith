@@ -180,7 +180,7 @@ const extractHintsFromOcr = (ocrText: string): OcrHints => {
         if (!item || item.length < 3) continue;
 
         const qtySource = tokens.find((t, idx) => idx > 0 && /\d/.test(t)) || line;
-        const quantity = extractNumber(qtySource) ?? 0;
+        const quantity = extractNumber(qtySource) ?? '';
         const unit = (qtySource.match(/\b(cum|m3|m2|sqm|sq\.?\s*m|tonnes?|tons?|kg|mt|nos?|units?|bags?)\b/i)?.[1] || '').toLowerCase();
         const spec = (line.match(/\b(FE[-\s]?\d+[A-Z]?|M\d{2}|IS[-\s]?\d+)\b/i)?.[1] || '').toUpperCase();
 
@@ -277,12 +277,17 @@ const normalizeResult = (result: z.infer<typeof blueprintParseSchema> | null, hi
         (typeof result?.projectScope === 'string' && result.projectScope.trim()) ||
         (typeof result?.projectName === 'string' && result.projectName.trim()) ||
         hints.projectScope ||
-        'Construction Project';
+        null;
 
-    const totalFloors = toFloorCount(result?.totalFloors ?? result?.floors ?? hints.totalFloors, hints.totalFloors ?? 0);
-    const height = toMeters(result?.height ?? hints.height, hints.height ?? 0);
-    const totalArea = toSquareMeters(result?.totalArea ?? result?.area ?? hints.totalArea, hints.totalArea ?? 0);
-    const seismicZone = normalizeZone(result?.seismicZone ?? result?.zone ?? hints.seismicZone) || 'Undefined';
+    const totalFloorsSource = result?.totalFloors ?? result?.floors ?? hints.totalFloors;
+    const heightSource = result?.height ?? hints.height;
+    const totalAreaSource = result?.totalArea ?? result?.area ?? hints.totalArea;
+    const seismicZoneSource = result?.seismicZone ?? result?.zone ?? hints.seismicZone;
+
+    const totalFloors = totalFloorsSource == null ? null : toFloorCount(totalFloorsSource, 0);
+    const height = heightSource == null ? null : toMeters(heightSource, 0);
+    const totalArea = totalAreaSource == null ? null : toSquareMeters(totalAreaSource, 0);
+    const seismicZone = normalizeZone(seismicZoneSource);
 
     const parsedMaterials: ParsedMaterial[] = Array.isArray(result?.materials)
         ? result.materials
@@ -303,8 +308,8 @@ const normalizeResult = (result: z.infer<typeof blueprintParseSchema> | null, hi
 
     const materials = (parsedMaterials.length ? parsedMaterials : hints.materials)
         .map((m) => ({
-            item: m.item || 'Unknown Material',
-            quantity: m.quantity ?? 0,
+            item: m.item,
+            quantity: m.quantity ?? '',
             unit: m.unit || '',
             spec: m.spec || '',
         }))
@@ -336,10 +341,22 @@ export async function parseBlueprint(file: string | File) {
 
     try {
         const result = await generateAzureObject<z.infer<typeof blueprintParseSchema>>(prompt, blueprintParseSchema);
-        return normalizeResult(result, hints);
+        return {
+            ...normalizeResult(result, hints),
+            _extractionMeta: {
+                ocrChars: ocrText.length,
+                hintMaterials: hints.materials.length,
+            },
+        };
     } catch (error) {
         console.error('Blueprint Parser Error:', error);
         // Keep workflow running by returning deterministic extraction when LLM call fails.
-        return normalizeResult(null, hints);
+        return {
+            ...normalizeResult(null, hints),
+            _extractionMeta: {
+                ocrChars: ocrText.length,
+                hintMaterials: hints.materials.length,
+            },
+        };
     }
 }

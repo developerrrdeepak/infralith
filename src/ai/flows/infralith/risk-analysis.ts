@@ -3,31 +3,38 @@
 import { generateAzureObject } from '@/ai/azure-ai';
 import { z } from 'zod';
 
+const NOT_AVAILABLE_TEXT = 'Not available in provided project data';
+
 /**
- * Risk Analysis Agent — identifies hazards and calculates Risk Index
+ * Risk Analysis Agent - identifies hazards and calculates risk index from project data.
  */
-export async function analyzeRisk(inputData: string) {
+export async function analyzeRisk(inputData: string, retrievalContext?: string) {
     const prompt = `
-        Act as a Predictive Safety Agent specialized in Infrastructure.
-        Analyze the following technical project data to identify catastrophic and operational risks.
-        
-        DATA SOURCE:
-        ${inputData}
+You are a construction safety risk auditor.
+Use only the provided project JSON data.
+Do not invent measurements, incidents, or site conditions.
 
-        Assess:
-        1. Geotechnical and seismic vulnerability
-        2. Structural load distribution failure points
-        3. Operational site safety hazards
+PROJECT DATA:
+${inputData}
 
-        Return a JSON object:
-        {
-          "riskIndex": number (0-100),
-          "level": "Low" | "Medium" | "High" | "Critical",
-          "hazards": [
-            { "type": "Category", "severity": "Level", "description": "Full detail", "mitigation": "Strategic solution" }
-          ]
-        }
-    `;
+RETRIEVED REFERENCE CONTEXT:
+${retrievalContext || 'No retrieved external context was available.'}
+
+Rules:
+- If evidence is missing, state "${NOT_AVAILABLE_TEXT}" explicitly.
+- If reference context is used, include citation labels like [R1] in hazard descriptions.
+- Keep riskIndex conservative when data is sparse.
+- Return exactly one JSON object (no markdown, no prose).
+
+Output schema:
+{
+  "riskIndex": number (0-100),
+  "level": "Low" | "Medium" | "High" | "Critical",
+  "hazards": [
+    { "type": "Category", "severity": "Level", "description": "Grounded detail", "mitigation": "Action" }
+  ]
+}
+`;
 
     const schema = z.object({
         riskIndex: z.number().min(0).max(100),
@@ -36,24 +43,24 @@ export async function analyzeRisk(inputData: string) {
             type: z.string(),
             severity: z.string(),
             description: z.string(),
-            mitigation: z.string()
-        }))
+            mitigation: z.string(),
+        })),
     });
 
     try {
-        const result = await generateAzureObject<any>(prompt, schema);
+        const result = schema.parse(await generateAzureObject<any>(prompt, schema));
         return {
-            riskIndex: result?.riskIndex || 50,
-            level: result?.level || 'Medium',
-            hazards: (result?.hazards || []).map((h: any) => ({
-                type: h?.type || 'Environmental',
-                severity: h?.severity || 'Medium',
-                description: h?.description || 'Potential structural instability detected.',
-                mitigation: h?.mitigation || 'Conduct field stress tests immediately.'
-            }))
+            riskIndex: result.riskIndex,
+            level: result.level,
+            hazards: result.hazards.map((hazard) => ({
+                type: String(hazard.type || NOT_AVAILABLE_TEXT).trim(),
+                severity: String(hazard.severity || NOT_AVAILABLE_TEXT).trim(),
+                description: String(hazard.description || NOT_AVAILABLE_TEXT).trim(),
+                mitigation: String(hazard.mitigation || NOT_AVAILABLE_TEXT).trim(),
+            })),
         };
     } catch (error) {
-        console.error("Risk Analysis Error:", error);
+        console.error('Risk Analysis Error:', error);
         throw error;
     }
 }

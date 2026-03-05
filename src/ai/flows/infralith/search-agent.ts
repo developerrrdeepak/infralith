@@ -1,90 +1,115 @@
 'use server';
+
 import { generateAzureObject } from '@/ai/azure-ai';
 import { z } from 'zod';
+import { formatRagPromptContext, retrieveConstructionContext } from './rag-retrieval';
 
-const searchResponseSchema = z.object({
+const synthSchema = z.object({
+    answer: z.string().optional(),
     results: z.array(
         z.object({
+            citationId: z.string(),
             title: z.string().optional(),
             summary: z.string().optional(),
             semanticMatchPercentage: z.union([z.number(), z.string()]).optional(),
             relevanceReason: z.string().optional(),
-        }).passthrough()
+        })
     ).optional(),
 });
 
+const normalizePct = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    if (parsed <= 1) return Math.round(parsed * 100);
+    return Math.max(0, Math.min(100, Math.round(parsed)));
+};
+
+const isIsoDate = (value: unknown): boolean => {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    return Number.isFinite(Date.parse(value));
+};
+
 /**
- * Advanced Semantic Search Agent — Synthesizes architectural knowledge 
- * by bridging Azure CosmosDB (or local) data with Azure OpenAI reasoning.
+ * Real RAG search powered by Azure AI Search retrieval + LLM synthesis with citations.
  */
 export async function searchCosmosDB(query: string) {
     try {
-        console.log("Search Agent: Initiating semantic lookup for:", query);
+        const retrieved = await retrieveConstructionContext(query, { top: 8 });
+        if (!retrieved.chunks.length) {
+            console.warn('[Search Agent] no chunks retrieved', retrieved.diagnostics);
+            return [];
+        }
 
-        // 1. Fetch relevant data segment from local cosmos index
-        const data = {
-            documents: [
-                { title: "Seismic Failure Report", summary: "Analysis of Mumbai Phase 1 structural load bearing failure.", tags: ["mumbai", "seismic", "failure"] },
-                { title: "Reinforcement Materials Guide", summary: "Type-A reinforcement and concrete curing protocols for high rises.", tags: ["materials", "reinforcement", "concrete"] },
-                { title: "Bangalore Hub Layout", summary: "Beam structural updates for the Bangalore tech hub.", tags: ["bangalore", "beam", "layout"] },
-                { title: "Project Alpha Compliance", summary: "IS-456 standards review for Project Alpha.", tags: ["compliance", "is-456", "standards"] }
-            ]
-        };
-
-        // 2. TRUE VECTOR RAG EXECUTOR (Retrieval-Augmented Generation)
-        // Instead of basic keyword matching, we simulate an embedded vector space 
-        // to perform high-dimensional Cosine Similarity search—a trending ML algorithm for RAG.
-
-        const generateEmbedding = (text: string) => {
-            let seed = text.split('').reduce((a, b: string) => a + b.charCodeAt(0), 0);
-            return Array.from({ length: 1536 }, () => {
-                const x = Math.sin(seed++) * 10000;
-                return x - Math.floor(x);
-            });
-        };
-
-        const cosineSimilarity = (vecA: number[], vecB: number[]) => {
-            let dotProduct = 0, normA = 0, normB = 0;
-            for (let i = 0; i < vecA.length; i++) {
-                dotProduct += vecA[i] * vecB[i];
-                normA += vecA[i] * vecA[i];
-                normB += vecB[i] * vecB[i];
-            }
-            return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-        };
-
-        const queryVector = generateEmbedding(query);
-        const scoredDocs = data.documents.map((doc: any) => {
-            const docText = `${doc.title} ${doc.summary} ${(doc.tags || []).join(' ')}`;
-            const docVector = generateEmbedding(docText);
-            const score = cosineSimilarity(queryVector, docVector);
-            return { ...doc, vectorScore: score };
-        });
-
-        scoredDocs.sort((a, b) => b.vectorScore - a.vectorScore);
-        const candidateBase = scoredDocs.slice(0, 3);
-
-        // 3. SEAMLESS INTEGRATION: Use LLM to perform Semantic Re-ranking & Synthesis
         const prompt = `
-            You are an Advanced RAG Synthesizer Agent.
-            QUERY: "${query}"
-            
-            RETRIEVED KNOWLEDGE CONTEXT (Cosine Similarity Scored):
-            ${JSON.stringify(candidateBase, null, 2)}
+You are a construction-domain RAG synthesis agent.
+Answer the query only using retrieved context and cite chunk ids.
 
-            Analyze the retrieved chunk context and synthesize the most accurate answer.
-            For each relevant entry, add a "semanticMatchPercentage" and a "relevanceReason" based on how it answers the query.
-            Return as a JSON object with a "results" array.
-        `;
+QUERY:
+${query}
 
-        const advancedResult = await generateAzureObject<z.infer<typeof searchResponseSchema>>(prompt, searchResponseSchema);
+RETRIEVED CONTEXT:
+${formatRagPromptContext(retrieved, 7600)}
 
-        console.log(`Search Agent: Found ${advancedResult.results?.length || 0} semantically relevant documents.`);
-        return advancedResult.results || candidateBase;
+Instructions:
+- Keep each result grounded in one citationId from retrieved context.
+- semanticMatchPercentage should be 0-100.
+- Do not invent titles, dates, or sources not present in retrieved context.
 
-    } catch (e) {
-        console.error("Advanced Search Agent Error:", e);
-        // Fallback to basic search if LLM fails
+Return strict JSON with:
+{
+  "answer": "optional concise overall answer",
+  "results": [
+    {
+      "citationId": "R1",
+      "title": "optional title",
+      "summary": "grounded summary",
+      "semanticMatchPercentage": 0-100,
+      "relevanceReason": "why this is relevant"
+    }
+  ]
+}
+`;
+
+        const synthesized = await generateAzureObject<z.infer<typeof synthSchema>>(prompt, synthSchema);
+        const chunkByCitation = new Map(retrieved.chunks.map((chunk) => [chunk.citationId, chunk] as const));
+
+        const stitched = (synthesized.results || [])
+            .map((item, index) => {
+                const chunk = chunkByCitation.get(item.citationId);
+                if (!chunk) return null;
+                const createdAt = isIsoDate(chunk.createdAt) ? chunk.createdAt : new Date().toISOString();
+                const semanticMatch = normalizePct(item.semanticMatchPercentage, normalizePct(chunk.rerankerScore ?? chunk.score ?? (1 - index * 0.07), 78));
+                return {
+                    id: chunk.chunkId,
+                    title: item.title || chunk.title,
+                    summary: item.summary || chunk.summary,
+                    collection: chunk.collection || chunk.indexName,
+                    createdAt,
+                    source: chunk.source,
+                    citationId: chunk.citationId,
+                    semanticMatchPercentage: semanticMatch,
+                    relevanceReason: item.relevanceReason || '',
+                    score: chunk.rerankerScore ?? chunk.score ?? undefined,
+                };
+            })
+            .filter((item): item is NonNullable<typeof item> => !!item);
+
+        if (stitched.length > 0) return stitched;
+
+        return retrieved.chunks.map((chunk, index) => ({
+            id: chunk.chunkId,
+            title: chunk.title,
+            summary: chunk.summary,
+            collection: chunk.collection || chunk.indexName,
+            createdAt: isIsoDate(chunk.createdAt) ? chunk.createdAt : new Date().toISOString(),
+            source: chunk.source,
+            citationId: chunk.citationId,
+            semanticMatchPercentage: normalizePct(chunk.rerankerScore ?? chunk.score ?? (1 - index * 0.08), 75),
+            relevanceReason: 'Retrieved via Azure AI Search hybrid ranking.',
+            score: chunk.rerankerScore ?? chunk.score ?? undefined,
+        }));
+    } catch (error) {
+        console.error('[Search Agent] RAG search failed:', error);
         return [];
     }
 }

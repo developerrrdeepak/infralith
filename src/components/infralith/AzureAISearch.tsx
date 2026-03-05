@@ -165,25 +165,31 @@ export default function AzureAISearchView() {
                                                         <h4 className="font-bold text-xl group-hover:text-primary transition-colors">{r.title || r.projectScope || 'Indexed Document'}</h4>
                                                         <div className="flex items-center gap-2 mt-0.5">
                                                             <Badge variant="outline" className="text-[10px] h-5 bg-slate-100 dark:bg-black/50 text-indigo-600 dark:text-primary border-slate-200 dark:border-primary/30 uppercase font-black">{r.collection}</Badge>
-                                                            <span className="text-[10px] font-bold text-slate-500 dark:text-muted-foreground uppercase flex items-center gap-1"><History className="h-3 w-3" /> {new Date(r.createdAt).toLocaleDateString()}</span>
+                                                            <span className="text-[10px] font-bold text-slate-500 dark:text-muted-foreground uppercase flex items-center gap-1">
+                                                                <History className="h-3 w-3" /> {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '-'}
+                                                            </span>
                                                         </div>
                                                     </div>
                                                 </div>
                                                 <div className="text-right">
                                                     <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1">Match Score</div>
-                                                    <div className="text-2xl font-black text-emerald-500">{(0.98 - i * 0.1).toFixed(2)}</div>
+                                                    <div className="text-2xl font-black text-emerald-500">{typeof r.semanticMatchPercentage === 'number' ? `${r.semanticMatchPercentage}%` : 'N/A'}</div>
                                                 </div>
                                             </div>
 
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                                 <div className="md:col-span-2 space-y-2">
                                                     <p className="text-sm text-slate-300 leading-relaxed line-clamp-3">
-                                                        {r.summary || "High-level architectural extraction indicating significant structural dependencies in the northern quadrant of the Mumbai Phase 1 foundation."}
+                                                        {r.summary || 'No retrieved summary available.'}
                                                     </p>
                                                     <div className="flex gap-2">
-                                                        <Badge className="bg-white/10 text-white/50 border-none text-[10px]">#SEISMIC</Badge>
-                                                        <Badge className="bg-white/10 text-white/50 border-none text-[10px]">#MUMBAI-PH1</Badge>
-                                                        <Badge className="bg-white/10 text-white/50 border-none text-[10px]">#REINFORCEMENT</Badge>
+                                                        <Badge className="bg-white/10 text-white/50 border-none text-[10px]">#{String(r.collection || 'RAG').toUpperCase()}</Badge>
+                                                        {r.citationId && (
+                                                            <Badge className="bg-white/10 text-white/50 border-none text-[10px]">{r.citationId}</Badge>
+                                                        )}
+                                                        {r.source && (
+                                                            <Badge className="bg-white/10 text-white/50 border-none text-[10px]">{String(r.source).slice(0, 24)}</Badge>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="bg-slate-100 dark:bg-black/40 rounded-xl p-4 border border-slate-200 dark:border-white/5 flex flex-col justify-center gap-3 shadow-inner">

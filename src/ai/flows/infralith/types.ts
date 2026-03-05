@@ -29,6 +29,15 @@ export interface ApprovalStep {
     comment?: string;
 }
 
+export interface ConstructionControlGate {
+    key: 'progress' | 'cost' | 'quality' | 'safety' | 'compliance' | 'document-control';
+    title: string;
+    requirement: string;
+    status: 'Pass' | 'Warning' | 'Critical';
+    evidence: string;
+    action: string;
+}
+
 export interface WorkflowResult {
     id: string;
     timestamp: string;
@@ -37,10 +46,11 @@ export interface WorkflowResult {
 
     // Parsed Blueprint Data
     parsedBlueprint?: {
-        totalFloors: number;
-        height: number;
-        totalArea: number;
-        seismicZone: string;
+        projectScope?: string | null;
+        totalFloors: number | null;
+        height: number | null;
+        totalArea: number | null;
+        seismicZone: string | null;
         materials: Array<{ item: string; quantity: number | string; unit: string; spec: string }>;
     };
     materials?: Array<{ item: string; quantity: number | string; unit: string; spec: string }>;
@@ -48,7 +58,18 @@ export interface WorkflowResult {
     // Agent Reports
     complianceReport?: {
         overallStatus: 'Pass' | 'Warning' | 'Fail';
-        violations: Array<{ ruleId: string; description: string; comment: string }>;
+        violations: Array<{
+            ruleId: string;
+            description: string;
+            comment: string;
+            severity?: 'Critical' | 'Warning';
+            location?: string;
+            requiredValue?: string;
+            measuredValue?: string;
+            evidence?: string;
+            confidence?: number;
+            citationIds?: string[];
+        }>;
     };
 
     riskReport?: {
@@ -63,6 +84,7 @@ export interface WorkflowResult {
         breakdown: Array<{ category: string; amount: number; percentage: number }>;
         duration: string;
         confidenceScore?: number;
+        assumptions?: string[];
     };
 
     // DevOps / Pipeline Info
@@ -74,6 +96,9 @@ export interface WorkflowResult {
         location: string;
         requiredValue: string;
         measuredValue: string;
+        evidence?: string;
+        confidenceScore?: number;
+        citationIds?: string[];
     }>;
 
     // UI Helper fields (sometimes used in different views)
@@ -88,6 +113,8 @@ export interface WorkflowResult {
         extractedFields: string[];
         missingFields: string[];
         warnings: string[];
+        criticalMissingFields?: string[];
+        reviewRequired?: boolean;
         rawTextLength?: number;
     };
     documentInfo?: {
@@ -95,6 +122,11 @@ export interface WorkflowResult {
         extension: string;
         mimeType?: string;
         sizeBytes: number;
+    };
+    constructionControlSummary?: {
+        reportingStandard: string;
+        generatedAt: string;
+        gates: ConstructionControlGate[];
     };
 
     /** ENTERPRISE FIELDS */

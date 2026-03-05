@@ -142,6 +142,8 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
   const extractionQuality = r.extractionQuality || null;
   const extractionWarnings = Array.isArray(extractionQuality?.warnings) ? extractionQuality.warnings : [];
   const extractionMissingFields = Array.isArray(extractionQuality?.missingFields) ? extractionQuality.missingFields : [];
+  const extractionCriticalMissing = Array.isArray(extractionQuality?.criticalMissingFields) ? extractionQuality.criticalMissingFields : [];
+  const extractionNeedsReview = !!extractionQuality?.reviewRequired || extractionMissingFields.length > 0;
   const conflicts = Array.isArray(r.conflicts) ? r.conflicts : [];
   const isCritical = conflicts.some((c: any) => c.riskCategory === 'Critical');
   const totalConflicts = conflicts.length;
@@ -156,9 +158,15 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
     ? Math.round(clamp(confidenceFromCost * 100, 0, 100))
     : (typeof extractionQuality?.coverageScore === 'number' ? clamp(extractionQuality.coverageScore, 0, 100) : 0);
   const readinessScore = typeof r.approvalReadinessScore === 'number' ? r.approvalReadinessScore : null;
-  const delayImpactDays = typeof r.delayImpactDays === 'number' ? r.delayImpactDays : 0;
+  const delayImpactDays = typeof r.delayImpactDays === 'number' ? r.delayImpactDays : null;
+  const costImpactDisplay =
+    typeof r.costImpactEstimate === 'number'
+      ? `${r.costImpactEstimate.toLocaleString()} ${typeof r.currency === 'string' ? r.currency : ''}`.trim()
+      : 'N/A';
   const redesignRequired = !!r.redesignRequired;
   const docInfo = r.documentInfo || null;
+  const constructionControlSummary = r.constructionControlSummary || null;
+  const constructionGates = Array.isArray(constructionControlSummary?.gates) ? constructionControlSummary.gates : [];
 
   return (
     <div className="w-full max-w-5xl mx-auto space-y-0 pb-24 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -190,7 +198,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
                   ['Prepared By', `Infralith Orchestrator ${r.modelVersion?.orchestratorVersion || 'N/A'}`],
                   ['Reviewed For', role],
                   ['AI Confidence', aiConfidencePct > 0 ? `${aiConfidencePct}%` : 'N/A'],
-                  ['Doc Status', isCritical || extractionMissingFields.length > 0 ? 'REVIEW REQUIRED' : 'READY'],
+                  ['Doc Status', isCritical || extractionNeedsReview ? 'REVIEW REQUIRED' : 'READY'],
                 ].map(([k, v]) => (
                   <div key={k} className="flex flex-col gap-0.5">
                     <span className="text-muted-foreground font-semibold">{k}</span>
@@ -223,8 +231,8 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           {role === 'Supervisor' || role === 'Admin' ? (
             <>
               <KPICard label="Readiness Score" value={readinessScore != null ? `${readinessScore}/100` : 'N/A'} sub="Approval readiness" color={(readinessScore || 0) > 80 ? 'text-emerald-500' : 'text-orange-500'} />
-              <KPICard label="Delay Risk" value={`+${delayImpactDays} days`} sub="Projected schedule slip" color={delayImpactDays > 0 ? 'text-destructive' : 'text-emerald-500'} />
-              <KPICard label="Cost Impact" value={`${(r.costImpactEstimate ?? 0).toLocaleString()} ${r.currency ?? 'INR'}`} sub="Remediation estimate" />
+              <KPICard label="Delay Risk" value={delayImpactDays != null ? `+${delayImpactDays} days` : 'N/A'} sub="Projected schedule slip" color={(delayImpactDays || 0) > 0 ? 'text-destructive' : 'text-emerald-500'} />
+              <KPICard label="Cost Impact" value={costImpactDisplay} sub="Remediation estimate" />
             </>
           ) : (
             <>
@@ -237,6 +245,38 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       </div>
 
+      {constructionGates.length > 0 && (
+        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
+          <div className="p-6">
+            <SectionHeading
+              icon={ClipboardList}
+              title="Section 1A - Construction Control Matrix"
+              subtitle={constructionControlSummary?.reportingStandard || 'Execution-focused controls for progress, quality, safety, cost, and code closure.'}
+            />
+          </div>
+          <TableRow header cells={['Control', 'Requirement', 'Status', 'Evidence', 'Action']} />
+          {constructionGates.map((gate: any, index: number) => (
+            <div key={`${gate?.key || 'gate'}-${index}`} className="grid px-4 py-3 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-start" style={{ gridTemplateColumns: '9rem 1.2fr 6rem 1.3fr 1.1fr' }}>
+              <span className="font-semibold text-foreground text-xs">{gate?.title || 'Control'}</span>
+              <span className="text-xs text-muted-foreground">{gate?.requirement || '-'}</span>
+              <span>
+                <Badge className={
+                  gate?.status === 'Critical'
+                    ? 'bg-destructive text-destructive-foreground text-[10px] font-bold uppercase'
+                    : gate?.status === 'Warning'
+                      ? 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-0 text-[10px] font-bold uppercase'
+                      : 'bg-emerald-500/10 text-emerald-600 border-0 text-[10px] font-bold uppercase'
+                }>
+                  {gate?.status || 'Pass'}
+                </Badge>
+              </span>
+              <span className="text-xs text-muted-foreground">{gate?.evidence || '-'}</span>
+              <span className="text-xs text-foreground">{gate?.action || '-'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {extractionQuality && (
         <div className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
           <SectionHeading icon={Activity} title="Section 2 - Extraction Quality" subtitle="Structured fields recovered from uploaded document." />
@@ -247,6 +287,11 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           </div>
           {extractionMissingFields.length > 0 && (
             <p className="text-xs text-muted-foreground mb-2">Missing fields: {extractionMissingFields.join(', ')}</p>
+          )}
+          {extractionCriticalMissing.length > 0 && (
+            <p className="text-xs text-destructive mb-2">
+              Critical missing fields for compliance confidence: {extractionCriticalMissing.join(', ')}
+            </p>
           )}
           {extractionWarnings.length > 0 && (
             <div className="space-y-2">
@@ -271,8 +316,21 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
               {conflicts.map((c: any, i: number) => (
                 <div key={i} className="grid px-4 py-3.5 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-center" style={{ gridTemplateColumns: '2rem 1fr 1fr 5.5rem 6.2rem 6.2rem 6rem' }}>
                   <span className="font-mono text-muted-foreground text-xs">{String(i + 1).padStart(2, '0')}</span>
-                  <span className="font-semibold text-foreground text-xs">{c.regulationRef}</span>
-                  <span className="text-muted-foreground text-xs truncate">{c.location}</span>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-foreground text-xs truncate">{c.regulationRef}</p>
+                    {typeof c.confidenceScore === 'number' && (
+                      <p className="text-[10px] text-muted-foreground font-mono">confidence {Math.round(clamp(c.confidenceScore, 0, 1) * 100)}%</p>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-muted-foreground text-xs truncate">{c.location}</p>
+                    {c.evidence && (
+                      <p className="text-[10px] text-muted-foreground/90 truncate">evidence: {c.evidence}</p>
+                    )}
+                    {Array.isArray(c.citationIds) && c.citationIds.length > 0 && (
+                      <p className="text-[10px] text-primary/90 truncate">citations: {c.citationIds.join(', ')}</p>
+                    )}
+                  </div>
                   <span>
                     <Badge className={c.riskCategory === 'Critical' ? 'bg-destructive text-destructive-foreground text-[10px] font-bold uppercase' : 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-0 text-[10px] font-bold uppercase'}>
                       {c.riskCategory}
