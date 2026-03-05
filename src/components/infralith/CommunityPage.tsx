@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
   Bookmark,
   BriefcaseBusiness,
@@ -34,7 +34,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useAppContext } from '@/contexts/app-context';
 import { useToast } from '@/hooks/use-toast';
-import { postService, type Post as ServicePost, type Comment as ServiceComment, type ReactionType } from '@/lib/services';
+import { type Post as ServicePost, type Comment as ServiceComment, type ReactionType } from '@/lib/services';
+import { postService } from '@/lib/collab-client';
 
 type FeedMode = 'all' | 'following' | 'bounties' | 'saved' | 'mine';
 type SortMode = 'latest' | 'popular' | 'discussed';
@@ -360,6 +361,15 @@ export default function CommunityPage() {
     localStorage.setItem(followingKey, JSON.stringify(next));
   };
 
+  const refreshPosts = useCallback(async () => {
+    try {
+      const data = await postService.getAllPosts();
+      setPosts(data.map((item) => toPostView(item, user?.uid)));
+    } catch (error) {
+      console.error('Failed to refresh community feed', error);
+    }
+  }, [user?.uid]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -368,7 +378,7 @@ export default function CommunityPage() {
       try {
         let data = await postService.getAllPosts();
 
-        if (data.length === 0) {
+        if (data.length === 0 && process.env.NODE_ENV !== 'production') {
           data = await postService.seedPosts(
             MOCK_POSTS.map((post) => ({
               id: post.id,
@@ -401,7 +411,11 @@ export default function CommunityPage() {
       } catch (error) {
         console.error('Failed to load community feed', error);
         if (!cancelled) {
-          setPosts(MOCK_POSTS.map((post) => ({ ...post, hasLiked: false })));
+          if (process.env.NODE_ENV !== 'production') {
+            setPosts(MOCK_POSTS.map((post) => ({ ...post, hasLiked: false })));
+          } else {
+            setPosts([]);
+          }
           toast({ variant: 'destructive', title: 'Could not load community feed' });
         }
       } finally {
@@ -416,6 +430,32 @@ export default function CommunityPage() {
       cancelled = true;
     };
   }, [toast, user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const pollTimer = setInterval(() => {
+      void refreshPosts();
+    }, 15000);
+
+    let eventSource: EventSource | null = null;
+    const onRealtimeUpdate = () => {
+      void refreshPosts();
+    };
+
+    if (typeof EventSource !== 'undefined') {
+      eventSource = new EventSource('/api/infralith/community/stream');
+      eventSource.addEventListener('update', onRealtimeUpdate);
+    }
+
+    return () => {
+      clearInterval(pollTimer);
+      if (eventSource) {
+        eventSource.removeEventListener('update', onRealtimeUpdate);
+        eventSource.close();
+      }
+    };
+  }, [user?.uid, refreshPosts]);
 
   const feedCounts = useMemo(() => {
     const followingPosts = posts.filter((post) => !!following[post.authorId]).length;

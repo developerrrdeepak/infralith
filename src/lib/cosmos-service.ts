@@ -1,4 +1,5 @@
 import { CosmosClient } from "@azure/cosmos";
+import { ClientSecretCredential, DefaultAzureCredential } from "@azure/identity";
 import { GeometricReconstruction } from "@/ai/flows/infralith/reconstruction-types";
 
 const DATABASE_ID = process.env.AZURE_COSMOS_DATABASE_ID || "InfralithDB";
@@ -37,14 +38,37 @@ function hasPlaceholderValue(value: string | undefined): boolean {
 
 type CosmosConfig =
     | { mode: "connectionString"; connectionString: string }
-    | { mode: "endpointKey"; endpoint: string; key: string };
+    | { mode: "endpointKey"; endpoint: string; key: string }
+    | { mode: "endpointAad"; endpoint: string; authMode: "clientSecret" | "defaultCredential" };
+
+function isMongoConnectionString(value: string): boolean {
+    return value.trim().toLowerCase().startsWith("mongodb://");
+}
+
+function isTenantAlias(value: string): boolean {
+    return ["common", "organizations", "consumers", "{tenantid}"].includes(value.trim().toLowerCase());
+}
+
+function toBool(value: string | undefined): boolean {
+    const normalized = String(value || "").trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes";
+}
 
 function resolveCosmosConfig(): CosmosConfig {
     const connectionString = process.env.AZURE_COSMOS_CONNECTION_STRING?.trim();
     const endpoint = process.env.COSMOS_ENDPOINT?.trim();
     const key = process.env.COSMOS_KEY?.trim();
+    const tenantId = (process.env.AZURE_TENANT_ID || process.env.AZURE_AD_TENANT_ID || "").trim();
+    const clientId = (process.env.AZURE_CLIENT_ID || process.env.AZURE_AD_CLIENT_ID || "").trim();
+    const clientSecret = (process.env.AZURE_CLIENT_SECRET || process.env.AZURE_AD_CLIENT_SECRET || "").trim();
+    const useAad = toBool(process.env.AZURE_COSMOS_USE_AAD);
 
     if (connectionString) {
+        if (isMongoConnectionString(connectionString)) {
+            throw new Error(
+                "AZURE_COSMOS_CONNECTION_STRING is a MongoDB URI. This service requires Cosmos SQL API config. Use COSMOS_ENDPOINT + COSMOS_KEY, or COSMOS_ENDPOINT + AZURE_CLIENT_ID/AZURE_CLIENT_SECRET/AZURE_TENANT_ID."
+            );
+        }
         return { mode: "connectionString", connectionString };
     }
 
@@ -52,8 +76,21 @@ function resolveCosmosConfig(): CosmosConfig {
         return { mode: "endpointKey", endpoint, key };
     }
 
+    if (endpoint && tenantId && clientId && clientSecret) {
+        if (isTenantAlias(tenantId)) {
+            throw new Error(
+                'AAD client-secret auth needs a concrete tenant GUID/domain. "common/organizations/consumers" are not valid for Cosmos service-principal auth.'
+            );
+        }
+        return { mode: "endpointAad", endpoint, authMode: "clientSecret" };
+    }
+
+    if (endpoint && useAad) {
+        return { mode: "endpointAad", endpoint, authMode: "defaultCredential" };
+    }
+
     throw new Error(
-        "Cloud Cosmos DB is not configured. Set AZURE_COSMOS_CONNECTION_STRING or COSMOS_ENDPOINT + COSMOS_KEY."
+        "Cloud Cosmos DB is not configured. Use AZURE_COSMOS_CONNECTION_STRING (SQL API), COSMOS_ENDPOINT + COSMOS_KEY, or COSMOS_ENDPOINT + AAD credentials."
     );
 }
 
@@ -73,7 +110,7 @@ function assertCloudCosmosConfig(config: CosmosConfig): void {
     if (hasLocalHost(config.endpoint)) {
         throw new Error("Cloud Cosmos DB required: COSMOS_ENDPOINT points to localhost.");
     }
-    if (hasPlaceholderValue(config.key)) {
+    if (config.mode === "endpointKey" && hasPlaceholderValue(config.key)) {
         throw new Error("Cloud Cosmos DB required: COSMOS_KEY uses a placeholder value.");
     }
 }
@@ -95,7 +132,24 @@ function getCosmosClient(): CosmosClient {
         return client;
     }
 
-    client = new CosmosClient({ endpoint: cosmosConfig.endpoint, key: cosmosConfig.key });
+    if (cosmosConfig.mode === "endpointKey") {
+        client = new CosmosClient({ endpoint: cosmosConfig.endpoint, key: cosmosConfig.key });
+        return client;
+    }
+
+    const aadCredentials =
+        cosmosConfig.authMode === "clientSecret"
+            ? new ClientSecretCredential(
+                String(process.env.AZURE_TENANT_ID || process.env.AZURE_AD_TENANT_ID || ""),
+                String(process.env.AZURE_CLIENT_ID || process.env.AZURE_AD_CLIENT_ID || ""),
+                String(process.env.AZURE_CLIENT_SECRET || process.env.AZURE_AD_CLIENT_SECRET || "")
+            )
+            : new DefaultAzureCredential();
+
+    client = new CosmosClient({
+        endpoint: cosmosConfig.endpoint,
+        aadCredentials,
+    });
     return client;
 }
 

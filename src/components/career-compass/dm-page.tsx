@@ -1,7 +1,8 @@
 ﻿'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { useAppContext } from '@/contexts/app-context';
-import { dmService, userDbService, inviteService, ChatSummary, ChatMessage, UserProfileData, normalizeEmail } from '@/lib/services';
+import { userDbService, inviteService, ChatSummary, ChatMessage, UserProfileData, normalizeEmail } from '@/lib/services';
+import { dmService } from '@/lib/collab-client';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -39,40 +40,67 @@ export default function DMPage() {
 
   const canCreateGroups = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
 
-  // 1. Load Chat List (Inbox) - LISTENER
-  useEffect(() => {
+  const fetchChats = useCallback(async () => {
     if (!user) return;
-    const fetchChats = async () => {
-      try {
-        const chatsRef = dmService.getUserChatsRef(user.uid);
-        // In our mock, this returns a string key for local storage
-        if (typeof chatsRef === 'string') {
-          const data = localStorage.getItem(chatsRef);
-          if (data) {
-            const parsed = JSON.parse(data);
-            const list = Object.values(parsed) as ChatSummary[];
-            if (list.length === 0 && !sessionStorage.getItem('infralith_dm_seeded')) {
-              await dmService.seedMockDMs(user.uid);
-              sessionStorage.setItem('infralith_dm_seeded', 'true');
-              return; // Next interval will pick it up
-            }
-            setChats(list.sort((a, b) => b.timestamp - a.timestamp));
-          } else if (!sessionStorage.getItem('infralith_dm_seeded')) {
-            await dmService.seedMockDMs(user.uid);
-            sessionStorage.setItem('infralith_dm_seeded', 'true');
-          } else {
-            setChats([]);
-          }
-        }
-      } catch (error) {
-        console.error("Failed to fetch chats:", error);
+    try {
+      const list = await dmService.getUserChats(user.uid);
+      if (
+        list.length === 0 &&
+        process.env.NODE_ENV !== 'production' &&
+        !sessionStorage.getItem('infralith_dm_seeded')
+      ) {
+        await dmService.seedMockDMs(user.uid);
+        sessionStorage.setItem('infralith_dm_seeded', 'true');
+        return;
       }
+      setChats(list.sort((a, b) => b.timestamp - a.timestamp));
+    } catch (error) {
+      console.error('Failed to fetch chats:', error);
+    }
+  }, [user]);
+
+  const fetchMessages = useCallback(async () => {
+    if (!selectedChat) {
+      setMessages([]);
+      return;
+    }
+    try {
+      const msgs = await dmService.getMessages(selectedChat.chatId);
+      setMessages(msgs.sort((a, b) => a.timestamp - b.timestamp));
+    } catch (error) {
+      console.error('Failed to fetch messages:', error);
+    }
+  }, [selectedChat]);
+
+  // 1. Load chat list + realtime stream
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    void fetchChats();
+
+    const pollTimer = setInterval(() => {
+      void fetchChats();
+    }, 15000);
+
+    let eventSource: EventSource | null = null;
+    const onRealtimeUpdate = () => {
+      void fetchChats();
+      void fetchMessages();
     };
 
-    fetchChats();
-    const interval = setInterval(fetchChats, 3000); // 3s polling for mock realism
-    return () => clearInterval(interval);
-  }, [user]);
+    if (typeof EventSource !== 'undefined') {
+      eventSource = new EventSource('/api/infralith/messages/stream');
+      eventSource.addEventListener('update', onRealtimeUpdate);
+    }
+
+    return () => {
+      clearInterval(pollTimer);
+      if (eventSource) {
+        eventSource.removeEventListener('update', onRealtimeUpdate);
+        eventSource.close();
+      }
+    };
+  }, [user?.uid, fetchChats, fetchMessages]);
 
   // Load all users on mount for group creation, or when dialog opens
   useEffect(() => {
@@ -103,36 +131,24 @@ export default function DMPage() {
     }
   }, [chats, selectedChat]);
 
-  // 3. Load Messages when a chat is selected
+  // 3. Load messages when a chat is selected
   useEffect(() => {
     if (!selectedChat) {
       setMessages([]);
       return;
     }
-    const fetchMessages = async () => {
-      try {
-        const messagesRef = dmService.getMessagesRef(selectedChat.chatId);
-        if (typeof messagesRef === 'string') {
-          const data = localStorage.getItem(messagesRef);
-          if (data) {
-            const msgs = JSON.parse(data) as ChatMessage[];
-            setMessages(msgs.sort((a, b) => a.timestamp - b.timestamp));
-          } else {
-            setMessages([]);
-          }
-        }
-      } catch (error) {
-        console.error("Failed to fetch messages:", error);
-      }
-    };
 
     if (user?.uid) {
-      dmService.markChatRead(user.uid, selectedChat.chatId);
+      void dmService.markChatRead(user.uid, selectedChat.chatId);
     }
-    fetchMessages();
-    const interval = setInterval(fetchMessages, 2000);
-    return () => clearInterval(interval);
-  }, [selectedChat?.chatId, user?.uid]);
+    void fetchMessages();
+
+    const pollTimer = setInterval(() => {
+      void fetchMessages();
+    }, 10000);
+
+    return () => clearInterval(pollTimer);
+  }, [selectedChat?.chatId, user?.uid, fetchMessages]);
 
   // 4. Auto-scroll to bottom of chat
   useEffect(() => {

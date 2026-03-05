@@ -130,9 +130,40 @@ const setStorageItem = (key: string, value: any) => {
 export const userDbService = {
   lookupRemoteUser: async (email: string): Promise<UserProfileData | null> => {
     if (typeof fetch === 'undefined') return null;
+    const normalized = normalizeEmail(email);
+
+    // Primary lookup: internal Infralith directory (Cosmos-backed API).
     try {
-      const res = await fetch(`/api/user-lookup?email=${encodeURIComponent(normalizeEmail(email))}`, {
+      const internalRes = await fetch(
+        `/api/infralith/users?email=${encodeURIComponent(normalized)}`,
+        {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+      if (internalRes.ok) {
+        const internal = await internalRes.json();
+        if (internal?.user?.uid) {
+          return {
+            uid: internal.user.uid,
+            name: internal.user.name || '',
+            email: normalizeEmail(internal.user.email || normalized),
+            avatar: internal.user.avatar || null,
+            role: internal.user.role || undefined,
+            profileCompleted: true,
+          } as UserProfileData;
+        }
+      }
+    } catch (error) {
+      console.warn('Internal user lookup failed, trying external directory fallback', error);
+    }
+
+    // Secondary lookup: optional external corporate directory proxy.
+    try {
+      const res = await fetch(`/api/user-lookup?email=${encodeURIComponent(normalized)}`, {
         method: 'GET',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
       });
       if (!res.ok) return null;
@@ -141,13 +172,13 @@ export const userDbService = {
       return {
         uid: data.uid || data.id,
         name: data.name || data.fullName || '',
-        email: normalizeEmail(data.email || email),
+        email: normalizeEmail(data.email || normalized),
         avatar: data.avatar || data.image || null,
         role: data.role || data.title,
         profileCompleted: true,
       } as UserProfileData;
     } catch (error) {
-      console.warn('Remote user lookup failed, falling back to local storage', error);
+      console.warn('External user lookup failed, falling back to local storage', error);
       return null;
     }
   },
@@ -171,6 +202,24 @@ export const userDbService = {
   },
 
   getAllUsers: async (): Promise<UserProfileData[]> => {
+    if (typeof fetch !== 'undefined') {
+      try {
+        const res = await fetch('/api/infralith/users', {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (res.ok) {
+          const payload = await res.json();
+          if (Array.isArray(payload?.users)) {
+            return payload.users as UserProfileData[];
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load users from directory API, using local fallback', error);
+      }
+    }
+
     const users = getStorageItem('infralith_users') || {};
     return Object.values(users);
   },

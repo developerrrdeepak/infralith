@@ -8,6 +8,7 @@ import { useSession, signIn, signOut } from 'next-auth/react';
 import { runInfralithWorkflow } from '@/ai/flows/infralith/workflow-orchestrator';
 import { PIPELINE_STAGE_COUNT, PIPELINE_STAGE_ERROR } from '@/ai/flows/infralith/pipeline';
 import { auditLog } from '@/lib/audit-log';
+import { runLocalStorageMigrations } from '@/lib/local-storage-migrations';
 
 export interface EvaluationContext {
   type: 'Mock Interview' | 'Resume Ranking' | 'Resume Roast' | 'Skill Assessment';
@@ -205,6 +206,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mockInterviewState, setMockInterviewStateInternal] = useState<MockInterviewState>(initialMockInterviewState);
   const [infralithResult, setInfralithResult] = useState<any | null>(null);
   const [pipelineStage, setPipelineStage] = useState(0);
+  const [directoryRegisteredUserId, setDirectoryRegisteredUserId] = useState<string | null>(null);
 
   const [skillAssessmentState, setSkillAssessmentStateInternal] = useState<SkillAssessmentState>(() => {
     if (typeof window === 'undefined') {
@@ -331,6 +333,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [user?.uid, refreshEvaluations, refreshInfralithData]);
 
   useEffect(() => {
+    if (!user?.uid) {
+      setDirectoryRegisteredUserId(null);
+      return;
+    }
+    if (directoryRegisteredUserId === user.uid) return;
+
+    let cancelled = false;
+    const registerCurrentUser = async () => {
+      try {
+        const res = await fetch('/api/infralith/users', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'register_current' }),
+        });
+        if (res.ok && !cancelled) {
+          setDirectoryRegisteredUserId(user.uid);
+        }
+      } catch (error) {
+        console.warn('Failed to register user in directory', error);
+      }
+    };
+
+    void registerCurrentUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid, directoryRegisteredUserId]);
+
+  useEffect(() => {
     if (!isLoadingAuth && user && showLogin) {
       if (loginView !== 'completeGoogleProfile') {
         setShowLogin(false);
@@ -343,6 +375,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [user, isLoadingAuth, showLogin, isAuthLoading, loginView, toast]);
 
   useEffect(() => {
+    runLocalStorageMigrations();
+
     const onHash = () => {
       const key = window.location.hash.replace('#', '');
       if (key) setActiveRoute(key);
