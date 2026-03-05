@@ -1,57 +1,10 @@
 import type { BlueprintLayoutHints } from "@/ai/azure-ai";
 import type { GeometricReconstruction } from "./reconstruction-types";
-
-type LineSemanticRule = {
-  id: string;
-  cue: string;
-  meaning: string;
-  caution: string;
-};
-
-const LINE_SEMANTIC_RULES: LineSemanticRule[] = [
-  {
-    id: "wall-parallel",
-    cue: "two long, near-parallel continuous strokes with stable gap",
-    meaning: "likely wall body (exterior or structural partition)",
-    caution: "validate continuity at junctions; avoid turning text boxes into walls",
-  },
-  {
-    id: "partition-thin",
-    cue: "single thin continuous line in enclosed area",
-    meaning: "possible interior partition or fixture edge",
-    caution: "do not force as wall without topology support from neighboring junctions",
-  },
-  {
-    id: "door-arc-gap",
-    cue: "wall gap plus nearby quarter/half arc or short leaf segment",
-    meaning: "door opening with swing direction",
-    caution: "if arc is weak but gap is clear, keep low-confidence door instead of dropping",
-  },
-  {
-    id: "window-wall-break",
-    cue: "short break/stacked thin lines embedded in exterior wall run",
-    meaning: "window span",
-    caution: "must attach to host wall; uncertain host should become conflict",
-  },
-  {
-    id: "centerline-chain",
-    cue: "dash-dot or chain-like guide line through geometry",
-    meaning: "axis/alignment guide, not a wall",
-    caution: "never convert centerline directly into wall segment",
-  },
-  {
-    id: "hidden-dashed",
-    cue: "uniform dashed line with no enclosing role",
-    meaning: "hidden/overhead element",
-    caution: "exclude from primary wall graph unless corroborated by other evidence",
-  },
-  {
-    id: "stair-treads",
-    cue: "cluster of repeated narrow parallel segments with landing/arrow",
-    meaning: "stair flight / vertical circulation",
-    caution: "if exact boundary unclear, preserve shell and emit explicit conflict",
-  },
-];
+import {
+  type BlueprintLineRecord,
+  buildBlueprintLineSemanticsReference,
+  getOpeningTextPatterns,
+} from "./blueprint-line-database";
 
 const normalizeText = (value: unknown): string =>
   String(value || "")
@@ -70,38 +23,8 @@ const countTextMatches = (lineTexts: string[], patterns: RegExp[]) => {
   return count;
 };
 
-const DOOR_TEXT_PATTERNS = [
-  /\bdoor\b/i,
-  /\bdr\b/i,
-  /\bd\b/i,
-  /\bentry\b/i,
-  /\bexit\b/i,
-];
-
-const WINDOW_TEXT_PATTERNS = [
-  /\bwindow\b/i,
-  /\bwin\b/i,
-  /\bwdw\b/i,
-  /\bglaz(?:ed|ing)?\b/i,
-];
-
-const OPENING_TEXT_PATTERNS = [
-  /\bopening\b/i,
-  /\bopn\b/i,
-  /\bvoid\b/i,
-  /\blintel\b/i,
-  /\bsill\b/i,
-];
-
-export const buildArchitecturalLineSemanticsReference = (): string => {
-  const lines = LINE_SEMANTIC_RULES.map((rule, index) =>
-    `${index + 1}. Cue: ${rule.cue} -> Meaning: ${rule.meaning}. Caution: ${rule.caution}.`
-  );
-  return [
-    "ARCHITECTURAL LINE SEMANTICS REFERENCE (CONTEXT-FIRST, NOT TEXT-ONLY):",
-    ...lines,
-    "Rule: one line does not have a universal meaning in every drawing. Resolve with local topology, host walls, and nearby symbols before classification.",
-  ].join("\n");
+export const buildArchitecturalLineSemanticsReference = (lineRecords?: BlueprintLineRecord[]): string => {
+  return buildBlueprintLineSemanticsReference(lineRecords);
 };
 
 export type OpeningSemanticsAssessment = {
@@ -114,7 +37,10 @@ export type OpeningSemanticsAssessment = {
 
 export const assessOpeningSemantics = (
   layoutHints: BlueprintLayoutHints | null,
-  result: GeometricReconstruction
+  result: GeometricReconstruction,
+  options?: {
+    lineRecords?: BlueprintLineRecord[];
+  }
 ): OpeningSemanticsAssessment => {
   const walls = result?.walls?.length || 0;
   const rooms = result?.rooms?.length || 0;
@@ -128,9 +54,10 @@ export const assessOpeningSemantics = (
   const semanticCount = layoutHints?.semanticAnchors?.length || 0;
   const lineTexts = (layoutHints?.lineTexts || []).map(normalizeText).filter(Boolean);
 
-  const doorTextSignals = countTextMatches(lineTexts, DOOR_TEXT_PATTERNS);
-  const windowTextSignals = countTextMatches(lineTexts, WINDOW_TEXT_PATTERNS);
-  const openingTextSignals = countTextMatches(lineTexts, OPENING_TEXT_PATTERNS);
+  const openingTextPatterns = getOpeningTextPatterns(options?.lineRecords);
+  const doorTextSignals = countTextMatches(lineTexts, openingTextPatterns.doorPatterns);
+  const windowTextSignals = countTextMatches(lineTexts, openingTextPatterns.windowPatterns);
+  const openingTextSignals = countTextMatches(lineTexts, openingTextPatterns.genericOpeningPatterns);
 
   const expectedOpenings = Math.max(2, Math.round(rooms * 0.55), Math.round(walls * 0.28));
   const openingDeficit = Math.max(0, expectedOpenings - openings);
@@ -160,8 +87,12 @@ export const assessOpeningSemantics = (
     score += 0.9;
     reasons.push(`Openings per floor are low (${openingsPerFloor.toFixed(2)}), suggesting missed door/window symbols.`);
   }
-  if (doorTextSignals + windowTextSignals + openingTextSignals > 0) {
+  const openingTextSignalTotal = doorTextSignals + windowTextSignals + openingTextSignals;
+  if (openingTextSignalTotal > 0) {
     score += 0.8;
+    reasons.push(
+      `Blueprint text hints include opening semantics (door=${doorTextSignals}, window=${windowTextSignals}, generic=${openingTextSignals}).`
+    );
   } else if (lineCount >= 25 && openings === 0) {
     score += 1.2;
     reasons.push("No opening text hints found, but geometry-rich plan still requires non-text symbol interpretation.");
@@ -175,7 +106,7 @@ export const assessOpeningSemantics = (
   }
 
   const promptGuidance = [
-    buildArchitecturalLineSemanticsReference(),
+    buildArchitecturalLineSemanticsReference(options?.lineRecords),
     "OPENING INTERPRETATION BIAS:",
     "- Do not require door/window text labels before inferring openings.",
     "- Prioritize wall-gap plus arc/leaf symbols for doors; prioritize embedded spans in exterior walls for windows.",
@@ -190,4 +121,3 @@ export const assessOpeningSemantics = (
     promptGuidance,
   };
 };
-

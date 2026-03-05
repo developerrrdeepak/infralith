@@ -8,7 +8,14 @@ import { ShieldCheck } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 
 export default function MobileSidebar() {
-  const { isMobileMenuOpen, setIsMobileMenuOpen, activeRoute, handleNavigate, authed } = useAppContext();
+  const { isMobileMenuOpen, setIsMobileMenuOpen, activeRoute, handleNavigate, authed, user } = useAppContext();
+
+  const isAuthorized = (item: any) => {
+    if (!item.auth) return true;
+    if (!authed) return false;
+    if (!item.roles) return true;
+    return item.roles.includes(user?.role);
+  };
 
   return (
     <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
@@ -23,11 +30,12 @@ export default function MobileSidebar() {
         <div className="flex flex-col h-[calc(100%-69px)]">
           <nav className="flex-1 p-4 space-y-2">
             {navGroups.map((group) => {
+              const visibleItems = group.items.filter((item) => isAuthorized(item));
               if (group.key === 'main' || (group.key !== 'main' && authed)) {
                 return (
                   <div key={group.key}>
-                    {group.label && <h4 className="px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</h4>}
-                    {group.items.map((item) => {
+                    {group.label && visibleItems.length > 0 && <h4 className="px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</h4>}
+                    {visibleItems.map((item) => {
                       const Icon = item.icon;
                       const disabled = item.auth && !authed;
                       return (

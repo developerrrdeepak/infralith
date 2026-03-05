@@ -1,4 +1,4 @@
-import { Home, FileText, Upload, Settings, Gavel, Users, MessageSquare, Send, History, BarChart3, Box, Zap, ClipboardList } from 'lucide-react';
+import { Home, FileText, Upload, Settings, Gavel, Users, MessageSquare, Send, History, BarChart3, Box, Zap, ClipboardList, Database } from 'lucide-react';
 
 export const LS_KEYS = {
   token: 'infralith_token',
@@ -46,6 +46,7 @@ const decisionNav = {
     { key: 'decision', label: 'Decision Hub', icon: Gavel, auth: true, roles: ['Engineer', 'Admin'] },
     { key: 'report', label: 'Final Report', icon: FileText, auth: true },
     { key: 'analytics', label: 'Admin Analytics', icon: BarChart3, auth: true, roles: ['Admin'] },
+    { key: 'line-db-admin', label: 'Line DB Admin', icon: Database, auth: true, roles: ['Admin'] },
     { key: 'audit', label: 'Audit Log', icon: ClipboardList, auth: true, roles: ['Supervisor', 'Admin'] },
   ],
 };

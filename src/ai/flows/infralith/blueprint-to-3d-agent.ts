@@ -13,6 +13,7 @@ import {
   SiteReconstruction,
   SiteBuildingReconstruction,
 } from './reconstruction-types';
+import { getBlueprintLineDatabase, type BlueprintLineRecord } from './blueprint-line-database';
 import { applyBuildingCodes } from './building-codes';
 import {
   buildAssetPrompt,
@@ -22,6 +23,7 @@ import {
   buildTextToBuildingPrompt,
 } from './prompt-templates';
 import { assessOpeningSemantics } from './architectural-line-semantics';
+import { getBlueprintLineDbSnapshot } from '@/lib/blueprint-line-db-service';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import path from 'path';
@@ -2016,6 +2018,389 @@ const buildUniqueId = (existing: Set<string>, base: string): string => {
   return candidate;
 };
 
+const isDoorNearRoomBounds = (
+  doorPosition: [number, number],
+  bounds: { minX: number; maxX: number; minY: number; maxY: number },
+  edgeTolerance = 0.35,
+  padding = 0.22
+): boolean => {
+  const [x, y] = doorPosition;
+  if (x < bounds.minX - padding || x > bounds.maxX + padding || y < bounds.minY - padding || y > bounds.maxY + padding) {
+    return false;
+  }
+  const edgeDistance = Math.min(
+    Math.abs(x - bounds.minX),
+    Math.abs(x - bounds.maxX),
+    Math.abs(y - bounds.minY),
+    Math.abs(y - bounds.maxY)
+  );
+  return edgeDistance <= edgeTolerance;
+};
+
+const countRoomsWithoutDoorAccess = (result: GeometricReconstruction): number => {
+  const rooms = result?.rooms || [];
+  const doors = result?.doors || [];
+  if (rooms.length === 0) return 0;
+
+  let uncovered = 0;
+  for (const room of rooms) {
+    const bounds = collectRoomBounds(room?.polygon || []);
+    if (!bounds) continue;
+    const floor = toFloorBucket(room?.floor_level);
+    const hasDoor = doors.some((door) => {
+      if (toFloorBucket(door?.floor_level) !== floor) return false;
+      const position = asPoint2D(door?.position);
+      if (!position) return false;
+      return isDoorNearRoomBounds(position, bounds, 0.38, 0.24);
+    });
+    if (!hasDoor) uncovered += 1;
+  }
+  return uncovered;
+};
+
+const inferDoorsFromRoomTopology = (
+  walls: GeometricReconstruction['walls'],
+  rooms: GeometricReconstruction['rooms'],
+  existingDoors: GeometricReconstruction['doors']
+): {
+  doors: GeometricReconstruction['doors'];
+  inferredCount: number;
+  floors: number[];
+} => {
+  if (!Array.isArray(walls) || walls.length === 0 || !Array.isArray(rooms) || rooms.length === 0) {
+    return { doors: existingDoors || [], inferredCount: 0, floors: [] };
+  }
+
+  const doors = [...(existingDoors || [])];
+  const doorIds = new Set(doors.map((door) => String(door.id)));
+  const floorsTouched = new Set<number>();
+  let inferredCount = 0;
+
+  const floorLevels = new Set<number>();
+  for (const wall of walls) floorLevels.add(toFloorBucket(wall?.floor_level));
+  for (const room of rooms) floorLevels.add(toFloorBucket(room?.floor_level));
+
+  for (const floor of [...floorLevels].sort((a, b) => a - b)) {
+    const floorWalls = walls.filter((wall) => toFloorBucket(wall?.floor_level) === floor);
+    const floorRooms = rooms.filter((room) => toFloorBucket(room?.floor_level) === floor);
+    if (floorWalls.length < 4 || floorRooms.length < 2) continue;
+
+    const floorDoors = doors.filter((door) => toFloorBucket(door?.floor_level) === floor);
+    const roomBounds = floorRooms
+      .map((room) => ({ room, bounds: collectRoomBounds(room?.polygon || []) }))
+      .filter((entry): entry is { room: GeometricReconstruction['rooms'][number]; bounds: NonNullable<ReturnType<typeof collectRoomBounds>> } => !!entry.bounds);
+    if (roomBounds.length === 0) continue;
+
+    const targetDoorFloorMin = Math.max(1, Math.floor(roomBounds.length * 0.32));
+    if (floorDoors.length >= targetDoorFloorMin) continue;
+
+    const uncovered = roomBounds.filter((entry) =>
+      !floorDoors.some((door) => {
+        const position = asPoint2D(door?.position);
+        if (!position) return false;
+        return isDoorNearRoomBounds(position, entry.bounds, 0.38, 0.24);
+      })
+    );
+    if (uncovered.length === 0) continue;
+
+    const candidateWalls = floorWalls.filter((wall) => pointDistance(wall.start, wall.end) >= 1);
+    if (candidateWalls.length === 0) continue;
+
+    const maxNewDoors = Math.max(1, Math.min(8, targetDoorFloorMin - floorDoors.length + Math.ceil(uncovered.length * 0.4)));
+    let newDoorsForFloor = 0;
+
+    for (const entry of uncovered) {
+      if (newDoorsForFloor >= maxNewDoors) break;
+
+      let best: { wall: GeometricReconstruction['walls'][number]; midpoint: [number, number]; score: number } | null = null;
+      for (const wall of candidateWalls) {
+        const midpoint: [number, number] = [
+          Number(((wall.start[0] + wall.end[0]) * 0.5).toFixed(3)),
+          Number(((wall.start[1] + wall.end[1]) * 0.5).toFixed(3)),
+        ];
+        const onBoundary = isDoorNearRoomBounds(midpoint, entry.bounds, Math.max(0.24, Number(wall.thickness || 0.115) * 2.4), 0.26);
+        if (!onBoundary) continue;
+
+        const nearExisting = doors.some((door) => {
+          if (toFloorBucket(door?.floor_level) !== floor) return false;
+          if (String(door.host_wall_id) !== String(wall.id)) return false;
+          const p = asPoint2D(door?.position);
+          return p ? pointDistance(p, midpoint) < 0.9 : false;
+        });
+        if (nearExisting) continue;
+
+        const boundaryDistance = Math.min(
+          Math.abs(midpoint[0] - entry.bounds.minX),
+          Math.abs(midpoint[0] - entry.bounds.maxX),
+          Math.abs(midpoint[1] - entry.bounds.minY),
+          Math.abs(midpoint[1] - entry.bounds.maxY)
+        );
+        const lengthPenalty = 1 / Math.max(1, pointDistance(wall.start, wall.end));
+        const exteriorPenalty = wall.is_exterior === true ? 0.24 : 0;
+        const score = boundaryDistance + lengthPenalty + exteriorPenalty;
+        if (!best || score < best.score) {
+          best = { wall, midpoint, score };
+        }
+      }
+
+      if (!best) continue;
+
+      const id = buildUniqueId(doorIds, `inferred-door-f${floor}`);
+      const inferredDoor: GeometricReconstruction['doors'][number] = {
+        id,
+        host_wall_id: best.wall.id,
+        position: best.midpoint,
+        width: 0.9,
+        height: 2.1,
+        swing: 'unknown',
+        confidence: 0.35,
+        floor_level: floor,
+      };
+      doors.push(inferredDoor);
+      inferredCount += 1;
+      newDoorsForFloor += 1;
+      floorsTouched.add(floor);
+    }
+  }
+
+  return {
+    doors,
+    inferredCount,
+    floors: [...floorsTouched].sort((a, b) => a - b),
+  };
+};
+
+const NON_HABITABLE_ROOM_REGEX = /\b(bath|toilet|wc|powder|closet|store|storage|utility|laundry|service|stair|staircase|stairwell|lift|elevator|shaft|core|corridor|passage|lobby|foyer|garage|carport|balcony|terrace|patio|verandah?|duct)\b/i;
+
+const isLikelyHabitableRoomName = (value: unknown): boolean => {
+  const text = normalizeSemanticText(value);
+  if (!text) return true;
+  return !NON_HABITABLE_ROOM_REGEX.test(text);
+};
+
+const isWallNearRoomBounds = (
+  wall: GeometricReconstruction['walls'][number],
+  bounds: NonNullable<ReturnType<typeof collectRoomBounds>>
+): boolean => {
+  const midpoint: [number, number] = [
+    Number(((wall.start[0] + wall.end[0]) * 0.5).toFixed(3)),
+    Number(((wall.start[1] + wall.end[1]) * 0.5).toFixed(3)),
+  ];
+  const edgeTolerance = Math.max(0.34, Number(wall.thickness || 0.115) * 2.8);
+  if (isDoorNearRoomBounds(midpoint, bounds, edgeTolerance, 0.32)) return true;
+
+  const cornerDistance = Math.min(
+    pointToSegmentDistance([bounds.minX, bounds.minY], wall.start, wall.end),
+    pointToSegmentDistance([bounds.minX, bounds.maxY], wall.start, wall.end),
+    pointToSegmentDistance([bounds.maxX, bounds.minY], wall.start, wall.end),
+    pointToSegmentDistance([bounds.maxX, bounds.maxY], wall.start, wall.end)
+  );
+  return Number.isFinite(cornerDistance) && cornerDistance <= Math.max(0.38, Number(wall.thickness || 0.115) * 3.2);
+};
+
+const inferEntryDoorsFromExteriorWalls = (
+  walls: GeometricReconstruction['walls'],
+  rooms: GeometricReconstruction['rooms'],
+  existingDoors: GeometricReconstruction['doors']
+): {
+  doors: GeometricReconstruction['doors'];
+  inferredCount: number;
+  floors: number[];
+} => {
+  if (!Array.isArray(walls) || walls.length === 0) {
+    return { doors: existingDoors || [], inferredCount: 0, floors: [] };
+  }
+
+  const doors = [...(existingDoors || [])];
+  const doorIds = new Set(doors.map((door) => String(door.id)));
+  const floorsTouched = new Set<number>();
+  let inferredCount = 0;
+
+  const floorLevels = new Set<number>();
+  for (const wall of walls) floorLevels.add(toFloorBucket(wall?.floor_level));
+  for (const room of rooms || []) floorLevels.add(toFloorBucket(room?.floor_level));
+
+  for (const floor of [...floorLevels].sort((a, b) => a - b)) {
+    const floorWalls = walls.filter((wall) => toFloorBucket(wall?.floor_level) === floor);
+    const exteriorWalls = floorWalls
+      .filter((wall) => wall?.is_exterior === true && pointDistance(wall.start, wall.end) >= 1.25);
+    if (exteriorWalls.length === 0) continue;
+
+    const floorDoors = doors.filter((door) => toFloorBucket(door?.floor_level) === floor);
+    const hasExteriorDoor = floorDoors.some((door) => {
+      const host = floorWalls.find((wall) => String(wall.id) === String(door?.host_wall_id));
+      return host?.is_exterior === true;
+    });
+    if (hasExteriorDoor) continue;
+
+    const roomBounds = (rooms || [])
+      .filter((room) => toFloorBucket(room?.floor_level) === floor)
+      .map((room) => ({ room, bounds: collectRoomBounds(room?.polygon || []) }))
+      .filter((entry): entry is { room: GeometricReconstruction['rooms'][number]; bounds: NonNullable<ReturnType<typeof collectRoomBounds>> } => !!entry.bounds);
+    if (roomBounds.length === 0) continue;
+
+    const preferredRoom = roomBounds
+      .filter((entry) => isLikelyHabitableRoomName(entry.room?.name))
+      .sort((a, b) => b.bounds.area - a.bounds.area)[0] || roomBounds.sort((a, b) => b.bounds.area - a.bounds.area)[0];
+    if (!preferredRoom) continue;
+
+    let best: { wall: GeometricReconstruction['walls'][number]; midpoint: [number, number]; score: number } | null = null;
+    for (const wall of exteriorWalls) {
+      if (!isWallNearRoomBounds(wall, preferredRoom.bounds)) continue;
+      const midpoint: [number, number] = [
+        Number(((wall.start[0] + wall.end[0]) * 0.5).toFixed(3)),
+        Number(((wall.start[1] + wall.end[1]) * 0.5).toFixed(3)),
+      ];
+
+      const nearExistingDoor = floorDoors.some((door) => {
+        const position = asPoint2D(door?.position);
+        return position ? pointDistance(position, midpoint) < 1.1 : false;
+      });
+      if (nearExistingDoor) continue;
+
+      const center: [number, number] = [
+        Number(((preferredRoom.bounds.minX + preferredRoom.bounds.maxX) * 0.5).toFixed(3)),
+        Number(((preferredRoom.bounds.minY + preferredRoom.bounds.maxY) * 0.5).toFixed(3)),
+      ];
+      const roomDistance = pointDistance(center, midpoint);
+      const wallLength = pointDistance(wall.start, wall.end);
+      const score = roomDistance + (1 / Math.max(1, wallLength));
+      if (!best || score < best.score) {
+        best = { wall, midpoint, score };
+      }
+    }
+
+    if (!best) continue;
+    const id = buildUniqueId(doorIds, `inferred-entry-door-f${floor}`);
+    doors.push({
+      id,
+      host_wall_id: best.wall.id,
+      position: best.midpoint,
+      width: 0.95,
+      height: 2.1,
+      swing: 'unknown',
+      confidence: 0.32,
+      floor_level: floor,
+    });
+    inferredCount += 1;
+    floorsTouched.add(floor);
+  }
+
+  return {
+    doors,
+    inferredCount,
+    floors: [...floorsTouched].sort((a, b) => a - b),
+  };
+};
+
+const inferWindowsFromHabitableRoomTopology = (
+  walls: GeometricReconstruction['walls'],
+  rooms: GeometricReconstruction['rooms'],
+  doors: GeometricReconstruction['doors'],
+  existingWindows: GeometricReconstruction['windows']
+): {
+  windows: GeometricReconstruction['windows'];
+  inferredCount: number;
+  floors: number[];
+} => {
+  if (!Array.isArray(walls) || walls.length === 0 || !Array.isArray(rooms) || rooms.length === 0) {
+    return { windows: existingWindows || [], inferredCount: 0, floors: [] };
+  }
+
+  const windows = [...(existingWindows || [])];
+  const windowIds = new Set(windows.map((win) => String(win.id)));
+  const floorsTouched = new Set<number>();
+  let inferredCount = 0;
+
+  const floorLevels = new Set<number>();
+  for (const wall of walls) floorLevels.add(toFloorBucket(wall?.floor_level));
+  for (const room of rooms) floorLevels.add(toFloorBucket(room?.floor_level));
+
+  for (const floor of [...floorLevels].sort((a, b) => a - b)) {
+    const floorWalls = walls.filter((wall) => toFloorBucket(wall?.floor_level) === floor);
+    const exteriorWalls = floorWalls
+      .filter((wall) => wall?.is_exterior === true && pointDistance(wall.start, wall.end) >= 1.2);
+    if (exteriorWalls.length === 0) continue;
+
+    const floorDoors = (doors || []).filter((door) => toFloorBucket(door?.floor_level) === floor);
+    const floorWindows = windows.filter((win) => toFloorBucket(win?.floor_level) === floor);
+    const habitableRooms = rooms
+      .filter((room) => toFloorBucket(room?.floor_level) === floor && isLikelyHabitableRoomName(room?.name))
+      .map((room) => ({ room, bounds: collectRoomBounds(room?.polygon || []) }))
+      .filter((entry): entry is { room: GeometricReconstruction['rooms'][number]; bounds: NonNullable<ReturnType<typeof collectRoomBounds>> } => !!entry.bounds);
+    if (habitableRooms.length === 0) continue;
+
+    const maxNewForFloor = Math.min(10, habitableRooms.length);
+    let newForFloor = 0;
+
+    for (const entry of habitableRooms) {
+      if (newForFloor >= maxNewForFloor) break;
+      const hasWindowAlready = floorWindows.some((win) => {
+        const position = asPoint2D(win?.position);
+        return position ? isDoorNearRoomBounds(position, entry.bounds, 0.58, 0.28) : false;
+      });
+      if (hasWindowAlready) continue;
+
+      let best: { wall: GeometricReconstruction['walls'][number]; midpoint: [number, number]; score: number } | null = null;
+      for (const wall of exteriorWalls) {
+        if (!isWallNearRoomBounds(wall, entry.bounds)) continue;
+        const midpoint: [number, number] = [
+          Number(((wall.start[0] + wall.end[0]) * 0.5).toFixed(3)),
+          Number(((wall.start[1] + wall.end[1]) * 0.5).toFixed(3)),
+        ];
+
+        const nearDoor = floorDoors.some((door) => {
+          const position = asPoint2D(door?.position);
+          return position ? pointDistance(position, midpoint) < 1.15 : false;
+        });
+        if (nearDoor) continue;
+
+        const nearWindow = floorWindows.some((win) => {
+          const position = asPoint2D(win?.position);
+          return position ? pointDistance(position, midpoint) < 1.0 : false;
+        });
+        if (nearWindow) continue;
+
+        const center: [number, number] = [
+          Number(((entry.bounds.minX + entry.bounds.maxX) * 0.5).toFixed(3)),
+          Number(((entry.bounds.minY + entry.bounds.maxY) * 0.5).toFixed(3)),
+        ];
+        const roomDistance = pointDistance(center, midpoint);
+        const wallLength = pointDistance(wall.start, wall.end);
+        const score = roomDistance + (1 / Math.max(1, wallLength));
+        if (!best || score < best.score) {
+          best = { wall, midpoint, score };
+        }
+      }
+
+      if (!best) continue;
+      const wallLength = pointDistance(best.wall.start, best.wall.end);
+      const inferredWidth = Number(Math.min(1.8, Math.max(0.9, wallLength * 0.28)).toFixed(3));
+      const id = buildUniqueId(windowIds, `inferred-window-f${floor}`);
+      const inferredWindow: GeometricReconstruction['windows'][number] = {
+        id,
+        host_wall_id: best.wall.id,
+        position: best.midpoint,
+        width: inferredWidth,
+        sill_height: 0.9,
+        confidence: 0.31,
+        floor_level: floor,
+      };
+      windows.push(inferredWindow);
+      floorWindows.push(inferredWindow);
+      inferredCount += 1;
+      newForFloor += 1;
+      floorsTouched.add(floor);
+    }
+  }
+
+  return {
+    windows,
+    inferredCount,
+    floors: [...floorsTouched].sort((a, b) => a - b),
+  };
+};
+
 const mergeOpeningsFromRecovery = (
   base: GeometricReconstruction,
   recovered: GeometricReconstruction
@@ -2126,14 +2511,16 @@ type OpeningRecoveryDecision = {
 
 const shouldAttemptOpeningRecovery = (
   result: GeometricReconstruction,
-  layoutHints: BlueprintLayoutHints | null
+  layoutHints: BlueprintLayoutHints | null,
+  lineRecords?: BlueprintLineRecord[]
 ): OpeningRecoveryDecision => {
-  const semanticAssessment = assessOpeningSemantics(layoutHints, result);
+  const semanticAssessment = assessOpeningSemantics(layoutHints, result, { lineRecords });
   const floorSignals = estimateFloorHintCount(layoutHints);
   const inferredFloorCount = Math.max(1, estimateResultFloorCount(result));
   const walls = result?.walls?.length || 0;
   const rooms = result?.rooms?.length || 0;
   const openings = getOpeningCount(result);
+  const uncoveredRooms = countRoomsWithoutDoorAccess(result);
   const openingsPerFloor = openings / inferredFloorCount;
   const roomsPerFloor = rooms / inferredFloorCount;
   const reasons: string[] = [...semanticAssessment.reasons];
@@ -2150,12 +2537,23 @@ const shouldAttemptOpeningRecovery = (
     rooms >= 3 &&
     openings < Math.max(2, Math.round(walls * 0.22));
 
-  const shouldAttempt = strictMultiFloorEligible || semanticAssessment.shouldAttemptRecovery || relaxedFallbackEligible;
+  const roomAccessibilityEligible =
+    rooms >= 3 &&
+    uncoveredRooms >= Math.max(1, Math.round(rooms * 0.34));
+
+  const shouldAttempt =
+    strictMultiFloorEligible ||
+    semanticAssessment.shouldAttemptRecovery ||
+    relaxedFallbackEligible ||
+    roomAccessibilityEligible;
   if (strictMultiFloorEligible) {
     reasons.push("Multi-floor topology indicates missing openings relative to wall/room density.");
   }
   if (relaxedFallbackEligible && !strictMultiFloorEligible) {
     reasons.push("Relaxed opening gate activated: wall-room complexity suggests likely missed door/window symbols.");
+  }
+  if (roomAccessibilityEligible) {
+    reasons.push(`Detected ${uncoveredRooms} room(s) without nearby door access; recover non-text door symbols using wall-gap and topology cues.`);
   }
 
   return {
@@ -2263,6 +2661,29 @@ const countDirectionBuckets = (walls: GeometricReconstruction['walls']): number 
     directions.add(Math.round(normalized / 15) * 15);
   }
   return directions.size;
+};
+
+const estimateNonOrthogonalWallRatio = (walls: GeometricReconstruction['walls']): number => {
+  let nonOrthogonalLength = 0;
+  let totalLength = 0;
+  for (const wall of walls || []) {
+    const dx = Number(wall?.end?.[0] || 0) - Number(wall?.start?.[0] || 0);
+    const dz = Number(wall?.end?.[1] || 0) - Number(wall?.start?.[1] || 0);
+    const length = Math.hypot(dx, dz);
+    if (!Number.isFinite(length) || length < 0.2) continue;
+    totalLength += length;
+
+    const angle = Math.abs((Math.atan2(dz, dx) * 180) / Math.PI);
+    const normalized = ((angle % 180) + 180) % 180;
+    const deviation = Math.min(
+      Math.abs(normalized - 0),
+      Math.abs(normalized - 90),
+      Math.abs(normalized - 180)
+    );
+    if (deviation >= 10) nonOrthogonalLength += length;
+  }
+  if (totalLength <= 1e-6) return 0;
+  return nonOrthogonalLength / totalLength;
 };
 
 const isLikelyRectangularFallback = (result: GeometricReconstruction): boolean => {
@@ -3551,8 +3972,11 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     };
   }
 
-  const snapTolerance = 0.12;
-  const axisSnapRatio = 0.2;
+  const nonOrthogonalRatio = estimateNonOrthogonalWallRatio(payload.walls);
+  const directionBuckets = countDirectionBuckets(payload.walls);
+  const preserveIrregularFootprint = nonOrthogonalRatio >= 0.18 || directionBuckets >= 3;
+  const snapTolerance = preserveIrregularFootprint ? 0.08 : 0.12;
+  const axisSnapRatio = preserveIrregularFootprint ? 0.07 : 0.2;
 
   const cluster = new Map<string, { sx: number; sz: number; count: number }>();
   const addToCluster = (point: [number, number]) => {
@@ -3617,6 +4041,14 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   if (finalizedWalls.length === 0) return payload;
 
   const normalizationConflicts: GeometricReconstruction['conflicts'] = [];
+  if (preserveIrregularFootprint && finalizedWalls.length > 0) {
+    normalizationConflicts.push({
+      type: 'code',
+      severity: 'low',
+      description: `Detected non-orthogonal footprint evidence (direction buckets=${directionBuckets}, non-orth ratio=${nonOrthogonalRatio.toFixed(2)}); reduced axis snapping to preserve non-cuboidal geometry.`,
+      location: finalizedWalls[0].start,
+    });
+  }
 
   const wallIdSet = new Set(finalizedWalls.map((wall) => String(wall.id)));
   const wallsById = new Map(finalizedWalls.map((wall) => [String(wall.id), wall]));
@@ -3695,7 +4127,7 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   let reassignedDoorHosts = 0;
   let relaxedDoorHosts = 0;
   let droppedDoors = 0;
-  const normalizedDoors: GeometricReconstruction['doors'] = [];
+  let normalizedDoors: GeometricReconstruction['doors'] = [];
   for (const door of payload.doors || []) {
     const x = Number(door?.position?.[0]);
     const y = Number(door?.position?.[1]);
@@ -3729,7 +4161,7 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   let reassignedWindowHosts = 0;
   let relaxedWindowHosts = 0;
   let droppedWindows = 0;
-  const normalizedWindows: GeometricReconstruction['windows'] = [];
+  let normalizedWindows: GeometricReconstruction['windows'] = [];
   for (const win of payload.windows || []) {
     const x = Number(win?.position?.[0]);
     const y = Number(win?.position?.[1]);
@@ -3823,8 +4255,50 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     floorLevel,
     footprintProfile
   );
-  const useDeterministicRooms = shouldUseDeterministicRooms(normalizedRooms, deterministicRooms, finalizedWalls);
+  const baseDeterministicDecision = shouldUseDeterministicRooms(normalizedRooms, deterministicRooms, finalizedWalls);
+  const preserveComplexFootprint =
+    preserveIrregularFootprint ||
+    footprintProfile?.shapeClass === 'irregular' ||
+    countDirectionBuckets(finalizedWalls) >= 3;
+  const useDeterministicRooms = preserveComplexFootprint
+    ? (baseDeterministicDecision && deterministicRooms.length >= (normalizedRooms.length + 2))
+    : baseDeterministicDecision;
   const resolvedRooms = useDeterministicRooms ? deterministicRooms : normalizedRooms;
+  const inferredDoorRecovery = inferDoorsFromRoomTopology(finalizedWalls, resolvedRooms, normalizedDoors);
+  normalizedDoors = inferredDoorRecovery.doors;
+  if (inferredDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+    normalizationConflicts.push({
+      type: 'structural',
+      severity: 'low',
+      description: `Inferred ${inferredDoorRecovery.inferredCount} low-confidence door(s) from room-boundary topology on floor(s) ${inferredDoorRecovery.floors.join(', ')} because explicit door labels/symbols were sparse.`,
+      location: finalizedWalls[0].start,
+    });
+  }
+  const inferredEntryDoorRecovery = inferEntryDoorsFromExteriorWalls(finalizedWalls, resolvedRooms, normalizedDoors);
+  normalizedDoors = inferredEntryDoorRecovery.doors;
+  if (inferredEntryDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+    normalizationConflicts.push({
+      type: 'structural',
+      severity: 'low',
+      description: `Imputed ${inferredEntryDoorRecovery.inferredCount} entry door(s) on floor(s) ${inferredEntryDoorRecovery.floors.join(', ')} from exterior-wall topology due to missing explicit door annotation.`,
+      location: finalizedWalls[0].start,
+    });
+  }
+  const inferredWindowRecovery = inferWindowsFromHabitableRoomTopology(
+    finalizedWalls,
+    resolvedRooms,
+    normalizedDoors,
+    normalizedWindows
+  );
+  normalizedWindows = inferredWindowRecovery.windows;
+  if (inferredWindowRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+    normalizationConflicts.push({
+      type: 'structural',
+      severity: 'low',
+      description: `Imputed ${inferredWindowRecovery.inferredCount} habitable-room window(s) on floor(s) ${inferredWindowRecovery.floors.join(', ')} from exterior-wall evidence due to missing explicit window markers.`,
+      location: finalizedWalls[0].start,
+    });
+  }
 
   const normalizedFurnitures = (payload.furnitures || []).map((item) => {
     const initialPos: [number, number] = [Number(item.position[0]), Number(item.position[1])];
@@ -3957,6 +4431,287 @@ const getModelBoundsFromWalls = (walls: GeometricReconstruction['walls']): Model
     minY: Math.min(...ys),
     maxX: Math.max(...xs),
     maxY: Math.max(...ys),
+  };
+};
+
+const getFloorBoundsFromWalls = (
+  walls: GeometricReconstruction['walls'],
+  floorLevel: number
+): ModelBounds2D | null => {
+  const floorWalls = (walls || []).filter((wall) => toFloorBucket(wall?.floor_level) === floorLevel);
+  if (floorWalls.length === 0) return null;
+  return getModelBoundsFromWalls(floorWalls);
+};
+
+const FLOOR_ALIGNMENT_CORE_REGEX = /\b(stair|staircase|stairwell|lift|elevator|shaft|core)\b/i;
+
+type FloorAlignmentAnchor = {
+  point: [number, number];
+  source: 'semantic-core' | 'bounds-center';
+};
+
+const averagePoint = (points: [number, number][]): [number, number] | null => {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  let sx = 0;
+  let sy = 0;
+  let count = 0;
+  for (const point of points) {
+    if (!Array.isArray(point) || point.length < 2) continue;
+    const x = Number(point[0]);
+    const y = Number(point[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    sx += x;
+    sy += y;
+    count += 1;
+  }
+  if (count === 0) return null;
+  return [Number((sx / count).toFixed(3)), Number((sy / count).toFixed(3))];
+};
+
+const collectFloorSemanticCoreAnchors = (
+  payload: GeometricReconstruction,
+  floorLevel: number
+): [number, number][] => {
+  const points: [number, number][] = [];
+
+  for (const room of payload?.rooms || []) {
+    if (toFloorBucket(room?.floor_level) !== floorLevel) continue;
+    if (!FLOOR_ALIGNMENT_CORE_REGEX.test(normalizeSemanticText(room?.name))) continue;
+    const center = estimateRoomCenter(room);
+    if (center) points.push(center);
+  }
+
+  for (const item of payload?.furnitures || []) {
+    if (toFloorBucket(item?.floor_level) !== floorLevel) continue;
+    const semantic = `${normalizeSemanticText(item?.type)} ${normalizeSemanticText(item?.description)}`;
+    if (!FLOOR_ALIGNMENT_CORE_REGEX.test(semantic)) continue;
+    const point = asPoint2D(item?.position);
+    if (point) points.push([Number(point[0].toFixed(3)), Number(point[1].toFixed(3))]);
+  }
+
+  return points;
+};
+
+const resolveFloorAlignmentAnchor = (
+  payload: GeometricReconstruction,
+  floorLevel: number,
+  bounds: ModelBounds2D
+): FloorAlignmentAnchor => {
+  const semanticPoints = collectFloorSemanticCoreAnchors(payload, floorLevel);
+  const semanticAnchor = averagePoint(semanticPoints);
+  if (semanticAnchor) {
+    return {
+      point: semanticAnchor,
+      source: 'semantic-core',
+    };
+  }
+
+  return {
+    point: [
+      Number(((bounds.minX + bounds.maxX) * 0.5).toFixed(3)),
+      Number(((bounds.minY + bounds.maxY) * 0.5).toFixed(3)),
+    ],
+    source: 'bounds-center',
+  };
+};
+
+const translateBounds = (bounds: ModelBounds2D, dx: number, dy: number): ModelBounds2D => ({
+  minX: Number((bounds.minX + dx).toFixed(3)),
+  maxX: Number((bounds.maxX + dx).toFixed(3)),
+  minY: Number((bounds.minY + dy).toFixed(3)),
+  maxY: Number((bounds.maxY + dy).toFixed(3)),
+});
+
+const computeBoundsIoU = (a: ModelBounds2D, b: ModelBounds2D): number => {
+  const ix = Math.max(0, Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX));
+  const iy = Math.max(0, Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY));
+  const intersection = ix * iy;
+  if (intersection <= 0) return 0;
+  const areaA = Math.max(0, (a.maxX - a.minX) * (a.maxY - a.minY));
+  const areaB = Math.max(0, (b.maxX - b.minX) * (b.maxY - b.minY));
+  const union = areaA + areaB - intersection;
+  if (union <= 1e-6) return 0;
+  return intersection / union;
+};
+
+const translateFloorGeometry = (
+  payload: GeometricReconstruction,
+  floorLevel: number,
+  dx: number,
+  dy: number
+): GeometricReconstruction => {
+  const adjust = (point: [number, number]): [number, number] => [
+    Number((point[0] + dx).toFixed(3)),
+    Number((point[1] + dy).toFixed(3)),
+  ];
+
+  return {
+    ...payload,
+    walls: (payload.walls || []).map((wall) =>
+      toFloorBucket(wall?.floor_level) !== floorLevel
+        ? wall
+        : {
+          ...wall,
+          start: adjust(wall.start),
+          end: adjust(wall.end),
+        }
+    ),
+    doors: (payload.doors || []).map((door) =>
+      toFloorBucket(door?.floor_level) !== floorLevel
+        ? door
+        : {
+          ...door,
+          position: adjust(door.position),
+        }
+    ),
+    windows: (payload.windows || []).map((win) =>
+      toFloorBucket(win?.floor_level) !== floorLevel
+        ? win
+        : {
+          ...win,
+          position: adjust(win.position),
+        }
+    ),
+    rooms: (payload.rooms || []).map((room) =>
+      toFloorBucket(room?.floor_level) !== floorLevel
+        ? room
+        : {
+          ...room,
+          polygon: (room.polygon || []).map((point) => adjust(point)),
+        }
+    ),
+    furnitures: (payload.furnitures || []).map((item) =>
+      toFloorBucket(item?.floor_level) !== floorLevel
+        ? item
+        : {
+          ...item,
+          position: adjust(item.position),
+        }
+    ),
+  };
+};
+
+const reconcileStackedFloorAlignment = (
+  payload: GeometricReconstruction
+): {
+  result: GeometricReconstruction;
+  applied: boolean;
+  adjustedFloors: number[];
+  translations: Array<{
+    floor: number;
+    dx: number;
+    dy: number;
+    shift: number;
+    source: 'semantic-core' | 'bounds-center';
+    overlapGain: number;
+  }>;
+} => {
+  const walls = payload?.walls || [];
+  if (!Array.isArray(walls) || walls.length < 8) {
+    return { result: payload, applied: false, adjustedFloors: [], translations: [] };
+  }
+
+  const floorLevels = Array.from(new Set(walls.map((wall) => toFloorBucket(wall?.floor_level)))).sort((a, b) => a - b);
+  if (floorLevels.length < 2) {
+    return { result: payload, applied: false, adjustedFloors: [], translations: [] };
+  }
+
+  const baseFloor = floorLevels[0];
+  const baseBounds = getFloorBoundsFromWalls(walls, baseFloor);
+  if (!baseBounds) {
+    return { result: payload, applied: false, adjustedFloors: [], translations: [] };
+  }
+
+  const baseWidth = Math.max(0.01, baseBounds.maxX - baseBounds.minX);
+  const baseDepth = Math.max(0.01, baseBounds.maxY - baseBounds.minY);
+  const baseArea = baseWidth * baseDepth;
+  const baseAspect = baseWidth / baseDepth;
+  const baseAnchor = resolveFloorAlignmentAnchor(payload, baseFloor, baseBounds);
+  const baseDiag = Math.hypot(baseWidth, baseDepth);
+
+  let result = payload;
+  const translations: Array<{
+    floor: number;
+    dx: number;
+    dy: number;
+    shift: number;
+    source: 'semantic-core' | 'bounds-center';
+    overlapGain: number;
+  }> = [];
+
+  for (const floor of floorLevels.slice(1)) {
+    const floorBounds = getFloorBoundsFromWalls(result.walls, floor);
+    if (!floorBounds) continue;
+
+    const width = Math.max(0.01, floorBounds.maxX - floorBounds.minX);
+    const depth = Math.max(0.01, floorBounds.maxY - floorBounds.minY);
+    const area = width * depth;
+    const aspect = width / depth;
+    const areaRatio = area / Math.max(0.01, baseArea);
+    const aspectDelta = Math.abs(aspect - baseAspect);
+    const floorAnchor = resolveFloorAlignmentAnchor(result, floor, floorBounds);
+    const useSemanticAnchor = baseAnchor.source === 'semantic-core' && floorAnchor.source === 'semantic-core';
+    const dx = baseAnchor.point[0] - floorAnchor.point[0];
+    const dy = baseAnchor.point[1] - floorAnchor.point[1];
+    const shift = Math.hypot(dx, dy);
+    const minShiftToFix = useSemanticAnchor
+      ? Math.max(0.2, baseDiag * 0.025)
+      : Math.max(0.45, baseDiag * 0.06);
+    const maxShiftToFix = useSemanticAnchor
+      ? Math.max(4.2, baseDiag * 0.6)
+      : Math.max(3.5, baseDiag * 0.45);
+    const similarFootprint = areaRatio >= 0.62 && areaRatio <= 1.38 && aspectDelta <= 0.55;
+    if (!similarFootprint) continue;
+    if (!Number.isFinite(shift) || shift < minShiftToFix || shift > maxShiftToFix) continue;
+
+    const overlapBefore = computeBoundsIoU(baseBounds, floorBounds);
+    const translatedBounds = translateBounds(floorBounds, dx, dy);
+    const overlapAfter = computeBoundsIoU(baseBounds, translatedBounds);
+    const overlapGain = overlapAfter - overlapBefore;
+    const requiredGain = useSemanticAnchor ? 0.02 : 0.08;
+    if (overlapGain < requiredGain) continue;
+
+    result = translateFloorGeometry(result, floor, dx, dy);
+    translations.push({
+      floor,
+      dx: Number(dx.toFixed(3)),
+      dy: Number(dy.toFixed(3)),
+      shift: Number(shift.toFixed(3)),
+      source: useSemanticAnchor ? 'semantic-core' : 'bounds-center',
+      overlapGain: Number(overlapGain.toFixed(3)),
+    });
+  }
+
+  if (translations.length === 0) {
+    return { result: payload, applied: false, adjustedFloors: [], translations: [] };
+  }
+
+  const firstLocation =
+    result?.walls?.find((wall) => toFloorBucket(wall?.floor_level) === translations[0].floor)?.start ||
+    result?.walls?.[0]?.start ||
+    [0, 0];
+  const description = `Auto-aligned shifted upper floors (${translations
+    .map((item) => `L${item.floor}: dx=${item.dx}, dy=${item.dy}, anchor=${item.source}, overlap+${item.overlapGain}`)
+    .join('; ')}) to improve vertical wall stacking.`;
+
+  result = {
+    ...result,
+    conflicts: [
+      ...(result.conflicts || []),
+      {
+        type: 'code',
+        severity: 'low',
+        description,
+        location: [Number(firstLocation[0] || 0), Number(firstLocation[1] || 0)] as [number, number],
+      },
+    ],
+  };
+
+  return {
+    result,
+    applied: true,
+    adjustedFloors: translations.map((entry) => entry.floor),
+    translations,
   };
 };
 
@@ -5786,7 +6541,26 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     }, 'warn');
   }
   // STAGE 2: Send image + layout hints to the AI Vision model
-  const prompt = buildBlueprintVisionPrompt(layoutHints);
+  let lineRecords = getBlueprintLineDatabase();
+  try {
+    const lineDbSnapshot = await getBlueprintLineDbSnapshot();
+    lineRecords = lineDbSnapshot.records;
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'blueprint line semantics snapshot resolved', {
+      source: lineDbSnapshot.source,
+      writable: lineDbSnapshot.writable,
+      records: lineDbSnapshot.records.length,
+      updatedAt: lineDbSnapshot.updatedAt,
+      schemaVersion: lineDbSnapshot.schemaVersion,
+    });
+  } catch (error) {
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'failed to resolve persisted line semantics DB, using bundled defaults', {
+      reason: error instanceof Error ? error.message : String(error),
+      fallbackRecords: lineRecords.length,
+    }, 'warn');
+  }
+  const prompt = buildBlueprintVisionPrompt(layoutHints, {
+    lineRecords,
+  });
   const effectiveBudgetMs = Math.min(VISION_TOTAL_BUDGET_MS, VISION_REQUEST_HARD_BUDGET_MS);
   const getRemainingBudgetMs = () => effectiveBudgetMs - (Date.now() - startedAt);
   traceLog('Infralith Vision Engine', traceId, '2/9', 'vision request budget initialized', {
@@ -6259,7 +7033,7 @@ ROOM DIMENSION + POSITION ENFORCEMENT:
       }
     }
 
-    const openingDecision = shouldAttemptOpeningRecovery(result, layoutHints);
+    const openingDecision = shouldAttemptOpeningRecovery(result, layoutHints, lineRecords);
     if (openingDecision.shouldAttempt && canRunVisionPass('opening-recovery')) {
       const baseScore = scoreReconstructionDensity(result, layoutHints);
       const baseOpenings = getOpeningCount(result);
@@ -6533,6 +7307,14 @@ OPENING-RECOVERY OVERRIDE:
         factor: Number(scaleReconciliation.factor.toFixed(4)),
         sampleCount: scaleReconciliation.sampleCount,
         inlierCount: scaleReconciliation.inlierCount,
+      }, 'warn');
+    }
+    const floorAlignment = reconcileStackedFloorAlignment(result);
+    result = floorAlignment.result;
+    if (floorAlignment.applied) {
+      traceLog('Infralith Vision Engine', traceId, '6/9', 'applied multi-floor stack alignment correction', {
+        adjustedFloors: floorAlignment.adjustedFloors,
+        translations: floorAlignment.translations,
       }, 'warn');
     }
     result = inferRoofFromWallFootprint(result);

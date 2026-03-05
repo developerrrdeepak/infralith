@@ -1,4 +1,5 @@
 import type { BlueprintLayoutHints } from "@/ai/azure-ai";
+import type { BlueprintLineRecord } from "./blueprint-line-database";
 import { buildArchitecturalLineSemanticsReference } from "./architectural-line-semantics";
 
 const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
@@ -121,7 +122,12 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
   }, null, 2);
 };
 
-export const buildBlueprintVisionPrompt = (layoutHints: BlueprintLayoutHints | null): string => `
+export const buildBlueprintVisionPrompt = (
+  layoutHints: BlueprintLayoutHints | null,
+  options?: {
+    lineRecords?: BlueprintLineRecord[];
+  }
+): string => `
 You are Infralith Blueprint Reconstruction Engine v7.
 Goal: convert a 2D floorplan image into a metrically consistent, topologically valid geometric reconstruction for BIM pre-processing.
 
@@ -161,7 +167,7 @@ MANDATORY PIPELINE:
 - Never promote low-confidence text layout hints over clear drawing geometry.
 
 ARCHITECTURAL SEMANTICS (MANDATORY):
-${buildArchitecturalLineSemanticsReference()}
+${buildArchitecturalLineSemanticsReference(options?.lineRecords)}
 
 2) STRUCTURAL GRAPH FIRST (JUNCTION -> EDGE -> WALL)
 - Detect wall junction candidates and wall edge candidates first.
@@ -181,6 +187,7 @@ ${buildArchitecturalLineSemanticsReference()}
 - If host wall is ambiguous, omit opening and record conflict.
 - Use conservative defaults only if symbol is clearly detected but size text is unreadable:
   door width 0.9m, door height 2.1m, window sill_height 0.9m.
+- If door/window text labels are missing, still infer openings from wall-gap + symbol topology; mark low confidence instead of dropping all openings.
 
 5) ROOM POLYGONS
 - Build room polygons only from enclosed wall regions.
@@ -197,6 +204,7 @@ ${buildArchitecturalLineSemanticsReference()}
 - For elongated footprints, preserve linear zoning/circulation and avoid forcing square room clusters.
 - For compact footprints, avoid excessive corridor-heavy partitioning.
 - For irregular/non-Manhattan footprints, preserve boundary character and fit room polygons to that geometry.
+- Do NOT collapse L/U/T/courtyard/trapezoid/polygonal footprints into a cuboid or simple rectangle unless the drawing is explicitly rectangular.
 
 6) ROOF FOOTPRINT
 - Set roof polygon from the outer building shell.
@@ -218,6 +226,15 @@ ${buildArchitecturalLineSemanticsReference()}
 - If floor labels suggest multi-floor content, set floor levels consistently or emit explicit high-severity conflict.
 - Prefer explicit conflict over geometric guessing when OCR text and drawing lines disagree.
 - If any major gate is uncertain or fails, add conflict with precise location.
+
+8.5) MISSING-INFO IMPUTATION POLICY (MANDATORY)
+- Blueprint may omit labels/dimensions for many elements. Do not collapse to empty details by default.
+- Infer minimally required architectural elements from geometry/topology priors:
+  at least one entry door per floor shell where boundary transitions imply access,
+  windows on exterior walls for habitable rooms when strong wall-span evidence exists,
+  staircase/vertical circulation cues for clear multi-floor layouts.
+- Any imputed element must carry lower confidence (typically 0.25-0.55) and preserve host-wall/topology validity.
+- For each imputation cluster, add a concise conflict note documenting assumption source ("inferred from topology/symbol geometry due to missing annotation").
 
 9) CONFLICTS
 - Conflicts must use type in {"structural","safety","code"} and severity in {"low","medium","high"}.
