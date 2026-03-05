@@ -2293,6 +2293,315 @@ const inferEntryDoorsFromExteriorWalls = (
   };
 };
 
+const inferInteriorConnectivityDoors = (
+  walls: GeometricReconstruction['walls'],
+  rooms: GeometricReconstruction['rooms'],
+  existingDoors: GeometricReconstruction['doors']
+): {
+  doors: GeometricReconstruction['doors'];
+  inferredCount: number;
+  floors: number[];
+  unresolvedRooms: Array<{ floor: number; roomId: string | number; roomName: string }>;
+} => {
+  if (!Array.isArray(walls) || walls.length === 0 || !Array.isArray(rooms) || rooms.length < 2) {
+    return { doors: existingDoors || [], inferredCount: 0, floors: [], unresolvedRooms: [] };
+  }
+
+  type RoomEntry = {
+    index: number;
+    room: GeometricReconstruction['rooms'][number];
+    bounds: NonNullable<ReturnType<typeof collectRoomBounds>>;
+    area: number;
+  };
+
+  type DoorBridgeCandidate = {
+    wall: GeometricReconstruction['walls'][number];
+    position: [number, number];
+    score: number;
+  };
+
+  const doors = [...(existingDoors || [])];
+  const doorIds = new Set(doors.map((door) => String(door.id)));
+  const floorsTouched = new Set<number>();
+  const unresolvedRooms: Array<{ floor: number; roomId: string | number; roomName: string }> = [];
+  let inferredCount = 0;
+
+  const floorLevels = new Set<number>();
+  for (const wall of walls) floorLevels.add(toFloorBucket(wall?.floor_level));
+  for (const room of rooms) floorLevels.add(toFloorBucket(room?.floor_level));
+
+  const getSharedBoundaryCandidate = (
+    a: NonNullable<ReturnType<typeof collectRoomBounds>>,
+    b: NonNullable<ReturnType<typeof collectRoomBounds>>
+  ): [number, number] | null => {
+    const touchTol = 0.46;
+    const minOverlap = 0.95;
+
+    const verticalGap = Math.min(
+      Math.abs(a.maxX - b.minX),
+      Math.abs(b.maxX - a.minX)
+    );
+    if (verticalGap <= touchTol) {
+      const overlapStart = Math.max(a.minY, b.minY);
+      const overlapEnd = Math.min(a.maxY, b.maxY);
+      const overlap = overlapEnd - overlapStart;
+      if (overlap >= minOverlap) {
+        const edgeX = Math.abs(a.maxX - b.minX) <= Math.abs(b.maxX - a.minX) ? (a.maxX + b.minX) * 0.5 : (b.maxX + a.minX) * 0.5;
+        return [Number(edgeX.toFixed(3)), Number(((overlapStart + overlapEnd) * 0.5).toFixed(3))];
+      }
+    }
+
+    const horizontalGap = Math.min(
+      Math.abs(a.maxY - b.minY),
+      Math.abs(b.maxY - a.minY)
+    );
+    if (horizontalGap <= touchTol) {
+      const overlapStart = Math.max(a.minX, b.minX);
+      const overlapEnd = Math.min(a.maxX, b.maxX);
+      const overlap = overlapEnd - overlapStart;
+      if (overlap >= minOverlap) {
+        const edgeY = Math.abs(a.maxY - b.minY) <= Math.abs(b.maxY - a.minY) ? (a.maxY + b.minY) * 0.5 : (b.maxY + a.minY) * 0.5;
+        return [Number(((overlapStart + overlapEnd) * 0.5).toFixed(3)), Number(edgeY.toFixed(3))];
+      }
+    }
+
+    return null;
+  };
+
+  for (const floor of [...floorLevels].sort((a, b) => a - b)) {
+    const floorWalls = walls.filter((wall) => toFloorBucket(wall?.floor_level) === floor);
+    if (floorWalls.length < 4) continue;
+
+    const floorRoomBounds = rooms
+      .filter((room) => toFloorBucket(room?.floor_level) === floor)
+      .map((room) => ({ room, bounds: collectRoomBounds(room?.polygon || []) }))
+      .filter((entry): entry is { room: GeometricReconstruction['rooms'][number]; bounds: NonNullable<ReturnType<typeof collectRoomBounds>> } => !!entry.bounds);
+    const roomEntries: RoomEntry[] = floorRoomBounds.map((entry, index) => ({
+      index,
+      room: entry.room,
+      bounds: entry.bounds,
+      area: entry.bounds.area,
+    }));
+    if (roomEntries.length < 2) continue;
+
+    const candidateWalls = floorWalls
+      .filter((wall) => wall?.is_exterior !== true && pointDistance(wall.start, wall.end) >= 0.9);
+    const wallPool = candidateWalls.length > 0
+      ? candidateWalls
+      : floorWalls.filter((wall) => pointDistance(wall.start, wall.end) >= 0.9);
+    if (wallPool.length === 0) continue;
+
+    const wallById = new Map<string, GeometricReconstruction['walls'][number]>();
+    for (const wall of floorWalls) wallById.set(String(wall.id), wall);
+
+    const floorDoors = doors.filter((door) => toFloorBucket(door?.floor_level) === floor);
+
+    const resolveDoorRoomIndices = (door: GeometricReconstruction['doors'][number]): number[] => {
+      const position = asPoint2D(door?.position);
+      if (!position) return [];
+      const hostWall = wallById.get(String(door?.host_wall_id));
+      const edgeTolerance = Math.max(0.36, Number(hostWall?.thickness || 0.115) * 2.9);
+
+      const linked = roomEntries
+        .filter((entry) => isDoorNearRoomBounds(position, entry.bounds, edgeTolerance, 0.3))
+        .map((entry) => entry.index);
+      return [...new Set(linked)];
+    };
+
+    const buildDoorAdjacency = (): Map<number, Set<number>> => {
+      const graph = new Map<number, Set<number>>();
+      for (const entry of roomEntries) graph.set(entry.index, new Set<number>());
+
+      for (const door of floorDoors) {
+        const linkedRooms = resolveDoorRoomIndices(door);
+        if (linkedRooms.length < 2) continue;
+        for (let i = 0; i < linkedRooms.length; i += 1) {
+          for (let j = i + 1; j < linkedRooms.length; j += 1) {
+            const a = linkedRooms[i];
+            const b = linkedRooms[j];
+            graph.get(a)?.add(b);
+            graph.get(b)?.add(a);
+          }
+        }
+      }
+
+      return graph;
+    };
+
+    const pickSeedRooms = (): Set<number> => {
+      const seeds = new Set<number>();
+
+      for (const door of floorDoors) {
+        const linkedRooms = resolveDoorRoomIndices(door);
+        if (linkedRooms.length === 0) continue;
+        const hostWall = wallById.get(String(door?.host_wall_id));
+        if (hostWall?.is_exterior === true) {
+          for (const roomIndex of linkedRooms) seeds.add(roomIndex);
+        }
+      }
+      if (seeds.size > 0) return seeds;
+
+      for (const door of floorDoors) {
+        for (const roomIndex of resolveDoorRoomIndices(door)) seeds.add(roomIndex);
+      }
+      if (seeds.size > 0) return seeds;
+
+      const entryLikeRoom = roomEntries.find((entry) => /\b(entry|foyer|lobby|vestibule)\b/i.test(normalizeSemanticText(entry.room?.name)));
+      if (entryLikeRoom) {
+        seeds.add(entryLikeRoom.index);
+        return seeds;
+      }
+
+      const habitable = roomEntries
+        .filter((entry) => isLikelyHabitableRoomName(entry.room?.name))
+        .sort((a, b) => b.area - a.area)[0];
+      const fallback = habitable || roomEntries.slice().sort((a, b) => b.area - a.area)[0];
+      if (fallback) seeds.add(fallback.index);
+      return seeds;
+    };
+
+    const computeReachableRooms = (
+      graph: Map<number, Set<number>>,
+      seeds: Set<number>
+    ): Set<number> => {
+      const reachable = new Set<number>();
+      const queue: number[] = [...seeds];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (current == null || reachable.has(current)) continue;
+        reachable.add(current);
+        for (const next of graph.get(current) || []) {
+          if (!reachable.has(next)) queue.push(next);
+        }
+      }
+      return reachable;
+    };
+
+    const hasDoorForRoom = (entry: RoomEntry): boolean =>
+      floorDoors.some((door) => {
+        const position = asPoint2D(door?.position);
+        return position ? isDoorNearRoomBounds(position, entry.bounds, 0.42, 0.26) : false;
+      });
+
+    const buildBridgeCandidate = (
+      target: RoomEntry,
+      neighbor: RoomEntry,
+      neighborReachable: boolean
+    ): DoorBridgeCandidate | null => {
+      const sharedCandidate = getSharedBoundaryCandidate(target.bounds, neighbor.bounds);
+      if (!sharedCandidate) return null;
+
+      let best: { wall: GeometricReconstruction['walls'][number]; position: [number, number]; score: number } | null = null;
+      for (const wall of wallPool) {
+        const projected = closestPointOnSegment(sharedCandidate, wall.start, wall.end);
+        const maxOffset = Math.max(0.34, Number(wall.thickness || 0.115) * 2.8);
+        if (!Number.isFinite(projected.distance) || projected.distance > maxOffset) continue;
+
+        const position: [number, number] = [
+          Number(projected.point[0].toFixed(3)),
+          Number(projected.point[1].toFixed(3)),
+        ];
+        const nearTarget = isDoorNearRoomBounds(position, target.bounds, maxOffset, 0.28);
+        const nearNeighbor = isDoorNearRoomBounds(position, neighbor.bounds, maxOffset, 0.28);
+        if (!nearTarget || !nearNeighbor) continue;
+
+        const overlapsExisting = floorDoors.some((door) => {
+          const point = asPoint2D(door?.position);
+          return point ? pointDistance(point, position) < 0.95 : false;
+        });
+        if (overlapsExisting) continue;
+
+        const wallLength = pointDistance(wall.start, wall.end);
+        if (!Number.isFinite(wallLength) || wallLength < 0.8) continue;
+        const sharedDistance = pointDistance(sharedCandidate, position);
+        const exteriorPenalty = wall.is_exterior === true ? 0.85 : 0;
+        const reachabilityPenalty = neighborReachable ? -0.22 : 0.22;
+        const score = projected.distance + sharedDistance * 0.25 + exteriorPenalty + reachabilityPenalty + (1 / Math.max(1, wallLength));
+        if (!best || score < best.score) best = { wall, position, score };
+      }
+
+      if (!best) return null;
+      return {
+        wall: best.wall,
+        position: best.position,
+        score: best.score,
+      };
+    };
+
+    const maxNewDoors = Math.min(18, Math.max(3, roomEntries.length * 2));
+    let newDoorsForFloor = 0;
+
+    let doorGraph = buildDoorAdjacency();
+    let seedRooms = pickSeedRooms();
+    let reachableRooms = computeReachableRooms(doorGraph, seedRooms);
+
+    while (newDoorsForFloor < maxNewDoors) {
+      const disconnected = roomEntries
+        .filter((entry) => !reachableRooms.has(entry.index))
+        .sort((a, b) => b.area - a.area);
+      if (disconnected.length === 0) break;
+
+      let bestCandidate: DoorBridgeCandidate | null = null;
+      for (const targetEntry of disconnected) {
+        const reachableNeighbors = roomEntries.filter((entry) => entry.index !== targetEntry.index && reachableRooms.has(entry.index));
+        const fallbackNeighbors = roomEntries.filter((entry) => entry.index !== targetEntry.index);
+        const neighborPool = reachableNeighbors.length > 0 ? reachableNeighbors : fallbackNeighbors;
+        if (neighborPool.length === 0) continue;
+
+        for (const neighborEntry of neighborPool) {
+          const candidate = buildBridgeCandidate(targetEntry, neighborEntry, reachableRooms.has(neighborEntry.index));
+          if (!candidate) continue;
+          if (!bestCandidate || candidate.score < bestCandidate.score) {
+            bestCandidate = candidate;
+          }
+        }
+      }
+
+      if (!bestCandidate) break;
+
+      const id = buildUniqueId(doorIds, `inferred-conn-door-f${floor}`);
+      const inferredDoor: GeometricReconstruction['doors'][number] = {
+        id,
+        host_wall_id: bestCandidate.wall.id,
+        position: bestCandidate.position,
+        width: 0.9,
+        height: 2.1,
+        swing: 'unknown',
+        confidence: 0.29,
+        floor_level: floor,
+      };
+      doors.push(inferredDoor);
+      floorDoors.push(inferredDoor);
+      inferredCount += 1;
+      newDoorsForFloor += 1;
+      floorsTouched.add(floor);
+
+      doorGraph = buildDoorAdjacency();
+      seedRooms = pickSeedRooms();
+      reachableRooms = computeReachableRooms(doorGraph, seedRooms);
+    }
+
+    const finalGraph = buildDoorAdjacency();
+    const finalSeeds = pickSeedRooms();
+    const finalReachable = computeReachableRooms(finalGraph, finalSeeds);
+    const remaining = roomEntries.filter((entry) => !finalReachable.has(entry.index) || !hasDoorForRoom(entry));
+    for (const entry of remaining) {
+      unresolvedRooms.push({
+        floor,
+        roomId: entry.room.id,
+        roomName: String(entry.room.name || `Room ${entry.room.id}`),
+      });
+    }
+  }
+
+  return {
+    doors,
+    inferredCount,
+    floors: [...floorsTouched].sort((a, b) => a - b),
+    unresolvedRooms,
+  };
+};
+
 const inferWindowsFromHabitableRoomTopology = (
   walls: GeometricReconstruction['walls'],
   rooms: GeometricReconstruction['rooms'],
@@ -4281,6 +4590,28 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
       type: 'structural',
       severity: 'low',
       description: `Imputed ${inferredEntryDoorRecovery.inferredCount} entry door(s) on floor(s) ${inferredEntryDoorRecovery.floors.join(', ')} from exterior-wall topology due to missing explicit door annotation.`,
+      location: finalizedWalls[0].start,
+    });
+  }
+  const inferredConnectivityDoorRecovery = inferInteriorConnectivityDoors(finalizedWalls, resolvedRooms, normalizedDoors);
+  normalizedDoors = inferredConnectivityDoorRecovery.doors;
+  if (inferredConnectivityDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+    normalizationConflicts.push({
+      type: 'structural',
+      severity: 'low',
+      description: `Added ${inferredConnectivityDoorRecovery.inferredCount} interior connectivity door(s) on floor(s) ${inferredConnectivityDoorRecovery.floors.join(', ')} to reduce sealed-room circulation gaps.`,
+      location: finalizedWalls[0].start,
+    });
+  }
+  if (inferredConnectivityDoorRecovery.unresolvedRooms.length > 0 && finalizedWalls.length > 0) {
+    const unresolvedSamples = inferredConnectivityDoorRecovery.unresolvedRooms
+      .slice(0, 3)
+      .map((entry) => `[F${entry.floor}] ${entry.roomName}`)
+      .join(', ');
+    normalizationConflicts.push({
+      type: 'structural',
+      severity: 'medium',
+      description: `Detected ${inferredConnectivityDoorRecovery.unresolvedRooms.length} room(s) still lacking clear doorway access after topology imputation${unresolvedSamples ? ` (examples: ${unresolvedSamples})` : ''}.`,
       location: finalizedWalls[0].start,
     });
   }
