@@ -226,9 +226,21 @@ export const userDbService = {
 
   getUserByEmail: async (email: string): Promise<UserProfileData | null> => {
     const target = normalizeEmail(email);
+    if (!target) return null;
+
     // Try remote directory first (production) then fallback to local mock.
     const remote = await userDbService.lookupRemoteUser(target);
     if (remote) return remote;
+
+    // Fallback to current directory snapshot/cached users for cases where
+    // a profile exists but direct email lookup is temporarily stale.
+    try {
+      const directoryUsers = await userDbService.getAllUsers();
+      const match = directoryUsers.find((u) => normalizeEmail(u.email || '') === target);
+      if (match) return { ...match, email: normalizeEmail(match.email || target) };
+    } catch (error) {
+      console.warn('Directory snapshot lookup failed, using local fallback', error);
+    }
 
     if (process.env.NODE_ENV === 'production') return null;
 

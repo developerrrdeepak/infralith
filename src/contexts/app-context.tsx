@@ -340,7 +340,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (directoryRegisteredUserId === user.uid) return;
 
     let cancelled = false;
-    const registerCurrentUser = async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const maxAttempts = 4;
+    const baseRetryDelayMs = 2_000;
+
+    const registerCurrentUser = async (attempt = 1) => {
       try {
         const res = await fetch('/api/infralith/users', {
           method: 'POST',
@@ -350,15 +354,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         if (res.ok && !cancelled) {
           setDirectoryRegisteredUserId(user.uid);
+          return;
+        }
+        if (!res.ok) {
+          console.warn('Failed to register user in directory', { status: res.status, attempt });
         }
       } catch (error) {
         console.warn('Failed to register user in directory', error);
       }
+
+      if (cancelled || attempt >= maxAttempts) return;
+      const nextDelay = baseRetryDelayMs * attempt;
+      retryTimer = setTimeout(() => {
+        void registerCurrentUser(attempt + 1);
+      }, nextDelay);
     };
 
     void registerCurrentUser();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [user?.uid, directoryRegisteredUserId]);
 

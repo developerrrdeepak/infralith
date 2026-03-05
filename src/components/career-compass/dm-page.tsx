@@ -253,8 +253,12 @@ export default function DMPage() {
 
       try {
         const found = await userDbService.getUserByEmail(normalized);
-        const isSelf = found && found.uid === user?.uid;
-        const exists = !!found && !isSelf;
+        const cachedMatch =
+          found ||
+          allUsers.find((u) => normalizeEmail(u.email || '') === normalized) ||
+          null;
+        const isSelf = cachedMatch && cachedMatch.uid === user?.uid;
+        const exists = !!cachedMatch && !isSelf;
         // Placeholder: real workspace membership check would go here.
         const workspaceMember = exists;
         const alreadyInvited = user ? inviteService.hasInvited(user.uid, normalized) : false;
@@ -268,7 +272,7 @@ export default function DMPage() {
         }
 
         if (exists) {
-          setEmailLookupUser(found as UserProfileData);
+          setEmailLookupUser(cachedMatch as UserProfileData);
           setEmailLookupResult(workspaceMember ? 'found_member' : 'found_not_member');
           return;
         }
