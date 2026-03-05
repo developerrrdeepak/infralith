@@ -70,8 +70,10 @@ const LAYOUT_POLYGON_LIMIT = 180;
 const LAYOUT_DIMENSION_ANCHOR_LIMIT = 60;
 const LAYOUT_LINE_TEXT_LIMIT = 140;
 const LAYOUT_FLOOR_LABEL_LIMIT = 36;
+const LAYOUT_SEMANTIC_ANCHOR_LIMIT = 96;
 const DIMENSION_TEXT_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 const FLOOR_LABEL_HINT_REGEX = /\b((?:basement|cellar|lower\s*ground|stilt|ground|first|second|third|fourth|fifth|terrace|roof)\s*floor|(?:level|lvl|floor|flr)\s*[-_:]?\s*[a-z0-9]+|(?:g|b|l|f)\s*[-_:]?\s*\d{1,2})\b/i;
+const SEMANTIC_TEXT_REGEX = /\b(?:kitchen|pantry|bed(?:room)?|bdrm|master\s*suite|bath(?:room)?|toilet|wc|powder|lav(?:atory)?|wash(?:room)?|living|family(?:\s*room)?|lounge|great\s*room|dining|breakfast|stair(?:case)?s?|stairwell|up|dn|down|study|office|utility|laundry|service|storage|store(?:room)?|closet|garage|carport|foyer|entry|vestibule|balcony|terrace|patio|den)\b/i;
 const DEPLOYMENT_ERROR_PATTERN = /(deployment|model|404|not found|does not exist|unknown deployment|resource not found)/i;
 
 const createTraceId = (prefix: string) =>
@@ -279,6 +281,10 @@ export interface BlueprintLayoutHints {
         text: string;
         polygon: number[];
     }>;
+    semanticAnchors?: Array<{
+        text: string;
+        polygon: number[];
+    }>;
 }
 
 /** Helper to get the model with correct deployment name and settings */
@@ -406,6 +412,120 @@ export const getDocumentClient = () => {
     return new DocumentAnalysisClient(docIntelEndpoint, new AzureKeyCredential(docIntelKey));
 };
 
+type DocIntelProbeOptions = {
+    sampleDocumentUrl?: string;
+    timeoutMs?: number;
+};
+
+export type DocIntelProbeResult = {
+    configured: boolean;
+    endpointConfigured: boolean;
+    keyConfigured: boolean;
+    endpointHost: string | null;
+    probePerformed: boolean;
+    probeSucceeded: boolean;
+    pageCount?: number;
+    warning?: string;
+    error?: string;
+};
+
+const toEndpointHost = (endpoint?: string | null) => {
+    if (!endpoint) return null;
+    try {
+        return new URL(endpoint).host;
+    } catch {
+        return endpoint;
+    }
+};
+
+const toErrorString = (error: unknown) => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+};
+
+export async function probeDocumentIntelligence(options: DocIntelProbeOptions = {}): Promise<DocIntelProbeResult> {
+    const endpointConfigured = !!docIntelEndpoint;
+    const keyConfigured = !!docIntelKey;
+    const configured = endpointConfigured && keyConfigured;
+    const endpointHost = toEndpointHost(docIntelEndpoint);
+
+    if (!configured) {
+        return {
+            configured,
+            endpointConfigured,
+            keyConfigured,
+            endpointHost,
+            probePerformed: false,
+            probeSucceeded: false,
+            warning: 'Azure Document Intelligence endpoint/key not configured.',
+        };
+    }
+
+    const client = getDocumentClient();
+    if (!client) {
+        return {
+            configured,
+            endpointConfigured,
+            keyConfigured,
+            endpointHost,
+            probePerformed: false,
+            probeSucceeded: false,
+            warning: 'Document client could not be initialized.',
+        };
+    }
+
+    const sampleDocumentUrl = options.sampleDocumentUrl?.trim();
+    if (!sampleDocumentUrl) {
+        return {
+            configured,
+            endpointConfigured,
+            keyConfigured,
+            endpointHost,
+            probePerformed: false,
+            probeSucceeded: true,
+            warning: 'No sampleDocumentUrl provided. Credentials format check only.',
+        };
+    }
+
+    const timeoutMs = Number.isFinite(options.timeoutMs as number)
+        ? Math.max(5_000, Number(options.timeoutMs))
+        : 20_000;
+
+    try {
+        const probePromise = (async () => {
+            const poller = await client.beginAnalyzeDocumentFromUrl('prebuilt-layout', sampleDocumentUrl);
+            const result: any = await poller.pollUntilDone();
+            const pageCount = Array.isArray(result?.pages) ? result.pages.length : 0;
+            return pageCount;
+        })();
+
+        const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Probe timed out after ${timeoutMs}ms`)), timeoutMs)
+        );
+
+        const pageCount = await Promise.race([probePromise, timeoutPromise]);
+        return {
+            configured,
+            endpointConfigured,
+            keyConfigured,
+            endpointHost,
+            probePerformed: true,
+            probeSucceeded: true,
+            pageCount,
+        };
+    } catch (error) {
+        return {
+            configured,
+            endpointConfigured,
+            keyConfigured,
+            endpointHost,
+            probePerformed: true,
+            probeSucceeded: false,
+            error: toErrorString(error),
+        };
+    }
+}
+
 export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Promise<BlueprintLayoutHints | null> {
     const traceId = createTraceId("layout");
     const client = getDocumentClient();
@@ -438,6 +558,8 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
         const dimensionAnchors: Array<{ text: string; polygon: number[]; }> = [];
         const lineTexts: string[] = [];
         const floorLabelAnchors: Array<{ text: string; polygon: number[]; }> = [];
+        const semanticAnchors: Array<{ text: string; polygon: number[]; }> = [];
+        const semanticSeen = new Set<string>();
         const pages = result.pages.map((page: any) => {
             const lines = Array.isArray(page?.lines) ? page.lines : [];
             const words = Array.isArray(page?.words) ? page.words : [];
@@ -462,6 +584,16 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
                         floorLabelAnchors.push({ text: text.slice(0, 96), polygon });
                     }
                 }
+                if (text && SEMANTIC_TEXT_REGEX.test(text) && semanticAnchors.length < LAYOUT_SEMANTIC_ANCHOR_LIMIT) {
+                    if (polygon.length >= 6) {
+                        const cleanText = text.slice(0, 120);
+                        const dedupeKey = `${cleanText.toLowerCase()}|${polygon.join(',')}`;
+                        if (!semanticSeen.has(dedupeKey)) {
+                            semanticSeen.add(dedupeKey);
+                            semanticAnchors.push({ text: cleanText, polygon });
+                        }
+                    }
+                }
             }
 
             return {
@@ -479,6 +611,7 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
             pages: pages.length,
             polygons: linePolygons.length,
             dimensionAnchors: dimensionAnchors.length,
+            semanticAnchors: semanticAnchors.length,
         });
 
         return {
@@ -488,6 +621,7 @@ export async function analyzeBlueprintLayoutFromBase64(base64Image: string): Pro
             dimensionAnchors,
             lineTexts,
             floorLabelAnchors,
+            semanticAnchors,
         };
     } catch (e: any) {
         traceLog("Azure Document Intelligence", traceId, "error", "layout analysis failed", {

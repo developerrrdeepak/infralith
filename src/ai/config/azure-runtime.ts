@@ -31,8 +31,16 @@ export const azureRuntime = {
     "gpt-5"
   ),
   preferTopModel: toBoolean(process.env.AZURE_OPENAI_PREFER_TOP_MODEL, true),
-  docIntelEndpoint: pickFirst([process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT]),
-  docIntelKey: pickFirst([process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY]),
+  docIntelEndpoint: pickFirst([
+    process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT,
+    process.env.AZURE_FORM_RECOGNIZER_ENDPOINT,
+    process.env.DOCUMENT_INTELLIGENCE_ENDPOINT,
+  ]),
+  docIntelKey: pickFirst([
+    process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY,
+    process.env.AZURE_FORM_RECOGNIZER_KEY,
+    process.env.DOCUMENT_INTELLIGENCE_KEY,
+  ]),
 };
 
 export const getDeploymentOrder = (): string[] => {
