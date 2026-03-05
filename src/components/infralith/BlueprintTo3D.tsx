@@ -1767,6 +1767,7 @@ function BlueprintWorkspace() {
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
+    const pendingAutoWalkRef = useRef(false);
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
     const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
     const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
@@ -1893,6 +1894,7 @@ function BlueprintWorkspace() {
         if (!siteResult) return;
         const selected = siteResult.buildings.find((building) => building.id === buildingId);
         if (!selected) return;
+        pendingAutoWalkRef.current = true;
         setActiveSiteBuildingId(buildingId);
         setElements(selected.model);
         setStatus('complete');
@@ -1927,8 +1929,18 @@ function BlueprintWorkspace() {
     React.useEffect(() => {
         if (status === 'complete' && elements) {
             setIsFullscreen(true);
+            if (pendingAutoWalkRef.current) {
+                pendingAutoWalkRef.current = false;
+                setIsTopView(false);
+                setIsWalkthrough(true);
+                setShowWalkthroughHuman(true);
+                toast({
+                    title: 'Free Roam Ready',
+                    description: 'WASD move, Shift sprint. Press H to switch first-person controls.',
+                });
+            }
         }
-    }, [status, elements]);
+    }, [status, elements, toast]);
 
     const handleDeleteElement = useCallback(() => {
         if (selectedElement && elements) {
@@ -1964,7 +1976,11 @@ function BlueprintWorkspace() {
                 setActiveTool('scale');
                 toast({ title: 'Scale', description: 'Select element corners to scale (Coming Soon in v2)' });
             } else if (e.key.toLowerCase() === 'p') {
-                setIsWalkthrough(prev => !prev);
+                setIsWalkthrough((prev) => {
+                    const next = !prev;
+                    if (next) setIsTopView(false);
+                    return next;
+                });
             } else if (e.key.toLowerCase() === 'h') {
                 if (isWalkthrough) {
                     setShowWalkthroughHuman(prev => !prev);
@@ -1972,7 +1988,16 @@ function BlueprintWorkspace() {
             } else if (e.key.toLowerCase() === 'l') {
                 setTimeOfDay(prev => prev === 14 ? 22 : 14);
             } else if (e.key.toLowerCase() === 'c') {
-                setIsTopView(prev => !prev);
+                if (!isWalkthrough) {
+                    setIsTopView((prev) => {
+                        const next = !prev;
+                        if (next) {
+                            setIsWalkthrough(false);
+                            setShowWalkthroughHuman(false);
+                        }
+                        return next;
+                    });
+                }
             }
         };
         window.addEventListener('keydown', handleKeyDown);
@@ -2033,6 +2058,7 @@ function BlueprintWorkspace() {
     });
 
     const resetState = useCallback(() => {
+        pendingAutoWalkRef.current = false;
         setPreview(null); setDescription('');
         setStatus('idle'); setProgress(0); setElements(null);
         setSiteResult(null);
@@ -2040,6 +2066,7 @@ function BlueprintWorkspace() {
     }, [setElements]);
 
     const animateProgress = (result: GeometricReconstruction) => {
+        pendingAutoWalkRef.current = true;
         logBlueprintFlow('Step 8/9 applying generated JSON into BIM state.', summarizeReconstruction(result));
         setElements(result);
         setStatus('generating');
@@ -2197,6 +2224,7 @@ function BlueprintWorkspace() {
         setStatus('analyzing'); setProgress(0.5);
         const result = await loadModel(id);
         if (result.ok) {
+            pendingAutoWalkRef.current = true;
             setSiteResult(null);
             setActiveSiteBuildingId(null);
             setStatus('complete'); setProgress(1);
@@ -2328,7 +2356,19 @@ function BlueprintWorkspace() {
                                 icon={<Footprints className="h-4 w-4" />}
                                 label="Walk Mode"
                                 active={isWalkthrough}
-                                onClick={() => setIsWalkthrough(!isWalkthrough)}
+                                onClick={() => {
+                                    setIsWalkthrough((prev) => {
+                                        const next = !prev;
+                                        if (next) {
+                                            setIsTopView(false);
+                                            toast({
+                                                title: "Walkthrough Active",
+                                                description: "WASD move, Shift sprint, Space jump, C crouch, E use, F flashlight.",
+                                            });
+                                        }
+                                        return next;
+                                    });
+                                }}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="P"
                             />
@@ -2358,7 +2398,16 @@ function BlueprintWorkspace() {
                                 icon={<Camera className="h-4 w-4" />}
                                 label="Top Camera"
                                 active={isTopView}
-                                onClick={() => setIsTopView(!isTopView)}
+                                onClick={() => {
+                                    setIsTopView((prev) => {
+                                        const next = !prev;
+                                        if (next) {
+                                            setIsWalkthrough(false);
+                                            setShowWalkthroughHuman(false);
+                                        }
+                                        return next;
+                                    });
+                                }}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="C"
                             />
