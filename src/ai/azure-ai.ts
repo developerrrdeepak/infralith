@@ -14,6 +14,20 @@ const azureEndpoint = azureRuntime.openAIEndpoint;
 const azureApiVersion = azureRuntime.openAIApiVersion || '2024-08-01-preview';
 const VERBOSE_LOGS = (process.env.INFRALITH_VERBOSE_LOGS || "true").toLowerCase() !== "false";
 
+const parseTimeoutMs = (
+    value: string | undefined,
+    fallback: number,
+    min = 5_000,
+    max = 300_000
+) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(parsed)));
+};
+
+const VISION_GENERATION_TIMEOUT_MS = parseTimeoutMs(process.env.INFRALITH_VISION_GENERATION_TIMEOUT_MS, 95_000);
+const TEXT_GENERATION_TIMEOUT_MS = parseTimeoutMs(process.env.INFRALITH_TEXT_GENERATION_TIMEOUT_MS, 60_000);
+
 // Azure Document Intelligence Configuration
 const docIntelEndpoint = azureRuntime.docIntelEndpoint;
 const docIntelKey = azureRuntime.docIntelKey;

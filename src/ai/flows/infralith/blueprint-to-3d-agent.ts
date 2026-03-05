@@ -118,6 +118,16 @@ const STAGE_HEARTBEAT_MS = parseTimeoutMs(process.env.INFRALITH_STAGE_HEARTBEAT_
 const LAYOUT_STAGE_TIMEOUT_MS = parseTimeoutMs(process.env.INFRALITH_LAYOUT_TIMEOUT_MS, 65_000);
 const VISION_CONSENSUS_RUNS = parseBoundedInt(process.env.INFRALITH_VISION_CONSENSUS_RUNS, 3, 1, 5);
 const VISION_CONSENSUS_MIN_SCORE = parseBoundedFloat(process.env.INFRALITH_VISION_CONSENSUS_MIN_SCORE, 66, 20, 120);
+const VISION_TOTAL_BUDGET_MS = parseTimeoutMs(process.env.INFRALITH_VISION_TOTAL_BUDGET_MS, 175_000, 60_000, 900_000);
+const VISION_REQUEST_HARD_BUDGET_MS = parseTimeoutMs(process.env.INFRALITH_VISION_REQUEST_HARD_BUDGET_MS, 220_000, 60_000, 900_000);
+const VISION_MIN_PASS_REMAINING_MS = parseTimeoutMs(process.env.INFRALITH_VISION_MIN_PASS_REMAINING_MS, 25_000, 5_000, 120_000);
+const VISION_PASS_ESTIMATED_COST_MS = parseTimeoutMs(process.env.INFRALITH_VISION_PASS_ESTIMATED_COST_MS, 60_000, 10_000, 180_000);
+const VISION_PASS_TIMEOUT_BUFFER_MS = parseTimeoutMs(process.env.INFRALITH_VISION_PASS_TIMEOUT_BUFFER_MS, 5_000, 1_000, 30_000);
+const VISION_MAX_RETRIES = parseBoundedInt(process.env.INFRALITH_VISION_MAX_RETRIES, 1, 0, 3);
+const ENABLE_EXPENSIVE_VISION_RECOVERY = asBool(
+  process.env.INFRALITH_ENABLE_EXPENSIVE_VISION_RECOVERY,
+  process.env.NODE_ENV !== 'production'
+);
 
 type SemanticMentionKey =
   | 'kitchen'
@@ -5744,9 +5754,47 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   }
   // STAGE 2: Send image + layout hints to the AI Vision model
   const prompt = buildBlueprintVisionPrompt(layoutHints);
+  const effectiveBudgetMs = Math.min(VISION_TOTAL_BUDGET_MS, VISION_REQUEST_HARD_BUDGET_MS);
+  const getRemainingBudgetMs = () => effectiveBudgetMs - (Date.now() - startedAt);
+  traceLog('Infralith Vision Engine', traceId, '2/9', 'vision request budget initialized', {
+    configuredBudgetMs: VISION_TOTAL_BUDGET_MS,
+    requestHardBudgetMs: VISION_REQUEST_HARD_BUDGET_MS,
+    effectiveBudgetMs,
+    minRemainingMs: VISION_MIN_PASS_REMAINING_MS,
+    estimatedPassCostMs: VISION_PASS_ESTIMATED_COST_MS,
+    passTimeoutBufferMs: VISION_PASS_TIMEOUT_BUFFER_MS,
+  });
   try {
     traceLog('Infralith Vision Engine', traceId, '2/9', 'sending blueprint + hints to Azure Vision');
-    let result = await generateAzureVisionObject<GeometricReconstruction>(prompt, structuralInputImage);
+    const runVisionPass = async (
+      passLabel: string,
+      step: string,
+      passPrompt: string,
+      passImage: string
+    ): Promise<GeometricReconstruction> => {
+      const remainingMs = getRemainingBudgetMs();
+      const timeoutMs = Math.floor(Math.min(
+        VISION_PASS_ESTIMATED_COST_MS + 10_000,
+        remainingMs - VISION_PASS_TIMEOUT_BUFFER_MS
+      ));
+      if (!Number.isFinite(timeoutMs) || timeoutMs < 8_000) {
+        throw new Error(
+          `Skipped ${passLabel}: insufficient remaining request budget (${Math.floor(remainingMs)}ms remaining).`
+        );
+      }
+      return withMonitoredTimeout(
+        () => generateAzureVisionObject<GeometricReconstruction>(passPrompt, passImage),
+        {
+          component: 'Infralith Vision Engine',
+          traceId,
+          step,
+          label: `${passLabel} vision request`,
+          timeoutMs,
+        }
+      );
+    };
+
+    let result = await runVisionPass('initial-reconstruction', '2/9', prompt, structuralInputImage);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
 
     let bestResult = result;
@@ -5756,6 +5804,37 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     let bestHighSeverityConflicts = (result?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
     let bestFidelity = evaluateReconstructionFidelity(result, layoutHints);
     let bestMissingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, result).length;
+
+    const canRunVisionPass = (
+      passLabel: string,
+      optional = true,
+      expectedCostMs = VISION_PASS_ESTIMATED_COST_MS
+    ): boolean => {
+      if (optional && !ENABLE_EXPENSIVE_VISION_RECOVERY) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'skipping optional recovery pass (disabled by configuration)', {
+          passLabel,
+          envKey: 'INFRALITH_ENABLE_EXPENSIVE_VISION_RECOVERY',
+        }, 'warn');
+        return false;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      const remainingMs = getRemainingBudgetMs();
+      const requiredRemainingMs = Math.max(VISION_MIN_PASS_REMAINING_MS, expectedCostMs);
+      if (remainingMs < requiredRemainingMs) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'skipping recovery pass due to request time budget', {
+          passLabel,
+          elapsedMs,
+          remainingMs,
+          budgetMs: effectiveBudgetMs,
+          configuredBudgetMs: VISION_TOTAL_BUDGET_MS,
+          expectedCostMs,
+          requiredRemainingMs,
+          minRemainingMs: VISION_MIN_PASS_REMAINING_MS,
+        }, 'warn');
+        return false;
+      }
+      return true;
+    };
 
     const promoteBestCandidate = (
       candidate: GeometricReconstruction | null | undefined,
@@ -5820,10 +5899,10 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       return true;
     };
 
-    const maxRetries = 2;
+    const maxRetries = VISION_MAX_RETRIES;
     let retryCount = 0;
     let fidelity = bestFidelity;
-    while (fidelity.shouldRetry && retryCount < maxRetries) {
+    while (fidelity.shouldRetry && retryCount < maxRetries && canRunVisionPass('strict-retry', false)) {
       retryCount += 1;
       const retryImage = retryCount % 2 === 1 ? imageUrl : structuralInputImage;
       const strictPrompt = buildBlueprintRetryPrompt(prompt, fidelity.reasons);
@@ -5833,7 +5912,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
         imageVariant: retryImage === imageUrl ? 'original' : 'preprocessed',
         reasons: fidelity.reasons,
       }, 'warn');
-      result = await generateAzureVisionObject<GeometricReconstruction>(strictPrompt, retryImage);
+      result = await runVisionPass(`strict-retry-${retryCount}`, '4/9', strictPrompt, retryImage);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'retry reconstruction received', {
         retryCount,
         ...summarizeReconstruction(result),
@@ -5860,7 +5939,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     }
 
     const initialMissingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, bestResult);
-    if (requiredSemanticMentions.length > 0 && initialMissingSemanticMentions.length > 0) {
+    if (requiredSemanticMentions.length > 0 && initialMissingSemanticMentions.length > 0 && canRunVisionPass('semantic-enforcement')) {
       const requiredLabels = describeSemanticMentionKeys(requiredSemanticMentions);
       const missingLabels = describeSemanticMentionKeys(initialMissingSemanticMentions);
       traceLog('Infralith Vision Engine', traceId, '5/9', 'semantic enforcement pass triggered', {
@@ -5886,7 +5965,7 @@ SEMANTIC ANCHOR ENFORCEMENT (OCR-CONDITIONED):
       );
 
       try {
-        const semanticCandidate = await generateAzureVisionObject<GeometricReconstruction>(semanticPrompt, imageUrl);
+        const semanticCandidate = await runVisionPass('semantic-enforcement', '5/9', semanticPrompt, imageUrl);
         if (hasNonEmptyWalls(semanticCandidate)) {
           const promotedSemantic = promoteBestCandidate(semanticCandidate, 'semantic-enforcement', {
             minScoreGain: 0.6,
@@ -5922,7 +6001,7 @@ SEMANTIC ANCHOR ENFORCEMENT (OCR-CONDITIONED):
     const missingAfterSemanticPass = getMissingSemanticMentionKeys(requiredSemanticMentions, bestResult);
     const stairsRequired = requiredSemanticMentions.includes('stairs');
     const stairsMissing = missingAfterSemanticPass.includes('stairs');
-    if (stairsRequired && stairsMissing && estimateResultFloorCount(bestResult) >= 2) {
+    if (stairsRequired && stairsMissing && estimateResultFloorCount(bestResult) >= 2 && canRunVisionPass('staircase-enforcement')) {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'staircase-specific enforcement triggered', {
         missingSemantic: describeSemanticMentionKeys(missingAfterSemanticPass),
       }, 'warn');
@@ -5946,7 +6025,7 @@ VERTICAL CIRCULATION ENFORCEMENT:
       );
 
       try {
-        const stairCandidate = await generateAzureVisionObject<GeometricReconstruction>(stairPrompt, imageUrl);
+        const stairCandidate = await runVisionPass('staircase-enforcement', '5/9', stairPrompt, imageUrl);
         if (hasNonEmptyWalls(stairCandidate)) {
           const promotedStairCandidate = promoteBestCandidate(stairCandidate, 'staircase-enforcement', {
             minScoreGain: 0.4,
@@ -5979,7 +6058,7 @@ VERTICAL CIRCULATION ENFORCEMENT:
     }
 
     const stairSymbolRecoveryNeeded = shouldAttemptStairSymbolRecovery(layoutHints, bestResult, requiredSemanticMentions);
-    if (stairSymbolRecoveryNeeded) {
+    if (stairSymbolRecoveryNeeded && canRunVisionPass('stair-symbol-recovery')) {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'non-text stair-symbol recovery triggered for multi-floor layout', {
         inferredFloorCount: estimateResultFloorCount(bestResult),
         floorSignals: estimateFloorHintCount(layoutHints),
@@ -6003,7 +6082,7 @@ NON-TEXT STAIR SYMBOL RECOVERY:
       );
 
       try {
-        const stairSymbolCandidate = await generateAzureVisionObject<GeometricReconstruction>(stairSymbolPrompt, imageUrl);
+        const stairSymbolCandidate = await runVisionPass('stair-symbol-recovery', '5/9', stairSymbolPrompt, imageUrl);
         if (hasNonEmptyWalls(stairSymbolCandidate)) {
           const promotedStairSymbol = promoteBestCandidate(stairSymbolCandidate, 'stair-symbol-recovery', {
             minScoreGain: 0.3,
@@ -6035,7 +6114,7 @@ NON-TEXT STAIR SYMBOL RECOVERY:
       }
     }
 
-    if (shouldAttemptInteriorLayoutRecovery(bestResult, layoutHints)) {
+    if (shouldAttemptInteriorLayoutRecovery(bestResult, layoutHints) && canRunVisionPass('interior-layout-recovery')) {
       const interiorSignal = analyzeInteriorLayoutSignal(bestResult);
       traceLog('Infralith Vision Engine', traceId, '5/9', 'interior layout refinement triggered to avoid placeholder partitions', {
         denseFloors: interiorSignal.denseFloors,
@@ -6060,7 +6139,7 @@ INTERIOR PARTITION REFINEMENT:
       const interiorPrompt = buildBlueprintRetryPrompt(interiorPromptSeed, recoveryDiagnostics.slice(0, 4));
 
       try {
-        const interiorCandidate = await generateAzureVisionObject<GeometricReconstruction>(interiorPrompt, structuralInputImage);
+        const interiorCandidate = await runVisionPass('interior-layout-recovery', '5/9', interiorPrompt, structuralInputImage);
         if (hasNonEmptyWalls(interiorCandidate)) {
           const promotedInterior = promoteBestCandidate(interiorCandidate, 'interior-layout-recovery', {
             minScoreGain: 0.4,
@@ -6092,7 +6171,7 @@ INTERIOR PARTITION REFINEMENT:
       }
     }
 
-    if (shouldAttemptRoomDimensionRecovery(bestResult, layoutHints)) {
+    if (shouldAttemptRoomDimensionRecovery(bestResult, layoutHints) && canRunVisionPass('room-dimension-enforcement')) {
       const dimensionAssessment = estimateRoomDimensionAlignment(layoutHints, bestResult);
       traceLog('Infralith Vision Engine', traceId, '5/9', 'room dimension-position enforcement triggered', {
         hintCount: dimensionAssessment.hintCount,
@@ -6115,7 +6194,7 @@ ROOM DIMENSION + POSITION ENFORCEMENT:
       const dimensionPrompt = buildBlueprintRetryPrompt(dimensionPromptSeed, diagnostics.slice(0, 4));
 
       try {
-        const dimensionCandidate = await generateAzureVisionObject<GeometricReconstruction>(dimensionPrompt, imageUrl);
+        const dimensionCandidate = await runVisionPass('room-dimension-enforcement', '5/9', dimensionPrompt, imageUrl);
         if (hasNonEmptyWalls(dimensionCandidate)) {
           const promotedDimension = promoteBestCandidate(dimensionCandidate, 'room-dimension-enforcement', {
             minScoreGain: 0.3,
@@ -6147,7 +6226,7 @@ ROOM DIMENSION + POSITION ENFORCEMENT:
       }
     }
 
-    if (shouldAttemptOpeningRecovery(result, layoutHints)) {
+    if (shouldAttemptOpeningRecovery(result, layoutHints) && canRunVisionPass('opening-recovery')) {
       const baseScore = scoreReconstructionDensity(result, layoutHints);
       const baseOpenings = getOpeningCount(result);
       const openingRecoveryPromptSeed = `${prompt}
@@ -6172,7 +6251,7 @@ OPENING-RECOVERY OVERRIDE:
       }, 'warn');
 
       try {
-        const openingCandidate = await generateAzureVisionObject<GeometricReconstruction>(openingRecoveryPrompt, imageUrl);
+        const openingCandidate = await runVisionPass('opening-recovery', '5/9', openingRecoveryPrompt, imageUrl);
         if (hasNonEmptyWalls(openingCandidate)) {
           const mergedCandidate = mergeOpeningsFromRecovery(result, openingCandidate);
           const openingCandidateScore = scoreReconstructionDensity(openingCandidate, layoutHints);
@@ -6237,7 +6316,7 @@ OPENING-RECOVERY OVERRIDE:
       hintedFloorCount >= 2 &&
       (inferredFloorCount <= 1 || sparseMultiFloorShell || lowRoomDensity || lowWallDensity || placeholderInterior || significantDimensionMismatch);
 
-    if (shouldAttemptSegmentation) {
+    if (shouldAttemptSegmentation && canRunVisionPass('segmented-floor-recovery', true, VISION_PASS_ESTIMATED_COST_MS * 3)) {
       const monolithicScore = scoreReconstructionDensity(result, layoutHints);
       traceLog('Infralith Vision Engine', traceId, '5/9', 'segmentation candidate triggered for multi-floor quality recovery', {
         hintedFloorCount,
@@ -6296,7 +6375,9 @@ OPENING-RECOVERY OVERRIDE:
       }
     }
 
-    const consensusEligible = shouldRunConsensusEnsemble(bestResult, layoutHints, bestScore);
+    const consensusEligible =
+      shouldRunConsensusEnsemble(bestResult, layoutHints, bestScore) &&
+      canRunVisionPass('consensus-ensemble', true, VISION_PASS_ESTIMATED_COST_MS * 2);
     if (consensusEligible) {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus ensemble triggered for cross-blueprint robustness', {
         consensusRuns: VISION_CONSENSUS_RUNS,
@@ -6307,6 +6388,7 @@ OPENING-RECOVERY OVERRIDE:
       }, 'warn');
 
       for (let consensusRun = 2; consensusRun <= VISION_CONSENSUS_RUNS; consensusRun += 1) {
+        if (!canRunVisionPass(`consensus-round-${consensusRun}`, true, VISION_PASS_ESTIMATED_COST_MS)) break;
         const consensusReasons = buildConsensusRecoveryReasons(bestResult, layoutHints, bestScore);
         const consensusPrompt = consensusReasons.length > 0
           ? buildBlueprintRetryPrompt(prompt, consensusReasons)
@@ -6315,7 +6397,7 @@ OPENING-RECOVERY OVERRIDE:
         const consensusLabel = `consensus-${consensusRun}`;
 
         try {
-          const consensusCandidate = await generateAzureVisionObject<GeometricReconstruction>(consensusPrompt, consensusImage);
+          const consensusCandidate = await runVisionPass(consensusLabel, '5/9', consensusPrompt, consensusImage);
           if (!hasNonEmptyWalls(consensusCandidate)) {
             traceLog('Infralith Vision Engine', traceId, '5/9', 'consensus candidate returned no wall geometry', {
               consensusLabel,
