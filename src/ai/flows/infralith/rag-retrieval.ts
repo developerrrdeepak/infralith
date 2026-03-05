@@ -254,10 +254,10 @@ const mergeAndRankChunks = (chunks: Omit<RagChunk, 'citationId'>[], limit: numbe
     }));
 };
 
-export const formatRagPromptContext = (
+export const formatRagPromptContext = async (
     context: RagRetrievedContext,
     maxChars = 7_500
-): string => {
+): Promise<string> => {
     if (!Array.isArray(context?.chunks) || context.chunks.length === 0) {
         return 'No retrieved external context was available.';
     }

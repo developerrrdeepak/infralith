@@ -40,6 +40,7 @@ export async function searchCosmosDB(query: string) {
             return [];
         }
 
+        const promptContext = await formatRagPromptContext(retrieved, 7600);
         const prompt = `
 You are a construction-domain RAG synthesis agent.
 Answer the query only using retrieved context and cite chunk ids.
@@ -48,7 +49,7 @@ QUERY:
 ${query}
 
 RETRIEVED CONTEXT:
-${formatRagPromptContext(retrieved, 7600)}
+${promptContext}
 
 Instructions:
 - Keep each result grounded in one citationId from retrieved context.

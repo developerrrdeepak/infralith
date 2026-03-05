@@ -58,7 +58,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         normalizeConflictText(originalFileName.replace(/\.[^.]+$/, ''), '');
     const ragQuery = buildRagQuery(blueprint, originalFileName);
     const ragContext = await retrieveConstructionContext(ragQuery, { top: 10 });
-    const ragPromptContext = formatRagPromptContext(ragContext, 8_500);
+    const ragPromptContext = await formatRagPromptContext(ragContext, 8_500);
 
     // 2. Parallel Domain Expert Analysis
     const [compliance, risk, cost] = await Promise.all([
