@@ -41,8 +41,10 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         throw new Error("Uploaded file exceeds the 100MB limit.");
     }
 
-    const fileName = input.name.toLowerCase();
-    const extension = fileName.slice(fileName.lastIndexOf('.'));
+    const originalFileName = input.name || 'uploaded-document';
+    const fileName = originalFileName.toLowerCase();
+    const dotIndex = fileName.lastIndexOf('.');
+    const extension = dotIndex >= 0 ? fileName.slice(dotIndex) : '';
     if (!ALLOWED_UPLOAD_EXTENSIONS.has(extension)) {
         throw new Error("Unsupported file type. Please upload PDF, DOC, DOCX, PNG, JPG, JPEG, or WEBP.");
     }
@@ -57,12 +59,15 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         predictCost(JSON.stringify(blueprint))
     ]);
 
+    const extractionQuality = buildExtractionQuality(blueprint);
+    const materialRows = Array.isArray(blueprint?.materials) ? blueprint.materials : [];
+
     // 3. Map Conflicts
     const conflicts = (compliance.violations || []).map((v: any) => ({
         riskCategory: v.ruleId?.includes('13920') || v.ruleId?.includes('CRITICAL') ? 'Critical' : 'Warning',
         regulationRef: v.ruleId || 'IS-456:2000',
-        location: 'Core Structure / Grid Variance',
-        requiredValue: 'Standard defined tolerance',
+        location: inferConflictLocation(v.description || v.comment),
+        requiredValue: v.comment || 'Refer cited code tolerance',
         measuredValue: v.description || 'Deviation detected'
     }));
 
@@ -125,24 +130,53 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         }
     ];
 
+    const complianceFailures = Array.isArray(compliance.violations) ? compliance.violations.length : 0;
+    const criticalConflicts = conflicts.filter((item: { riskCategory: string }) => item.riskCategory === 'Critical').length;
+    const approvalReadinessScore = clamp(
+        Math.round(100 - complianceFailures * 11 - risk.riskIndex * 0.55 - criticalConflicts * 3),
+        0,
+        100
+    );
+    const delayImpactDays =
+        complianceFailures === 0 && risk.riskIndex < 45
+            ? 0
+            : Math.max(1, Math.round(complianceFailures * 2 + criticalConflicts * 3 + risk.riskIndex / 28));
+    const redesignRequired = criticalConflicts > 1 || risk.riskIndex >= 65 || extractionQuality.coverageScore < 55;
+    const complianceScore = clamp(
+        Math.round(((compliance.overallStatus === 'Pass' ? 100 : 70) + (100 - risk.riskIndex)) / 2),
+        0,
+        100
+    );
+
     const result: WorkflowResult = {
         id: `INF-${Date.now().toString().slice(-6)}`,
         timestamp: new Date().toISOString(),
         projectScope: blueprint.projectScope,
-        role: 'Engineer',
+        role: role === 'Admin' ? 'Admin' : 'Engineer',
 
         parsedBlueprint: blueprint,
+        materials: materialRows,
         complianceReport: compliance,
         riskReport: risk,
         costEstimate: cost,
 
         devOpsInsights: insights,
-        approvalBlockerCount: (devOpsInsight.actionRequired ? 1 : 0) + compliance.violations.filter((v: any) => v.ruleId.includes('CRITICAL')).length,
+        approvalBlockerCount: (devOpsInsight.actionRequired ? 1 : 0) + compliance.violations.filter((v: any) => String(v.ruleId || '').includes('CRITICAL')).length,
         conflicts,
 
         costImpactEstimate: cost.total,
         currency: cost.currency,
-        complianceScore: Math.round(((compliance.overallStatus === 'Pass' ? 100 : 70) + (100 - risk.riskIndex)) / 2),
+        complianceScore,
+        approvalReadinessScore,
+        delayImpactDays,
+        redesignRequired,
+        extractionQuality,
+        documentInfo: {
+            fileName: originalFileName,
+            extension,
+            mimeType: input.type || undefined,
+            sizeBytes: input.size,
+        },
 
         modelVersion,
         approvalChain,
@@ -152,3 +186,56 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     console.log(`[${runId}] Orchestrator: Synthesis Complete in ${result.pipelineLatencyMs}ms via Node.js Native Pipeline.`);
     return result;
 }
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const hasValue = (value: unknown) => {
+    if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    return value != null;
+};
+
+const buildExtractionQuality = (blueprint: any) => {
+    const checks: Array<[string, boolean]> = [
+        ['projectScope', hasValue(blueprint?.projectScope)],
+        ['totalFloors', hasValue(blueprint?.totalFloors)],
+        ['height', hasValue(blueprint?.height)],
+        ['totalArea', hasValue(blueprint?.totalArea)],
+        ['seismicZone', hasValue(blueprint?.seismicZone) && blueprint?.seismicZone !== 'Undefined'],
+        ['materials', hasValue(blueprint?.materials)],
+    ];
+
+    const extractedFields = checks.filter(([, ok]) => ok).map(([field]) => field);
+    const missingFields = checks.filter(([, ok]) => !ok).map(([field]) => field);
+    const coverageScore = Math.round((extractedFields.length / checks.length) * 100);
+    const warnings: string[] = [];
+
+    if (missingFields.length > 0) {
+        warnings.push(`Missing structured extraction: ${missingFields.join(', ')}.`);
+    }
+    if (!hasValue(blueprint?.materials)) {
+        warnings.push('BOQ rows were not confidently extracted. Upload clearer schedule/quantity pages.');
+    }
+    if (!hasValue(blueprint?.seismicZone) || blueprint?.seismicZone === 'Undefined') {
+        warnings.push('Seismic zone is missing or ambiguous in uploaded document.');
+    }
+
+    return {
+        coverageScore,
+        extractedFields,
+        missingFields,
+        warnings,
+    };
+};
+
+const inferConflictLocation = (description: string) => {
+    const text = String(description || '');
+    const grid = text.match(/\bgrid\s*[a-z0-9-]+\b/i)?.[0];
+    if (grid) return grid.toUpperCase();
+    if (/stair|egress|exit/i.test(text)) return 'Egress / Stair Core';
+    if (/foundation|footing|soil|settlement/i.test(text)) return 'Foundation Zone';
+    if (/beam|column|slab|wall|truss/i.test(text)) return 'Primary Structural Frame';
+    if (/fire|smoke|hydrant|sprinkler/i.test(text)) return 'Fire Safety System';
+    return 'Core Structure / Coordination Zone';
+};

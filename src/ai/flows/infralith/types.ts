@@ -1,4 +1,4 @@
-'use server';
+﻿'use server';
 
 export interface DevOpsInsight {
     agentId: string;
@@ -43,6 +43,7 @@ export interface WorkflowResult {
         seismicZone: string;
         materials: Array<{ item: string; quantity: number | string; unit: string; spec: string }>;
     };
+    materials?: Array<{ item: string; quantity: number | string; unit: string; spec: string }>;
 
     // Agent Reports
     complianceReport?: {
@@ -52,7 +53,7 @@ export interface WorkflowResult {
 
     riskReport?: {
         riskIndex: number;
-        level: 'Low' | 'Medium' | 'High';
+        level: 'Low' | 'Medium' | 'High' | 'Critical';
         hazards: Array<{ type: string; severity: string; description: string; mitigation: string }>;
     };
 
@@ -61,6 +62,7 @@ export interface WorkflowResult {
         currency: string;
         breakdown: Array<{ category: string; amount: number; percentage: number }>;
         duration: string;
+        confidenceScore?: number;
     };
 
     // DevOps / Pipeline Info
@@ -78,10 +80,27 @@ export interface WorkflowResult {
     costImpactEstimate?: number;
     currency?: string;
     complianceScore?: number;
+    approvalReadinessScore?: number;
+    delayImpactDays?: number;
+    redesignRequired?: boolean;
+    extractionQuality?: {
+        coverageScore: number;
+        extractedFields: string[];
+        missingFields: string[];
+        warnings: string[];
+        rawTextLength?: number;
+    };
+    documentInfo?: {
+        fileName: string;
+        extension: string;
+        mimeType?: string;
+        sizeBytes: number;
+    };
 
-    /** ── ENTERPRISE FIELDS ── */
+    /** ENTERPRISE FIELDS */
     modelVersion?: ModelVersion;        // Reproducibility: exact model + params used
     approvalChain?: ApprovalStep[];     // Supervisor approval workflow
     auditEntryId?: string;              // Link back to audit log entry
     pipelineLatencyMs?: number;         // Total orchestration time in ms
 }
+

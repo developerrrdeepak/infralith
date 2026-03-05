@@ -7,6 +7,7 @@ export type UserProfileData = {
   uid: string;
   name: string;
   email: string;
+  role?: string;
   mobile?: string;
   dob?: string;
   gender?: string;
@@ -73,6 +74,20 @@ export type Post = {
   tags?: string[];
   isBounty?: boolean;
   bountyAmount?: number;
+  postType?: 'update' | 'project' | 'hiring' | 'announcement';
+  reactions?: Record<string, ReactionType>;
+  reactionTotals?: Partial<Record<ReactionType, number>>;
+  reactionCount?: number;
+  savedBy?: Record<string, boolean>;
+  saveCount?: number;
+  repostOf?: string | null;
+  repostPreview?: {
+    authorName: string;
+    content: string;
+    image?: string | null;
+    tags?: string[];
+    postType?: string;
+  } | null;
 };
 
 // --- DM TYPES ---
@@ -92,7 +107,12 @@ export type ChatSummary = {
   lastMessage: string;
   timestamp: number;
   status?: 'pending' | 'accepted';
+  isGroup?: boolean;
+  participantIds?: string[];
+  unreadCount?: number;
 };
+
+export type ReactionType = 'like' | 'insightful' | 'celebrate' | 'support';
 
 // --- MOCK DATABASE HELPER (Local Storage) ---
 const getStorageItem = (key: string) => {
@@ -316,9 +336,59 @@ type CreatePostOptions = {
   bountyAmount?: number;
   authorRole?: string;
   verified?: boolean;
+  postType?: 'update' | 'project' | 'hiring' | 'announcement';
+  repostOf?: string | null;
+  repostPreview?: Post['repostPreview'];
 };
 
 type SeedPostInput = Partial<Post> & Pick<Post, 'id' | 'authorId' | 'authorName' | 'content'>;
+const REACTION_TYPES: ReactionType[] = ['like', 'insightful', 'celebrate', 'support'];
+
+const toReactionTotals = (reactions: Record<string, ReactionType>) => {
+  const totals: Partial<Record<ReactionType, number>> = {};
+  REACTION_TYPES.forEach((type) => {
+    totals[type] = 0;
+  });
+
+  Object.values(reactions).forEach((type) => {
+    totals[type] = (totals[type] || 0) + 1;
+  });
+  return totals;
+};
+
+const toReactionCount = (totals: Partial<Record<ReactionType, number>>) =>
+  REACTION_TYPES.reduce((sum, type) => sum + (totals[type] || 0), 0);
+
+const normalizePostRecord = (post: Post): Post => {
+  const reactions: Record<string, ReactionType> = {};
+  Object.entries(post.reactions || {}).forEach(([userId, type]) => {
+    if (REACTION_TYPES.includes(type as ReactionType)) {
+      reactions[userId] = type as ReactionType;
+    }
+  });
+
+  // Backward compatibility with legacy like map.
+  Object.entries(post.likes || {}).forEach(([userId, liked]) => {
+    if (liked && !reactions[userId]) reactions[userId] = 'like';
+  });
+
+  const reactionTotals = toReactionTotals(reactions);
+  const reactionCount = toReactionCount(reactionTotals);
+
+  return {
+    ...post,
+    postType: post.postType || 'update',
+    reactions,
+    reactionTotals,
+    reactionCount,
+    likes: Object.fromEntries(Object.keys(reactions).map((userId) => [userId, reactions[userId] === 'like'])),
+    likeCount: reactionTotals.like || 0,
+    savedBy: post.savedBy || {},
+    saveCount: typeof post.saveCount === 'number' ? post.saveCount : Object.keys(post.savedBy || {}).length,
+    repostOf: post.repostOf || null,
+    repostPreview: post.repostPreview || null,
+  };
+};
 
 export const postService = {
   createPost: async (
@@ -331,9 +401,13 @@ export const postService = {
     options?: CreatePostOptions
   ) => {
     const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const trimmedContent = content.trim();
+    if (!trimmedContent && !image) {
+      throw new Error('Post must include content or an image.');
+    }
     const fallbackHandle = authorName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || `user${Date.now()}`;
     const emailHandle = normalizeEmail(email).split('@')[0];
-    const newPost: Post = {
+    const newPost = normalizePostRecord({
       id: `post_${Date.now()}`,
       authorId: userId,
       authorName,
@@ -341,7 +415,7 @@ export const postService = {
       authorAvatar: authorAvatar || '',
       authorRole: options?.authorRole || 'Engineer',
       verified: options?.verified ?? false,
-      content,
+      content: trimmedContent,
       image,
       timestamp: Date.now(),
       likeCount: 0,
@@ -351,7 +425,15 @@ export const postService = {
       tags: options?.tags && options.tags.length > 0 ? options.tags : ['#CommunityUpdate'],
       isBounty: !!options?.isBounty,
       bountyAmount: options?.isBounty ? options?.bountyAmount : undefined,
-    };
+      postType: options?.postType || 'update',
+      reactions: {},
+      reactionTotals: {},
+      reactionCount: 0,
+      savedBy: {},
+      saveCount: 0,
+      repostOf: options?.repostOf || null,
+      repostPreview: options?.repostPreview || null,
+    } as Post);
     posts.unshift(newPost);
     setStorageItem('infralith_posts', posts);
     return newPost.id;
@@ -359,7 +441,11 @@ export const postService = {
 
   seedPosts: async (seedPosts: SeedPostInput[]) => {
     const existingPosts: Post[] = getStorageItem('infralith_posts') || [];
-    if (existingPosts.length > 0) return existingPosts;
+    if (existingPosts.length > 0) {
+      const normalizedExisting = existingPosts.map(normalizePostRecord).sort((a, b) => b.timestamp - a.timestamp);
+      setStorageItem('infralith_posts', normalizedExisting);
+      return normalizedExisting;
+    }
 
     const seeded: Post[] = seedPosts
       .map((seed, index) => {
@@ -369,7 +455,7 @@ export const postService = {
           normalizedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) ||
           `seed${index + 1}`;
         const isBounty = !!seed.isBounty;
-        return {
+        return normalizePostRecord({
           id: seed.id || `seed_post_${index + 1}`,
           authorId: seed.authorId || `seed_author_${index + 1}`,
           authorName: normalizedName,
@@ -387,7 +473,15 @@ export const postService = {
           tags: Array.isArray(seed.tags) && seed.tags.length > 0 ? seed.tags : ['#CommunityUpdate'],
           isBounty,
           bountyAmount: isBounty ? seed.bountyAmount : undefined,
-        };
+          postType: seed.postType || (isBounty ? 'announcement' : 'update'),
+          reactions: seed.reactions || {},
+          reactionTotals: seed.reactionTotals || {},
+          reactionCount: typeof seed.reactionCount === 'number' ? seed.reactionCount : undefined,
+          savedBy: seed.savedBy || {},
+          saveCount: seed.saveCount,
+          repostOf: seed.repostOf || null,
+          repostPreview: seed.repostPreview || null,
+        } as Post);
       })
       .sort((a, b) => b.timestamp - a.timestamp);
 
@@ -406,24 +500,108 @@ export const postService = {
 
   getAllPosts: async () => {
     const posts: Post[] = getStorageItem('infralith_posts') || [];
-    return posts.sort((a, b) => b.timestamp - a.timestamp);
+    const normalized = posts.map(normalizePostRecord).sort((a, b) => b.timestamp - a.timestamp);
+    setStorageItem('infralith_posts', normalized);
+    return normalized;
+  },
+
+  getPostById: async (postId: string) => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const found = posts.find((p) => p.id === postId);
+    return found ? normalizePostRecord(found) : null;
+  },
+
+  setReaction: async (postId: string, userId: string, reaction: ReactionType | null) => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const index = posts.findIndex((p) => p.id === postId);
+    if (index < 0) return null;
+
+    const post = normalizePostRecord(posts[index]);
+    if (reaction == null) {
+      delete post.reactions![userId];
+    } else {
+      post.reactions![userId] = reaction;
+    }
+
+    post.reactionTotals = toReactionTotals(post.reactions!);
+    post.reactionCount = toReactionCount(post.reactionTotals);
+    post.likes = Object.fromEntries(Object.keys(post.reactions!).map((id) => [id, post.reactions![id] === 'like']));
+    post.likeCount = post.reactionTotals.like || 0;
+
+    posts[index] = post;
+    setStorageItem('infralith_posts', posts);
+    return {
+      userReaction: post.reactions![userId] || null,
+      reactionTotals: post.reactionTotals,
+      reactionCount: post.reactionCount,
+      likeCount: post.likeCount,
+    };
   },
 
   toggleLike: async (postId: string, userId: string) => {
-    const posts: Post[] = getStorageItem('infralith_posts') || [];
-    const post = posts.find((p) => p.id === postId);
-    if (!post) return;
+    const post = await postService.getPostById(postId);
+    if (!post) return null;
+    const next = post.reactions?.[userId] === 'like' ? null : 'like';
+    return postService.setReaction(postId, userId, next);
+  },
 
-    post.likes = post.likes || {};
-    post.likeCount = typeof post.likeCount === 'number' ? post.likeCount : 0;
-    if (post.likes[userId]) {
-      delete post.likes[userId];
-      post.likeCount = Math.max(0, post.likeCount - 1);
+  toggleSave: async (postId: string, userId: string) => {
+    const posts: Post[] = getStorageItem('infralith_posts') || [];
+    const index = posts.findIndex((p) => p.id === postId);
+    if (index < 0) return { saved: false, saveCount: 0 };
+
+    const post = normalizePostRecord(posts[index]);
+    const savedBy = { ...(post.savedBy || {}) };
+    if (savedBy[userId]) {
+      delete savedBy[userId];
     } else {
-      post.likes[userId] = true;
-      post.likeCount += 1;
+      savedBy[userId] = true;
     }
+    post.savedBy = savedBy;
+    post.saveCount = Object.keys(savedBy).length;
+    posts[index] = post;
     setStorageItem('infralith_posts', posts);
+    return { saved: !!savedBy[userId], saveCount: post.saveCount };
+  },
+
+  createRepost: async (
+    userId: string,
+    authorName: string,
+    authorAvatar: string,
+    email: string,
+    originalPostId: string,
+    commentary = '',
+    options?: Pick<CreatePostOptions, 'authorRole' | 'verified'>
+  ) => {
+    const original = await postService.getPostById(originalPostId);
+    if (!original) throw new Error('Original post not found');
+
+    const baseTags = Array.isArray(original.tags) ? original.tags : [];
+    const repostTag = '#Repost';
+    const nextTags = baseTags.includes(repostTag) ? baseTags : [repostTag, ...baseTags];
+
+    return postService.createPost(
+      userId,
+      authorName,
+      authorAvatar,
+      email,
+      commentary.trim(),
+      null,
+      {
+        tags: nextTags.slice(0, 8),
+        authorRole: options?.authorRole,
+        verified: options?.verified,
+        postType: 'announcement',
+        repostOf: original.id,
+        repostPreview: {
+          authorName: original.authorName,
+          content: original.content,
+          image: original.image,
+          tags: original.tags,
+          postType: original.postType,
+        },
+      }
+    );
   },
 
   incrementShare: async (postId: string) => {
@@ -463,59 +641,139 @@ export const postService = {
   }
 };
 
+const buildMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const buildGroupMetaKey = (chatId: string) => `dm_group_meta_${chatId}`;
+
+type GroupMeta = {
+  chatId: string;
+  name: string;
+  participantIds: string[];
+  createdBy: string;
+  createdAt: number;
+};
+
+const readInbox = (userId: string): Record<string, ChatSummary> => {
+  return getStorageItem(`inbox_${userId}`) || {};
+};
+
+const writeInbox = (userId: string, inbox: Record<string, ChatSummary>) => {
+  setStorageItem(`inbox_${userId}`, inbox);
+};
+
+const normalizeMessageText = (text: string) => text.replace(/\r/g, '').trim();
+
+const updateInboxEntry = (
+  userId: string,
+  chatId: string,
+  updater: (entry: ChatSummary | undefined) => ChatSummary
+) => {
+  const inbox = readInbox(userId);
+  inbox[chatId] = updater(inbox[chatId]);
+  writeInbox(userId, inbox);
+};
+
 // --- DM SERVICE ---
 export const dmService = {
   getChatId: (uid1: string, uid2: string) => {
     return [uid1, uid2].sort().join('_');
   },
 
-  sendMessage: async (currentUserId: string, otherUserId: string, otherUserName: string, otherUserAvatar: string, currentUserName: string, currentUserAvatar: string, text: string, imageUrl?: string | null) => {
+  sendMessage: async (
+    currentUserId: string,
+    otherUserId: string,
+    otherUserName: string,
+    otherUserAvatar: string,
+    currentUserName: string,
+    currentUserAvatar: string,
+    text: string,
+    imageUrl?: string | null
+  ) => {
     const isGroup = otherUserId.startsWith('group_');
     const chatId = isGroup ? otherUserId : dmService.getChatId(currentUserId, otherUserId);
-    const messages = getStorageItem(`dm_messages_${chatId}`) || [];
+    const cleanText = normalizeMessageText(text || '');
+    const hasImage = !!imageUrl;
+    if (!cleanText && !hasImage) {
+      return false;
+    }
+
+    const now = Date.now();
+    const messages: ChatMessage[] = getStorageItem(`dm_messages_${chatId}`) || [];
 
     messages.push({
-      id: `msg_${Date.now()}`,
+      id: buildMessageId(),
       senderId: currentUserId,
-      text,
+      text: cleanText,
       imageUrl,
-      timestamp: Date.now()
+      timestamp: now
     });
     setStorageItem(`dm_messages_${chatId}`, messages);
 
-    // Update inboxes
+    const previewText = cleanText || 'Sent an attachment';
+
     if (isGroup) {
-      const inboxEntry = (getStorageItem(`inbox_${currentUserId}`) || {})[chatId];
-      if (inboxEntry && inboxEntry.participantIds) {
-        inboxEntry.participantIds.forEach((pid: string) => {
-          const userInbox = getStorageItem(`inbox_${pid}`) || {};
-          if (userInbox[chatId]) {
-            userInbox[chatId].lastMessage = text;
-            userInbox[chatId].timestamp = Date.now();
-            setStorageItem(`inbox_${pid}`, userInbox);
-          }
-        });
+      const groupMeta: GroupMeta | null = getStorageItem(buildGroupMetaKey(chatId));
+      const senderInbox = readInbox(currentUserId);
+      const senderEntry = senderInbox[chatId];
+      const fallbackParticipantIds = senderEntry?.participantIds || [];
+      const participants = Array.from(
+        new Set([
+          ...(groupMeta?.participantIds || []),
+          ...fallbackParticipantIds,
+          currentUserId,
+        ])
+      );
+
+      participants.forEach((participantId) => {
+        updateInboxEntry(participantId, chatId, (entry) => ({
+          chatId,
+          otherUserId: chatId,
+          otherUserName: groupMeta?.name || entry?.otherUserName || otherUserName || 'Team Group',
+          otherUserAvatar: '',
+          isGroup: true,
+          participantIds: participants,
+          lastMessage: previewText,
+          timestamp: now,
+          status: 'accepted',
+          unreadCount: participantId === currentUserId ? 0 : (entry?.unreadCount || 0) + 1,
+        }));
+      });
+      if (groupMeta) {
+        setStorageItem(buildGroupMetaKey(chatId), { ...groupMeta, participantIds: participants });
       }
     } else {
-      const updateInbox = (userId: string, otherId: string, otherName: string, otherAvatar: string, status: string) => {
-        const inbox = getStorageItem(`inbox_${userId}`) || {};
-        inbox[chatId] = {
-          chatId,
-          otherUserId: otherId,
-          otherUserName: otherName,
-          otherUserAvatar: otherAvatar,
-          lastMessage: text,
-          timestamp: Date.now(),
-          status
-        };
-        setStorageItem(`inbox_${userId}`, inbox);
-      };
+      updateInboxEntry(currentUserId, chatId, (entry) => ({
+        chatId,
+        otherUserId,
+        otherUserName,
+        otherUserAvatar,
+        lastMessage: previewText,
+        timestamp: now,
+        status: 'accepted',
+        unreadCount: 0,
+      }));
 
-      updateInbox(currentUserId, otherUserId, otherUserName, otherUserAvatar, 'accepted');
-      const otherInbox = getStorageItem(`inbox_${otherUserId}`) || {};
-      const existingStatus = otherInbox[chatId]?.status || 'pending';
-      updateInbox(otherUserId, currentUserId, currentUserName, currentUserAvatar, existingStatus);
+      updateInboxEntry(otherUserId, chatId, (entry) => ({
+        chatId,
+        otherUserId: currentUserId,
+        otherUserName: currentUserName || 'Unknown User',
+        otherUserAvatar: currentUserAvatar || '',
+        lastMessage: previewText,
+        timestamp: now,
+        status: entry?.status || 'pending',
+        unreadCount: (entry?.unreadCount || 0) + 1,
+      }));
     }
+    return true;
+  },
+
+  markChatRead: async (userId: string, chatId: string) => {
+    const inbox = readInbox(userId);
+    if (!inbox[chatId]) return;
+    inbox[chatId] = {
+      ...inbox[chatId],
+      unreadCount: 0,
+    };
+    writeInbox(userId, inbox);
   },
 
   deleteMessage: async (chatId: string, messageId: string) => {
@@ -525,7 +783,6 @@ export const dmService = {
   },
 
   getUserChatsRef: (userId: string) => {
-    // This method returns the key for local storage inbox
     return `inbox_${userId}`;
   },
 
@@ -534,49 +791,65 @@ export const dmService = {
   },
 
   acceptChatRequest: async (userId: string, chatId: string) => {
-    const inbox = getStorageItem(`inbox_${userId}`) || {};
-    if (inbox[chatId]) {
-      inbox[chatId].status = 'accepted';
-      setStorageItem(`inbox_${userId}`, inbox);
+    const inbox = readInbox(userId);
+    const current = inbox[chatId];
+    if (!current) return;
+
+    inbox[chatId] = { ...current, status: 'accepted', unreadCount: 0 };
+    writeInbox(userId, inbox);
+
+    if (!current.isGroup && current.otherUserId) {
+      const peerInbox = readInbox(current.otherUserId);
+      const peerCurrent = peerInbox[chatId];
+      if (peerCurrent) {
+        peerInbox[chatId] = { ...peerCurrent, status: 'accepted' };
+        writeInbox(current.otherUserId, peerInbox);
+      }
     }
   },
 
   removeChat: async (userId: string, chatId: string) => {
-    const inbox = getStorageItem(`inbox_${userId}`) || {};
+    const inbox = readInbox(userId);
     delete inbox[chatId];
-    setStorageItem(`inbox_${userId}`, inbox);
+    writeInbox(userId, inbox);
   },
 
   createGroup: async (creatorId: string, creatorName: string, _creatorAvatar: string, groupName: string, participantIds: string[]) => {
+    const normalizedName = groupName.trim() || 'Project Group';
     const chatId = `group_${Date.now()}`;
-    const allParticipantIds = [...new Set([creatorId, ...participantIds])];
+    const allParticipantIds = Array.from(new Set([creatorId, ...participantIds]));
+    const now = Date.now();
 
-    const updateInbox = (userId: string) => {
-      const inbox = getStorageItem(`inbox_${userId}`) || {};
-      inbox[chatId] = {
+    const groupMeta: GroupMeta = {
+      chatId,
+      name: normalizedName,
+      participantIds: allParticipantIds,
+      createdBy: creatorId,
+      createdAt: now,
+    };
+    setStorageItem(buildGroupMetaKey(chatId), groupMeta);
+
+    allParticipantIds.forEach((id) => {
+      updateInboxEntry(id, chatId, () => ({
         chatId,
-        otherUserId: chatId, // For groups, we use the chatId as the "otherId"
-        otherUserName: groupName,
-        otherUserAvatar: '', // Or a group icon
+        otherUserId: chatId,
+        otherUserName: normalizedName,
+        otherUserAvatar: '',
         isGroup: true,
         participantIds: allParticipantIds,
         lastMessage: 'Group created',
-        timestamp: Date.now(),
-        status: 'accepted'
-      };
-      setStorageItem(`inbox_${userId}`, inbox);
-    };
-
-    allParticipantIds.forEach(id => updateInbox(id));
-
-    // Save initial system message
-    const messages = [];
-    messages.push({
-      id: `msg_${Date.now()}`,
-      senderId: 'system',
-      text: `${creatorName} created group "${groupName}"`,
-      timestamp: Date.now()
+        timestamp: now,
+        status: 'accepted',
+        unreadCount: 0,
+      }));
     });
+
+    const messages: ChatMessage[] = [{
+      id: buildMessageId(),
+      senderId: 'system',
+      text: `${creatorName} created group "${normalizedName}"`,
+      timestamp: now
+    }];
     setStorageItem(`dm_messages_${chatId}`, messages);
 
     return chatId;
@@ -586,7 +859,6 @@ export const dmService = {
     const sarahId = 'sarah-chen-id';
     const marcusId = 'marcus-thorne-id';
 
-    // Seed Users if they don't exist
     const users = getStorageItem('infralith_users') || {};
     if (!users[sarahId]) {
       users[sarahId] = { uid: sarahId, name: 'Dr. Sarah Chen', email: 'sarah@infralith.com', avatar: '', role: 'Engineer' };
@@ -596,16 +868,14 @@ export const dmService = {
     }
     setStorageItem('infralith_users', users);
 
-    // Sarah's Message
     await dmService.sendMessage(
       sarahId, userId, 'Your Name', '', 'Dr. Sarah Chen', '',
-      "Hey, did you check the seismic reinforcement on Section B-B? The Mumbai Phase 1 blueprint seems a bit thin there."
+      'Hey, did you check the seismic reinforcement on Section B-B? The Mumbai Phase 1 blueprint seems a bit thin there.'
     );
 
-    // Marcus's Message
     await dmService.sendMessage(
       marcusId, userId, 'Your Name', '', 'Marcus Thorne', '',
-      "The regional audit is coming up on Tuesday. Please ensure all your compliance reports are synced to the Azure Foundry gateway."
+      'The regional audit is coming up on Tuesday. Please ensure all your compliance reports are synced to the Azure Foundry gateway.'
     );
   }
 };

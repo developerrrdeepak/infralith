@@ -600,6 +600,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         title: "Analysis Failed",
         description: "The AI multi-agent pipeline encountered an error."
       });
+      throw error;
     } finally {
       setIsAuthLoading(false);
     }

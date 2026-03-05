@@ -1,17 +1,24 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+  Bookmark,
+  BriefcaseBusiness,
   CheckCircle2,
   Clock,
   Flame,
-  Heart,
+  HandHeart,
   Image as ImageIcon,
+  Lightbulb,
   Loader2,
+  Megaphone,
   MessageCircle,
+  Repeat2,
   Search,
   Send,
   Share2,
+  Sparkles,
+  ThumbsUp,
   Trash2,
   Trophy,
   UserPlus,
@@ -27,10 +34,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useAppContext } from '@/contexts/app-context';
 import { useToast } from '@/hooks/use-toast';
-import { postService, type Post as ServicePost, type Comment as ServiceComment } from '@/lib/services';
+import { postService, type Post as ServicePost, type Comment as ServiceComment, type ReactionType } from '@/lib/services';
 
-type FeedMode = 'all' | 'following' | 'bounties' | 'mine';
+type FeedMode = 'all' | 'following' | 'bounties' | 'saved' | 'mine';
 type SortMode = 'latest' | 'popular' | 'discussed';
+type PostType = 'update' | 'project' | 'hiring' | 'announcement';
 
 type Post = {
   id: string;
@@ -46,6 +54,20 @@ type Post = {
   timestamp: number;
   likes: number;
   hasLiked: boolean;
+  reactions: Partial<Record<ReactionType, number>>;
+  reactionCount: number;
+  userReaction: ReactionType | null;
+  isSaved: boolean;
+  saveCount: number;
+  postType: PostType;
+  repostOf?: string | null;
+  repostPreview?: {
+    authorName: string;
+    content: string;
+    image?: string;
+    tags: string[];
+    postType: PostType;
+  } | null;
   comments: number;
   shares: number;
   tags: string[];
@@ -72,6 +94,25 @@ const createDefaultThread = (): CommentThread => ({
 const ONE_MINUTE = 60_000;
 const ONE_HOUR = 60 * ONE_MINUTE;
 const ONE_DAY = 24 * ONE_HOUR;
+const REACTION_ORDER: ReactionType[] = ['like', 'insightful', 'celebrate', 'support'];
+const POST_TYPE_OPTIONS: Array<{
+  key: PostType;
+  label: string;
+  icon: any;
+  hint: string;
+}> = [
+  { key: 'update', label: 'Update', icon: Megaphone, hint: 'General status update' },
+  { key: 'project', label: 'Project', icon: BriefcaseBusiness, hint: 'Milestone or showcase' },
+  { key: 'hiring', label: 'Hiring', icon: Users, hint: 'Roles and opportunities' },
+  { key: 'announcement', label: 'Announcement', icon: Sparkles, hint: 'Important notice' },
+];
+
+const REACTION_META: Record<ReactionType, { label: string; icon: any; className: string }> = {
+  like: { label: 'Like', icon: ThumbsUp, className: 'text-blue-500' },
+  insightful: { label: 'Insightful', icon: Lightbulb, className: 'text-amber-500' },
+  celebrate: { label: 'Celebrate', icon: Sparkles, className: 'text-fuchsia-500' },
+  support: { label: 'Support', icon: HandHeart, className: 'text-emerald-500' },
+};
 
 const MOCK_POSTS: Post[] = [
   {
@@ -89,6 +130,12 @@ const MOCK_POSTS: Post[] = [
     timestamp: Date.now() - 2 * ONE_HOUR,
     likes: 342,
     hasLiked: false,
+    reactions: { like: 306, insightful: 24, celebrate: 8, support: 4 },
+    reactionCount: 342,
+    userReaction: null,
+    isSaved: false,
+    saveCount: 22,
+    postType: 'project',
     comments: 45,
     shares: 12,
     tags: ['#StructuralEngineering', '#InfralithSuccess', '#AIinConstruction'],
@@ -107,6 +154,12 @@ const MOCK_POSTS: Post[] = [
     timestamp: Date.now() - 5 * ONE_HOUR,
     likes: 128,
     hasLiked: false,
+    reactions: { like: 101, insightful: 12, celebrate: 6, support: 9 },
+    reactionCount: 128,
+    userReaction: null,
+    isSaved: false,
+    saveCount: 9,
+    postType: 'update',
     comments: 18,
     shares: 3,
     tags: ['#WomenInSTEM', '#SiteUpdates', '#SafetyFirst'],
@@ -126,6 +179,12 @@ const MOCK_POSTS: Post[] = [
     timestamp: Date.now() - ONE_DAY,
     likes: 567,
     hasLiked: false,
+    reactions: { like: 511, insightful: 20, celebrate: 24, support: 12 },
+    reactionCount: 567,
+    userReaction: null,
+    isSaved: false,
+    saveCount: 30,
+    postType: 'announcement',
     comments: 89,
     shares: 44,
     tags: ['#DroneTech', '#Innovation', '#ConstructionTech'],
@@ -144,6 +203,12 @@ const MOCK_POSTS: Post[] = [
     timestamp: Date.now() - 20 * ONE_MINUTE,
     likes: 12,
     hasLiked: false,
+    reactions: { like: 8, insightful: 1, celebrate: 1, support: 2 },
+    reactionCount: 12,
+    userReaction: null,
+    isSaved: false,
+    saveCount: 3,
+    postType: 'hiring',
     comments: 4,
     shares: 8,
     tags: ['#Bounty', '#SeismicDesign', '#TrussSystem'],
@@ -182,7 +247,34 @@ const parseTags = (raw: string) => {
 
 const toPostView = (raw: Partial<ServicePost> & { id: string; authorName: string; content: string }, userId?: string): Post => {
   const timestamp = typeof raw.timestamp === 'number' ? raw.timestamp : Date.now();
-  const likes = raw.likes || {};
+  const reactions: Record<string, ReactionType> = { ...(raw.reactions || {}) };
+  Object.entries(raw.likes || {}).forEach(([uid, liked]) => {
+    if (liked && !reactions[uid]) reactions[uid] = 'like';
+  });
+
+  const reactionTotals = REACTION_ORDER.reduce((acc, type) => {
+    acc[type] = 0;
+    return acc;
+  }, {} as Partial<Record<ReactionType, number>>);
+  Object.values(reactions).forEach((reaction) => {
+    reactionTotals[reaction] = (reactionTotals[reaction] || 0) + 1;
+  });
+
+  const likeCountFromRaw = typeof raw.likeCount === 'number' ? raw.likeCount : reactionTotals.like || 0;
+  if ((reactionTotals.like || 0) < likeCountFromRaw) {
+    reactionTotals.like = likeCountFromRaw;
+  }
+
+  const reactionCount = typeof raw.reactionCount === 'number'
+    ? raw.reactionCount
+    : Math.max(
+        likeCountFromRaw,
+        REACTION_ORDER.reduce((sum, type) => sum + (reactionTotals[type] || 0), 0)
+      );
+
+  const savedBy = raw.savedBy || {};
+  const postType = (raw.postType as PostType | undefined) || (raw.isBounty ? 'hiring' : 'update');
+
   return {
     id: raw.id,
     authorId: raw.authorId || 'unknown-author',
@@ -195,8 +287,24 @@ const toPostView = (raw: Partial<ServicePost> & { id: string; authorName: string
     content: raw.content,
     image: raw.image || undefined,
     timestamp,
-    likes: typeof raw.likeCount === 'number' ? raw.likeCount : 0,
-    hasLiked: !!(userId && likes[userId]),
+    likes: likeCountFromRaw,
+    hasLiked: !!(userId && reactions[userId] === 'like'),
+    reactions: reactionTotals,
+    reactionCount,
+    userReaction: userId ? reactions[userId] || null : null,
+    isSaved: !!(userId && savedBy[userId]),
+    saveCount: typeof raw.saveCount === 'number' ? raw.saveCount : Object.keys(savedBy).length,
+    postType,
+    repostOf: raw.repostOf || null,
+    repostPreview: raw.repostPreview
+      ? {
+          authorName: raw.repostPreview.authorName,
+          content: raw.repostPreview.content,
+          image: raw.repostPreview.image || undefined,
+          tags: Array.isArray(raw.repostPreview.tags) ? raw.repostPreview.tags : [],
+          postType: ((raw.repostPreview.postType as PostType | undefined) || 'update'),
+        }
+      : null,
     comments: typeof raw.commentCount === 'number' ? raw.commentCount : 0,
     shares: typeof raw.shares === 'number' ? raw.shares : 0,
     tags: Array.isArray(raw.tags) && raw.tags.length > 0 ? raw.tags : ['#CommunityUpdate'],
@@ -221,10 +329,13 @@ export default function CommunityPage() {
   const [sortMode, setSortMode] = useState<SortMode>('latest');
 
   const [newPostContent, setNewPostContent] = useState('');
+  const [newPostType, setNewPostType] = useState<PostType>('update');
   const [newPostImage, setNewPostImage] = useState('');
+  const [newPostImageData, setNewPostImageData] = useState<string | null>(null);
   const [newPostTags, setNewPostTags] = useState('');
   const [isBountyDraft, setIsBountyDraft] = useState(false);
   const [newBountyAmount, setNewBountyAmount] = useState('5000');
+  const imageUploadRef = useRef<HTMLInputElement | null>(null);
 
   const followingKey = useMemo(() => {
     return user?.uid ? `${FOLLOWING_KEY_PREFIX}${user.uid}` : null;
@@ -271,10 +382,13 @@ export default function CommunityPage() {
               image: post.image,
               timestamp: post.timestamp,
               likes: {},
+              reactionCount: post.reactionCount,
               likeCount: post.likes,
               commentCount: post.comments,
               shares: post.shares,
               tags: post.tags,
+              postType: post.postType,
+              saveCount: post.saveCount,
               isBounty: post.isBounty,
               bountyAmount: post.bountyAmount,
             }))
@@ -304,13 +418,15 @@ export default function CommunityPage() {
   }, [toast, user?.uid]);
 
   const feedCounts = useMemo(() => {
-    const followingPosts = posts.filter((post) => !!following[post.author.name]).length;
+    const followingPosts = posts.filter((post) => !!following[post.authorId]).length;
     const bountyPosts = posts.filter((post) => post.isBounty).length;
+    const savedPosts = posts.filter((post) => post.isSaved).length;
     const myPosts = posts.filter((post) => post.authorId === user?.uid).length;
     return {
       all: posts.length,
       following: followingPosts,
       bounties: bountyPosts,
+      saved: savedPosts,
       mine: myPosts,
     };
   }, [posts, following, user?.uid]);
@@ -319,10 +435,13 @@ export default function CommunityPage() {
     let result = [...posts];
 
     if (feedMode === 'following') {
-      result = result.filter((post) => !!following[post.author.name]);
+      result = result.filter((post) => !!following[post.authorId]);
     }
     if (feedMode === 'bounties') {
       result = result.filter((post) => !!post.isBounty);
+    }
+    if (feedMode === 'saved') {
+      result = result.filter((post) => !!post.isSaved);
     }
     if (feedMode === 'mine') {
       result = result.filter((post) => post.authorId === user?.uid);
@@ -341,7 +460,7 @@ export default function CommunityPage() {
     }
 
     if (sortMode === 'popular') {
-      result.sort((a, b) => b.likes + b.shares * 2 - (a.likes + a.shares * 2));
+      result.sort((a, b) => b.reactionCount + b.shares * 2 - (a.reactionCount + a.shares * 2));
     } else if (sortMode === 'discussed') {
       result.sort((a, b) => b.comments - a.comments || b.timestamp - a.timestamp);
     } else {
@@ -351,15 +470,15 @@ export default function CommunityPage() {
     return result;
   }, [posts, feedMode, following, searchText, sortMode, user?.uid]);
 
-  const toggleFollow = (authorName: string) => {
+  const toggleFollow = (authorId: string, authorName: string) => {
     if (!followingKey) {
       toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to follow members.' });
       return;
     }
 
     setFollowing((prev) => {
-      const isFollowing = !prev[authorName];
-      const next = { ...prev, [authorName]: isFollowing };
+      const isFollowing = !prev[authorId];
+      const next = { ...prev, [authorId]: isFollowing };
       persistFollowing(next);
       toast({
         title: isFollowing ? `Following ${authorName}` : `Unfollowed ${authorName}`,
@@ -371,6 +490,32 @@ export default function CommunityPage() {
     });
   };
 
+  const handleImageSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast({ variant: 'destructive', title: 'Unsupported file', description: 'Please upload a valid image.' });
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      toast({ variant: 'destructive', title: 'Image too large', description: 'Upload an image smaller than 4MB.' });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setNewPostImageData((reader.result as string) || null);
+      setNewPostImage('');
+    };
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  };
+
+  const handleClearImageSelection = () => {
+    setNewPostImage('');
+    setNewPostImageData(null);
+  };
+
   const handlePostSubmit = async () => {
     if (!user?.uid) {
       toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to publish updates.' });
@@ -378,11 +523,15 @@ export default function CommunityPage() {
     }
 
     const content = newPostContent.trim();
-    const image = newPostImage.trim();
+    const imageUrl = newPostImage.trim();
+    const image = newPostImageData || imageUrl;
     const tags = parseTags(newPostTags);
 
-    if (!content) return;
-    if (image && !isValidHttpUrl(image)) {
+    if (!content && !image) {
+      toast({ variant: 'destructive', title: 'Post is empty', description: 'Add text or image before publishing.' });
+      return;
+    }
+    if (imageUrl && !isValidHttpUrl(imageUrl)) {
       toast({ variant: 'destructive', title: 'Invalid image URL', description: 'Image URL must start with http:// or https://.' });
       return;
     }
@@ -413,35 +562,20 @@ export default function CommunityPage() {
           bountyAmount,
           authorRole: user.role || 'Engineer',
           verified: false,
+          postType: newPostType,
         }
       );
 
-      const newPost: Post = {
-        id: postId,
-        authorId: user.uid,
-        author: {
-          name: authorName,
-          avatar: user.avatar || '',
-          role: user.role || 'Engineer',
-          verified: false,
-        },
-        content,
-        image: image || undefined,
-        timestamp: Date.now(),
-        likes: 0,
-        hasLiked: false,
-        comments: 0,
-        shares: 0,
-        tags: tags.length > 0 ? tags : ['#CommunityUpdate'],
-        isBounty: isBountyDraft,
-        bountyAmount,
-      };
-
-      setPosts((prev) => [newPost, ...prev]);
+      const created = await postService.getPostById(postId);
+      if (created) {
+        setPosts((prev) => [toPostView(created, user.uid), ...prev.filter((post) => post.id !== postId)]);
+      }
       setNewPostContent('');
       setNewPostImage('');
+      setNewPostImageData(null);
       setNewPostTags('');
       setIsBountyDraft(false);
+      setNewPostType('update');
       setNewBountyAmount('5000');
       toast({ title: 'Post published', description: 'Your update is now live in Global Community.' });
     } catch (error) {
@@ -452,28 +586,90 @@ export default function CommunityPage() {
     }
   };
 
-  const handleToggleLike = async (postId: string) => {
+  const handleReaction = async (postId: string, reaction: ReactionType) => {
     if (!user?.uid) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to like posts.' });
+      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to react to posts.' });
       return;
     }
 
     try {
-      await postService.toggleLike(postId, user.uid);
+      const post = posts.find((item) => item.id === postId);
+      if (!post) return;
+      const nextReaction = post.userReaction === reaction ? null : reaction;
+      const result = await postService.setReaction(postId, user.uid, nextReaction);
+      if (!result) return;
+
       setPosts((prev) =>
         prev.map((post) => {
           if (post.id !== postId) return post;
-          const nextLiked = !post.hasLiked;
           return {
             ...post,
-            hasLiked: nextLiked,
-            likes: nextLiked ? post.likes + 1 : Math.max(0, post.likes - 1),
+            hasLiked: result.userReaction === 'like',
+            likes: result.likeCount || 0,
+            reactions: result.reactionTotals || post.reactions,
+            reactionCount: result.reactionCount || 0,
+            userReaction: result.userReaction,
           };
         })
       );
     } catch (error) {
-      console.error('Failed to toggle like', error);
-      toast({ variant: 'destructive', title: 'Could not update like' });
+      console.error('Failed to set reaction', error);
+      toast({ variant: 'destructive', title: 'Could not update reaction' });
+    }
+  };
+
+  const handleToggleSave = async (postId: string) => {
+    if (!user?.uid) {
+      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to save posts.' });
+      return;
+    }
+    try {
+      const result = await postService.toggleSave(postId, user.uid);
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                isSaved: result.saved,
+                saveCount: result.saveCount,
+              }
+            : post
+        )
+      );
+      toast({ title: result.saved ? 'Saved' : 'Removed from saved' });
+    } catch (error) {
+      console.error('Failed to toggle save', error);
+      toast({ variant: 'destructive', title: 'Could not update saved posts' });
+    }
+  };
+
+  const handleRepost = async (post: Post) => {
+    if (!user?.uid) {
+      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to repost.' });
+      return;
+    }
+
+    const quote = window.prompt('Add commentary for repost (optional):', '');
+    if (quote === null) return;
+
+    try {
+      const postId = await postService.createRepost(
+        user.uid,
+        user.name || user.email || 'Engineer',
+        user.avatar || '',
+        user.email || '',
+        post.id,
+        quote,
+        { authorRole: user.role || 'Engineer', verified: false }
+      );
+      const repost = await postService.getPostById(postId);
+      if (repost) {
+        setPosts((prev) => [toPostView(repost, user.uid), ...prev]);
+      }
+      toast({ title: 'Reposted', description: 'Shared to your network feed.' });
+    } catch (error) {
+      console.error('Failed to repost', error);
+      toast({ variant: 'destructive', title: 'Could not repost' });
     }
   };
 
@@ -631,6 +827,7 @@ export default function CommunityPage() {
     { key: 'all', label: 'All', count: feedCounts.all },
     { key: 'following', label: 'Following', count: feedCounts.following },
     { key: 'bounties', label: 'Bounties', count: feedCounts.bounties },
+    { key: 'saved', label: 'Saved', count: feedCounts.saved },
     { key: 'mine', label: 'My Posts', count: feedCounts.mine },
   ];
 
@@ -744,7 +941,34 @@ export default function CommunityPage() {
               className="min-h-[110px]"
             />
 
+            {newPostImageData && (
+              <div className="relative rounded-xl overflow-hidden border border-primary/20 bg-black/10 max-h-[280px]">
+                <img src={newPostImageData} alt="Upload preview" className="w-full h-full object-cover" />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="absolute right-3 top-3"
+                  onClick={handleClearImageSelection}
+                >
+                  Remove
+                </Button>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <select
+                value={newPostType}
+                onChange={(event) => setNewPostType(event.target.value as PostType)}
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                aria-label="Post type"
+              >
+                {POST_TYPE_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <Input
                 value={newPostImage}
                 onChange={(event) => setNewPostImage(event.target.value)}
@@ -759,6 +983,22 @@ export default function CommunityPage() {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={imageUploadRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageSelection}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => imageUploadRef.current?.click()}
+                >
+                  <ImageIcon className="h-4 w-4 mr-2" />
+                  Upload Image
+                </Button>
                 <Button
                   type="button"
                   variant={isBountyDraft ? 'default' : 'outline'}
@@ -780,14 +1020,14 @@ export default function CommunityPage() {
                 )}
 
                 <Badge variant="outline" className="text-xs">
-                  <ImageIcon className="h-3 w-3 mr-1" /> Optional media
+                  {POST_TYPE_OPTIONS.find((option) => option.key === newPostType)?.hint}
                 </Badge>
               </div>
 
               <Button
                 type="button"
                 onClick={handlePostSubmit}
-                disabled={isPublishing || !newPostContent.trim()}
+                disabled={isPublishing || (!newPostContent.trim() && !newPostImage.trim() && !newPostImageData)}
                 className="bg-primary text-background-dark font-bold px-6"
               >
                 {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Publish'}
@@ -809,6 +1049,8 @@ export default function CommunityPage() {
             const thread = commentThreads[post.id] || createDefaultThread();
             const isOwnPost = post.authorId === user?.uid;
             const canFollow = !isOwnPost && !post.isBounty;
+            const postTypeMeta = POST_TYPE_OPTIONS.find((option) => option.key === post.postType) || POST_TYPE_OPTIONS[0];
+            const PostTypeIcon = postTypeMeta.icon;
 
             return (
               <Card key={post.id} className="premium-glass premium-glass-hover overflow-hidden transition-all duration-300">
@@ -840,20 +1082,24 @@ export default function CommunityPage() {
                         <Flame className="h-3 w-3" /> ${post.bountyAmount?.toLocaleString() || 0} Bounty
                       </Badge>
                     )}
+                    <Badge variant="secondary" className="text-[10px] uppercase tracking-widest font-bold flex items-center gap-1">
+                      <PostTypeIcon className="h-3 w-3" />
+                      {postTypeMeta.label}
+                    </Badge>
 
                     {canFollow && (
                       <Button
                         type="button"
                         size="sm"
-                        variant={following[post.author.name] ? 'outline' : 'default'}
+                        variant={following[post.authorId] ? 'outline' : 'default'}
                         className={cn(
                           'h-8 px-3 text-xs font-bold',
-                          following[post.author.name] ? '' : 'bg-primary text-background-dark'
+                          following[post.authorId] ? '' : 'bg-primary text-background-dark'
                         )}
-                        onClick={() => toggleFollow(post.author.name)}
+                        onClick={() => toggleFollow(post.authorId, post.author.name)}
                       >
                         <UserPlus className="h-3.5 w-3.5 mr-1" />
-                        {following[post.author.name] ? 'Following' : 'Follow'}
+                        {following[post.authorId] ? 'Following' : 'Follow'}
                       </Button>
                     )}
 
@@ -882,6 +1128,14 @@ export default function CommunityPage() {
                         </span>
                       ))}
                     </div>
+
+                    {post.repostPreview && (
+                      <div className="mt-3 rounded-xl border border-primary/15 bg-primary/5 p-3 space-y-2">
+                        <p className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">Repost</p>
+                        <p className="text-xs text-foreground font-semibold">{post.repostPreview.authorName}</p>
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap">{post.repostPreview.content}</p>
+                      </div>
+                    )}
                   </div>
 
                   {post.image && (
@@ -895,24 +1149,34 @@ export default function CommunityPage() {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between p-3 px-5 bg-slate-50 dark:bg-black/20 border-t border-slate-100 dark:border-white/5">
-                    <div className="flex items-center gap-6">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleLike(post.id)}
-                        className={cn(
-                          'flex items-center gap-2 text-sm font-semibold transition-all',
-                          post.hasLiked ? 'text-red-500' : 'text-muted-foreground hover:text-red-500'
-                        )}
-                      >
-                        <Heart className={cn('h-5 w-5', post.hasLiked ? 'fill-current' : '')} />
-                        <span>{post.likes}</span>
-                      </button>
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-3 px-5 bg-slate-50 dark:bg-black/20 border-t border-slate-100 dark:border-white/5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {REACTION_ORDER.map((reactionKey) => {
+                        const config = REACTION_META[reactionKey];
+                        const Icon = config.icon;
+                        const active = post.userReaction === reactionKey;
+                        return (
+                          <button
+                            key={`${post.id}_${reactionKey}`}
+                            type="button"
+                            onClick={() => handleReaction(post.id, reactionKey)}
+                            className={cn(
+                              'flex items-center gap-1.5 text-xs font-semibold rounded-full px-2.5 py-1 border transition-all',
+                              active
+                                ? 'bg-primary/15 text-primary border-primary/25'
+                                : 'bg-white/70 dark:bg-black/40 text-muted-foreground border-transparent hover:border-primary/20'
+                            )}
+                          >
+                            <Icon className={cn('h-3.5 w-3.5', active ? 'text-primary' : config.className)} />
+                            <span>{post.reactions[reactionKey] || 0}</span>
+                          </button>
+                        );
+                      })}
 
                       <button
                         type="button"
                         onClick={() => toggleComments(post.id)}
-                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all"
+                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
                       >
                         <MessageCircle className="h-5 w-5" />
                         <span>{post.comments}</span>
@@ -921,16 +1185,41 @@ export default function CommunityPage() {
                       <button
                         type="button"
                         onClick={() => handleShare(post)}
-                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all"
+                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
                       >
                         <Share2 className="h-5 w-5" />
                         <span>{post.shares}</span>
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRepost(post)}
+                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
+                      >
+                        <Repeat2 className="h-4 w-4" />
+                        <span>Repost</span>
+                      </button>
                     </div>
 
-                    <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-widest border-primary/20 bg-primary/5 text-primary">
-                      <Users className="h-3 w-3 mr-1" /> Verified Network
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSave(post.id)}
+                        className={cn(
+                          'flex items-center gap-1.5 text-xs font-semibold rounded-full px-2.5 py-1 border transition-all',
+                          post.isSaved
+                            ? 'bg-primary/15 text-primary border-primary/25'
+                            : 'bg-white/70 dark:bg-black/40 text-muted-foreground border-transparent hover:border-primary/20'
+                        )}
+                      >
+                        <Bookmark className={cn('h-3.5 w-3.5', post.isSaved ? 'fill-current' : '')} />
+                        <span>{post.saveCount}</span>
+                      </button>
+
+                      <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-widest border-primary/20 bg-primary/5 text-primary">
+                        <Users className="h-3 w-3 mr-1" /> Verified Network
+                      </Badge>
+                    </div>
                   </div>
 
                   {thread.isOpen && (

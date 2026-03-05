@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import { useEffect, useState, useRef } from 'react';
 import { useAppContext } from '@/contexts/app-context';
 import { dmService, userDbService, inviteService, ChatSummary, ChatMessage, UserProfileData, normalizeEmail } from '@/lib/services';
@@ -60,6 +60,8 @@ export default function DMPage() {
           } else if (!sessionStorage.getItem('infralith_dm_seeded')) {
             await dmService.seedMockDMs(user.uid);
             sessionStorage.setItem('infralith_dm_seeded', 'true');
+          } else {
+            setChats([]);
           }
         }
       } catch (error) {
@@ -103,7 +105,10 @@ export default function DMPage() {
 
   // 3. Load Messages when a chat is selected
   useEffect(() => {
-    if (!selectedChat) return;
+    if (!selectedChat) {
+      setMessages([]);
+      return;
+    }
     const fetchMessages = async () => {
       try {
         const messagesRef = dmService.getMessagesRef(selectedChat.chatId);
@@ -112,6 +117,8 @@ export default function DMPage() {
           if (data) {
             const msgs = JSON.parse(data) as ChatMessage[];
             setMessages(msgs.sort((a, b) => a.timestamp - b.timestamp));
+          } else {
+            setMessages([]);
           }
         }
       } catch (error) {
@@ -119,10 +126,13 @@ export default function DMPage() {
       }
     };
 
+    if (user?.uid) {
+      dmService.markChatRead(user.uid, selectedChat.chatId);
+    }
     fetchMessages();
     const interval = setInterval(fetchMessages, 2000);
     return () => clearInterval(interval);
-  }, [selectedChat?.chatId]);
+  }, [selectedChat?.chatId, user?.uid]);
 
   // 4. Auto-scroll to bottom of chat
   useEffect(() => {
@@ -159,21 +169,27 @@ export default function DMPage() {
     setNewMessage('');
     setImagePreview(null);
 
-    await dmService.sendMessage(
-      user.uid,
-      selectedChat.otherUserId,
-      selectedChat.otherUserName,
-      selectedChat.otherUserAvatar,
-      user.name,
-      user.avatar || '',
-      text,
-      imgData
-    );
+    try {
+      await dmService.sendMessage(
+        user.uid,
+        selectedChat.otherUserId,
+        selectedChat.otherUserName,
+        selectedChat.otherUserAvatar,
+        user.name || user.email || 'Team Member',
+        user.avatar || '',
+        text,
+        imgData
+      );
+      await dmService.markChatRead(user.uid, selectedChat.chatId);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'Message failed', description: 'Unable to send this message right now.' });
+    }
   };
 
   const handleAcceptRequest = async () => {
     if (!user || !selectedChat) return;
     await dmService.acceptChatRequest(user.uid, selectedChat.chatId);
+    toast({ title: 'Request accepted', description: `You can now chat with ${selectedChat.otherUserName}.` });
   };
 
   const handleDeclineRequest = async () => {
@@ -202,7 +218,7 @@ export default function DMPage() {
     setIsNewChatOpen(true);
   };
 
-  // Called whenever the search input changes — auto-lookup if valid email
+  // Called whenever the search input changes - auto-lookup if valid email
   const handleSearchChange = (value: string) => {
     setSearchUser(value);
     const normalized = normalizeEmail(value);
@@ -264,7 +280,7 @@ export default function DMPage() {
       });
       setEmailLookupResult('invited');
       toast({
-        title: '📧 Invitation Sent',
+        title: 'Invitation Sent',
         description: `An invite to join Infralith has been sent to ${searchUser.trim()}.`,
       });
     } catch (error) {
@@ -288,9 +304,12 @@ export default function DMPage() {
       otherUserAvatar: targetUser.avatar || '',
       lastMessage: '',
       timestamp: Date.now(),
-      status: 'accepted'
+      status: 'accepted',
+      unreadCount: 0,
     };
+    setChats((prev) => [newChatSession, ...prev.filter((c) => c.chatId !== newChatSession.chatId)]);
     setSelectedChat(newChatSession);
+    setMessages([]);
     setIsNewChatOpen(false);
   };
 
@@ -343,7 +362,16 @@ export default function DMPage() {
                     </ScrollArea>
                     <Button className="w-full bg-[#f59e0b] hover:bg-[#d97706] text-white font-bold shadow-lg" onClick={async () => {
                       if (!user) return;
-                      await dmService.createGroup(user.uid, user.name, user.avatar || '', groupName, selectedEngineers);
+                      const trimmedGroupName = groupName.trim();
+                      if (!trimmedGroupName) {
+                        toast({ variant: 'destructive', title: 'Group name required' });
+                        return;
+                      }
+                      if (selectedEngineers.length === 0) {
+                        toast({ variant: 'destructive', title: 'Select at least one teammate' });
+                        return;
+                      }
+                      await dmService.createGroup(user.uid, user.name, user.avatar || '', trimmedGroupName, selectedEngineers);
                       toast({ title: "Group Created", description: `Added ${selectedEngineers.length} engineers to ${groupName || 'New Group'}` });
                       setIsGroupDialogActive(false);
                       setGroupName('');
@@ -398,7 +426,7 @@ export default function DMPage() {
                         {emailLookupResult === 'found_member' && emailLookupUser && (
                           <>
                             <p className="font-bold text-emerald-700 dark:text-emerald-400">User found on Infralith portal</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} · {emailLookupUser.email}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} - {emailLookupUser.email}</p>
                             <button
                               onClick={() => startChatWithUser(emailLookupUser)}
                               className="mt-3 w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg py-2 text-sm font-bold transition-colors"
@@ -410,7 +438,7 @@ export default function DMPage() {
                         {emailLookupResult === 'found_not_member' && emailLookupUser && (
                           <>
                             <p className="font-bold text-amber-700 dark:text-amber-400">On Infralith, not in this workspace</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} · {emailLookupUser.email}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} - {emailLookupUser.email}</p>
                             <button
                               onClick={handleSendInvite}
                               className="mt-3 w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg py-2 text-sm font-bold transition-colors"
@@ -519,7 +547,14 @@ export default function DMPage() {
                     <p className={cn("text-[13px] truncate pr-2 leading-snug", chat.status === 'pending' ? "font-bold text-slate-800 dark:text-slate-100" : "text-slate-500 dark:text-slate-400")}>
                       {chat.status === 'pending' ? "New Message Request" : (chat.lastMessage || 'Sent an attachment')}
                     </p>
-                    {chat.status === 'pending' && <span className="text-[10px] font-black uppercase text-slate-800 dark:text-slate-200">Req</span>}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {chat.status === 'pending' && <span className="text-[10px] font-black uppercase text-slate-800 dark:text-slate-200">Req</span>}
+                      {!!chat.unreadCount && chat.unreadCount > 0 && (
+                        <span className="text-[10px] font-black text-white bg-[#f59e0b] rounded-full px-1.5 py-0.5">
+                          {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </button>
@@ -545,9 +580,9 @@ export default function DMPage() {
             {/* Header */}
             <div className="px-8 py-5 flex items-center justify-between bg-white dark:bg-slate-900 z-10 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-4">
-                <Button variant="ghost" size="sm" className="md:hidden mr-1 -ml-3" onClick={() => setSelectedChat(null)}>
-                  ←
-                </Button>
+	                <Button variant="ghost" size="sm" className="md:hidden mr-1 -ml-3" onClick={() => setSelectedChat(null)}>
+	                  {'<'}
+	                </Button>
                 <Avatar className="h-12 w-12 border border-black/5 shadow-sm rounded-full bg-slate-100">
                   <AvatarImage src={selectedChat.otherUserAvatar} />
                   <AvatarFallback className="text-slate-600 font-bold bg-slate-100 text-lg">{selectedChat.otherUserName[0]}</AvatarFallback>
@@ -565,16 +600,16 @@ export default function DMPage() {
                 <Button className="bg-[#1d4ed8] hover:bg-[#1e40af] text-white shadow-md shadow-blue-500/20 h-10 px-5 rounded-full font-bold transition-all gap-2" onClick={() => {
                   if (!user || !selectedChat) return;
                   const meetLink = `${window.location.origin}/meet/room-${Math.floor(Math.random() * 1000000)}`;
-                  dmService.sendMessage(
-                    user.uid,
-                    selectedChat.otherUserId,
-                    selectedChat.otherUserName,
-                    selectedChat.otherUserAvatar,
-                    user.name,
-                    user.avatar || '',
-                    `🎥 Please join my secure video meeting: ${meetLink}`,
-                    null
-                  );
+	                  dmService.sendMessage(
+	                    user.uid,
+	                    selectedChat.otherUserId,
+	                    selectedChat.otherUserName,
+	                    selectedChat.otherUserAvatar,
+	                    user.name || user.email || 'Team Member',
+	                    user.avatar || '',
+	                    `Please join my secure video meeting: ${meetLink}`,
+	                    null
+	                  );
                   toast({ title: "Meeting Started", description: "Secure video meeting link sent." });
                 }}>
                   <Video className="h-4 w-4" /> <span className="hidden sm:inline">Meet</span>
@@ -755,3 +790,5 @@ export default function DMPage() {
     </div>
   );
 }
+
+
