@@ -61,10 +61,12 @@ import {
     GeometricReconstruction,
     RoofGeometry,
     ConstructionConflict,
-    AIAsset
+    AIAsset,
+    SiteReconstruction,
 } from '@/ai/flows/infralith/reconstruction-types';
 import {
     processBlueprintTo3D,
+    processBlueprintToSite3D,
     generateBuildingFromDescription,
     generateRealTimeAsset,
 } from '@/ai/flows/infralith/blueprint-to-3d-agent';
@@ -206,6 +208,106 @@ const computeRoomCenter = (polygon: [number, number][] | null | undefined): [num
 
 const stairsSemanticRegex = /\bstair(?:case)?s?\b|\bstairwell\b|\bup\b|\bdn\b|\bdown\b/i;
 
+const clampUnit = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+
+const getAdaptiveWallPbr = (wall: any) => {
+    const thickness = Math.max(0.08, Number(wall?.thickness || 0.115));
+    const height = Math.max(2.2, Number(wall?.height || 2.8));
+    const thicknessRatio = clampUnit(thickness / 0.23, 0.45, 1.9);
+    const heightRatio = clampUnit(height / 3.4, 0.55, 1.3);
+    const exteriorBoost = wall?.is_exterior ? -0.06 : 0.04;
+    return {
+        roughness: clampUnit(0.78 - (thicknessRatio * 0.1) + exteriorBoost, 0.46, 0.9),
+        metalness: clampUnit(0.03 + (thicknessRatio - 1) * 0.02, 0.01, 0.12),
+        clearcoat: clampUnit(0.1 + (heightRatio * 0.08), 0.08, 0.26),
+        clearcoatRoughness: clampUnit(0.74 + (thicknessRatio * 0.08), 0.58, 0.9),
+        reflectivity: clampUnit(0.12 + (wall?.is_exterior ? 0.08 : 0), 0.08, 0.32),
+    };
+};
+
+const getAdaptiveFloorPbr = (room: any) => {
+    const area = Math.max(1, Number(room?.area || 8));
+    const areaRatio = clampUnit(Math.sqrt(area) / 7.5, 0.35, 1.45);
+    return {
+        roughness: clampUnit(0.66 - areaRatio * 0.12, 0.38, 0.82),
+        metalness: clampUnit(0.04 + areaRatio * 0.06, 0.02, 0.14),
+        clearcoat: clampUnit(0.14 + areaRatio * 0.14, 0.1, 0.32),
+        clearcoatRoughness: clampUnit(0.2 + (1 - areaRatio) * 0.15, 0.1, 0.38),
+        reflectivity: clampUnit(0.18 + areaRatio * 0.12, 0.12, 0.34),
+    };
+};
+
+const getAdaptiveRoofPbr = (roof: RoofGeometry) => {
+    const heightRatio = clampUnit((Number(roof?.height || 1.5)) / 2.6, 0.25, 1.4);
+    const typeBoost = roof?.type === 'flat' ? 0.05 : -0.04;
+    return {
+        roughness: clampUnit(0.64 + typeBoost + heightRatio * 0.05, 0.44, 0.84),
+        metalness: clampUnit(0.03 + (roof?.type === 'flat' ? 0.03 : 0.01), 0.01, 0.12),
+        clearcoat: clampUnit(0.1 + heightRatio * 0.1, 0.08, 0.28),
+        clearcoatRoughness: clampUnit(0.62 + (1 - heightRatio) * 0.12, 0.46, 0.82),
+        reflectivity: clampUnit(0.14 + (roof?.type === 'gable' ? 0.05 : 0.02), 0.1, 0.32),
+    };
+};
+
+const getAdaptiveAssetPartPbr = (material: AIAsset['parts'][number]['material']) => {
+    if (material === 'glass') {
+        return {
+            roughness: 0.07,
+            metalness: 0.02,
+            transmission: 0.86,
+            ior: 1.46,
+            thickness: 0.05,
+            clearcoat: 0.7,
+            clearcoatRoughness: 0.08,
+            reflectivity: 0.9,
+            transparent: true,
+            opacity: 0.42,
+        };
+    }
+    if (material === 'metal') {
+        return {
+            roughness: 0.24,
+            metalness: 0.9,
+            clearcoat: 0.32,
+            clearcoatRoughness: 0.2,
+            reflectivity: 0.86,
+            transparent: false,
+            opacity: 1,
+        };
+    }
+    if (material === 'stone') {
+        return {
+            roughness: 0.82,
+            metalness: 0.02,
+            clearcoat: 0.06,
+            clearcoatRoughness: 0.82,
+            reflectivity: 0.1,
+            transparent: false,
+            opacity: 1,
+        };
+    }
+    if (material === 'cloth') {
+        return {
+            roughness: 0.9,
+            metalness: 0,
+            clearcoat: 0.01,
+            clearcoatRoughness: 0.96,
+            reflectivity: 0.04,
+            transparent: false,
+            opacity: 1,
+        };
+    }
+    return {
+        roughness: material === 'wood' ? 0.54 : 0.68,
+        metalness: material === 'wood' ? 0.08 : 0.04,
+        clearcoat: material === 'wood' ? 0.26 : 0.1,
+        clearcoatRoughness: material === 'wood' ? 0.4 : 0.72,
+        reflectivity: material === 'wood' ? 0.24 : 0.12,
+        transparent: false,
+        opacity: 1,
+    };
+};
+
 const buildWalkthroughInteractables = (model: GeometricReconstruction | null | undefined): WalkthroughInteractable[] => {
     if (!model) return [];
     const interactables: WalkthroughInteractable[] = [];
@@ -240,13 +342,25 @@ const buildWalkthroughInteractables = (model: GeometricReconstruction | null | u
         const typeLabel = String(item.type || '').trim();
         const descLabel = String(item.description || '').trim();
         const baseLabel = typeLabel || descLabel || 'Item';
+        const isStairItem = stairsSemanticRegex.test(`${typeLabel} ${descLabel}`);
         const collectible = /\b(ammo|med|kit|bandage|key|flashlight|torch|tool|hammer|wrench|extinguisher|gun|rifle|pistol|battery|radio)\b/i.test(
             `${typeLabel} ${descLabel}`
         );
         const floorLevel = normalizeFloorLevel(item.floor_level);
-        const id = `furniture-${String(item.id)}`;
+        const id = isStairItem ? `stairs-furniture-${String(item.id)}` : `furniture-${String(item.id)}`;
         if (seen.has(id)) continue;
         seen.add(id);
+        if (isStairItem) {
+            interactables.push({
+                id,
+                label: baseLabel.slice(0, 48) || 'Stairs',
+                type: 'stairs',
+                position: [x, z],
+                floorLevel,
+                useHint: 'Use Stairs (Change Floor)',
+            });
+            continue;
+        }
         interactables.push({
             id,
             label: baseLabel.slice(0, 48),
@@ -425,6 +539,7 @@ function RoofMesh({ roof }: { roof: RoofGeometry }) {
     const maxZ = Math.max(...roof.polygon.map(p => p[1]));
     const centerX = (minX + maxX) / 2;
     const overhang = 0.4;
+    const roofPbr = getAdaptiveRoofPbr(roof);
 
     if (roof.type === 'gable') {
         const left = new THREE.BufferGeometry();
@@ -473,13 +588,13 @@ function RoofMesh({ roof }: { roof: RoofGeometry }) {
             <group>
                 {[left, right, front, back].map((geo, i) => (
                     <mesh key={i} geometry={geo} castShadow receiveShadow>
-                        <meshStandardMaterial color={roofColor} roughness={0.65} side={THREE.DoubleSide} />
+                        <meshPhysicalMaterial color={roofColor} side={THREE.DoubleSide} {...roofPbr} />
                     </mesh>
                 ))}
                 {/* Ridge cap */}
                 <mesh position={[centerX, peakY + 0.02, (minZ + maxZ) / 2]}>
                     <boxGeometry args={[0.15, 0.06, maxZ - minZ + overhang * 2]} />
-                    <meshStandardMaterial color="#7a3f1d" roughness={0.5} />
+                    <meshPhysicalMaterial color="#7a3f1d" {...roofPbr} />
                 </mesh>
             </group>
         );
@@ -489,7 +604,7 @@ function RoofMesh({ roof }: { roof: RoofGeometry }) {
     return (
         <mesh position={[(minX + maxX) / 2, baseY + 0.05, (minZ + maxZ) / 2]} castShadow receiveShadow>
             <boxGeometry args={[maxX - minX + 0.6, 0.12, maxZ - minZ + 0.6]} />
-            <meshStandardMaterial color={roofColor} roughness={0.6} />
+            <meshPhysicalMaterial color={roofColor} {...roofPbr} />
         </mesh>
     );
 }
@@ -498,7 +613,7 @@ function RoofMesh({ roof }: { roof: RoofGeometry }) {
 const SkirtingBoard = ({ width, depth, yOffset = 0.05, height = 0.1 }: { width: number, depth: number, yOffset?: number, height?: number }) => (
     <mesh position={[0, yOffset, 0]} receiveShadow>
         <boxGeometry args={[width, height, depth + 0.02]} />
-        <meshStandardMaterial color="#d4cdc3" roughness={0.6} />
+        <meshPhysicalMaterial color="#d4cdc3" roughness={0.62} metalness={0.03} clearcoat={0.08} clearcoatRoughness={0.7} reflectivity={0.12} />
     </mesh>
 );
 
@@ -543,12 +658,9 @@ function AIAssetRenderer({ description, width, height, depth, fallbackColor, isW
             {asset.parts.map((part, i) => (
                 <mesh key={i} position={part.position as [number, number, number]} castShadow receiveShadow>
                     <boxGeometry args={part.size as [number, number, number]} />
-                    <meshStandardMaterial
+                    <meshPhysicalMaterial
                         color={part.color}
-                        roughness={part.material === 'glass' || part.material === 'metal' ? 0.2 : 0.8}
-                        metalness={part.material === 'metal' ? 0.9 : 0.1}
-                        transparent={part.material === 'glass'}
-                        opacity={part.material === 'glass' ? 0.45 : 1}
+                        {...getAdaptiveAssetPartPbr(part.material)}
                     />
                 </mesh>
             ))}
@@ -594,11 +706,11 @@ function AnimatedDoorLeaf({
         <group ref={hingeRef} position={[hingeX, doorHeight / 2 - wallHeight / 2, 0]}>
             <mesh position={[leafOffset, 0, 0]} castShadow receiveShadow>
                 <boxGeometry args={[doorWidth, doorHeight, doorDepth]} />
-                <meshStandardMaterial color={door.color || "#8b4513"} roughness={0.5} metalness={0.08} />
+                <meshPhysicalMaterial color={door.color || "#8b4513"} roughness={0.52} metalness={0.08} clearcoat={0.28} clearcoatRoughness={0.42} reflectivity={0.24} />
             </mesh>
             <mesh position={[leafOffset + (hingeOnRight ? -doorWidth * 0.32 : doorWidth * 0.32), 0, doorDepth * 0.58]} castShadow>
                 <boxGeometry args={[0.06, 0.06, 0.06]} />
-                <meshStandardMaterial color="#d9d3c7" metalness={0.7} roughness={0.25} />
+                <meshPhysicalMaterial color="#d9d3c7" roughness={0.22} metalness={0.88} clearcoat={0.36} clearcoatRoughness={0.2} reflectivity={0.84} />
             </mesh>
         </group>
     );
@@ -667,7 +779,7 @@ const WallSegment = React.memo(function WallSegment({
                         ) : (
                             <boxGeometry args={[len, wall.height, wall.thickness]} />
                         )}
-                        <meshStandardMaterial color={wall.color || defaultColor} roughness={0.7} />
+                        <meshPhysicalMaterial color={wall.color || defaultColor} {...getAdaptiveWallPbr(wall)} />
                         <Edges color="#00000020" threshold={15} />
                     </mesh>
 
@@ -782,13 +894,24 @@ function GeneratedStructure({
         minZ: Math.min(...allZ),
         maxZ: Math.max(...allZ),
     };
+    const wallHeightByFloor = new Map<number, number>();
+    for (const wall of data.walls || []) {
+        const floorLevel = normalizeFloorLevel(wall.floor_level);
+        const wallHeight = Math.max(2.2, Number(wall.height || 2.8));
+        const current = wallHeightByFloor.get(floorLevel) || 0;
+        wallHeightByFloor.set(floorLevel, Math.max(current, wallHeight));
+    }
+    const resolveFloorHeight = (floorLevel: number) => wallHeightByFloor.get(floorLevel) || 2.8;
+    const groundPbr = { roughness: 0.88, metalness: 0.01, clearcoat: 0.03, clearcoatRoughness: 0.88, reflectivity: 0.08 };
+    const slabPbr = { roughness: 0.82, metalness: 0.02, clearcoat: 0.05, clearcoatRoughness: 0.8, reflectivity: 0.08 };
+    const ceilingPbr = { roughness: 0.9, metalness: 0, clearcoat: 0.02, clearcoatRoughness: 0.9, reflectivity: 0.04 };
 
     return (
         <group ref={groupRef}>
             {/* Ground / Lawn */}
             <mesh position={[0, -0.05, 0]} receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
                 <planeGeometry args={[100, 100]} />
-                <meshStandardMaterial color="#6b9e5b" roughness={0.9} />
+                <meshPhysicalMaterial color="#6b9e5b" {...groundPbr} />
             </mesh>
             {/* Subtle ground grid */}
             <gridHelper args={[100, 100, "#5a8a4d", "#5a8a4d"]} position={[0, 0.005, 0]} />
@@ -796,7 +919,7 @@ function GeneratedStructure({
             {/* Pathway from gate to entrance */}
             <mesh position={[(bounds.minX + bounds.maxX) / 2, 0.01, bounds.minZ - 1.5]} rotation={[-Math.PI / 2, 0, 0]}>
                 <planeGeometry args={[2, 4]} />
-                <meshStandardMaterial color="#b8a68a" roughness={0.8} />
+                <meshPhysicalMaterial color="#b8a68a" roughness={0.7} metalness={0.05} clearcoat={0.14} clearcoatRoughness={0.36} reflectivity={0.18} />
             </mesh>
 
             {p > 0 && (
@@ -812,7 +935,7 @@ function GeneratedStructure({
                         return (
                             <mesh key={`slab - ${lvl} `} position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
                                 <planeGeometry args={[sizeX, sizeZ]} />
-                                <meshStandardMaterial color="#f0f0f0" roughness={0.9} transparent opacity={0.15} />
+                                <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.15} {...slabPbr} />
                             </mesh>
                         );
                     })}
@@ -825,7 +948,9 @@ function GeneratedStructure({
                             else shape.lineTo(pt[0], pt[1]);
                         });
                         shape.closePath();
-                        const zPos = (room.floor_level || 0) * 2.8;
+                        const floorLevel = normalizeFloorLevel(room.floor_level);
+                        const zPos = floorLevel * 2.8;
+                        const ceilingY = zPos + resolveFloorHeight(floorLevel) - 0.02;
 
                         return (
                             <group key={`room - ${i} `}>
@@ -835,10 +960,19 @@ function GeneratedStructure({
                                     onPointerOut={() => { document.body.style.cursor = 'auto'; }}
                                 >
                                     <shapeGeometry args={[shape]} />
-                                    <meshStandardMaterial
+                                    <meshPhysicalMaterial
                                         color={room.floor_color || defaultFloor}
-                                        roughness={0.7}
-                                        metalness={0.05}
+                                        {...getAdaptiveFloorPbr(room)}
+                                    />
+                                </mesh>
+                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
+                                    <shapeGeometry args={[shape]} />
+                                    <meshPhysicalMaterial
+                                        color="#f4f1eb"
+                                        {...ceilingPbr}
+                                        side={THREE.DoubleSide}
+                                        transparent
+                                        opacity={isWalkthrough ? 0.52 : 0.2}
                                     />
                                 </mesh>
                             </group>
@@ -1599,6 +1733,9 @@ function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
 function BlueprintWorkspace() {
     const { toast } = useToast();
     const [mode, setMode] = useState<'upload' | 'describe'>('upload');
+    const [siteModeEnabled, setSiteModeEnabled] = useState(false);
+    const [siteResult, setSiteResult] = useState<SiteReconstruction | null>(null);
+    const [activeSiteBuildingId, setActiveSiteBuildingId] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     const [description, setDescription] = useState('');
     const [status, setStatus] = useState<'idle' | 'preprocessing' | 'analyzing' | 'generating' | 'complete'>('idle');
@@ -1633,6 +1770,10 @@ function BlueprintWorkspace() {
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
     const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
     const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
+    const activeSiteBuilding = useMemo(
+        () => siteResult?.buildings.find((building) => building.id === activeSiteBuildingId) || null,
+        [siteResult, activeSiteBuildingId]
+    );
 
     const summarizeReconstruction = (result: GeometricReconstruction | null | undefined) => ({
         walls: result?.walls?.length || 0,
@@ -1736,6 +1877,31 @@ function BlueprintWorkspace() {
             return next;
         });
     };
+
+    React.useEffect(() => {
+        if (!siteResult || siteResult.buildings.length === 0) {
+            setActiveSiteBuildingId(null);
+            return;
+        }
+        if (activeSiteBuildingId && siteResult.buildings.some((building) => building.id === activeSiteBuildingId)) {
+            return;
+        }
+        setActiveSiteBuildingId(siteResult.buildings[0].id);
+    }, [siteResult, activeSiteBuildingId]);
+
+    const handleSiteBuildingSelect = useCallback((buildingId: string) => {
+        if (!siteResult) return;
+        const selected = siteResult.buildings.find((building) => building.id === buildingId);
+        if (!selected) return;
+        setActiveSiteBuildingId(buildingId);
+        setElements(selected.model);
+        setStatus('complete');
+        setProgress(1);
+        toast({
+            title: 'Building Switched',
+            description: `${selected.name}: ${selected.floor_count} floor(s), ${selected.footprint_area.toFixed(0)} m² footprint.`,
+        });
+    }, [setElements, siteResult, toast]);
 
     React.useEffect(() => {
         if (isWalkthrough) return;
@@ -1869,6 +2035,8 @@ function BlueprintWorkspace() {
     const resetState = useCallback(() => {
         setPreview(null); setDescription('');
         setStatus('idle'); setProgress(0); setElements(null);
+        setSiteResult(null);
+        setActiveSiteBuildingId(null);
     }, [setElements]);
 
     const animateProgress = (result: GeometricReconstruction) => {
@@ -1917,9 +2085,46 @@ function BlueprintWorkspace() {
             setStatus('analyzing');
 
             const b64 = await fileToBase64(f);
-            logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', { base64Chars: b64.length });
-            const result = await processBlueprintTo3D(b64);
+            logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', {
+                base64Chars: b64.length,
+                siteModeEnabled,
+            });
 
+            if (siteModeEnabled) {
+                const site = await processBlueprintToSite3D(b64);
+                clearInterval(iv);
+                setSiteResult(site);
+                const primary = site.buildings[0];
+                if (primary) {
+                    setActiveSiteBuildingId(primary.id);
+                    logBlueprintFlow('Step 7/9 site decomposition result received.', {
+                        buildings: site.buildings.length,
+                        selected: primary.name,
+                        floors: primary.floor_count,
+                        footprintArea: primary.footprint_area,
+                    });
+                    animateProgress(primary.model);
+                    toast({
+                        title: 'Site Blueprint Parsed',
+                        description: `${site.buildings.length} building cluster(s) detected. Viewing ${primary.name}.`,
+                    });
+                } else {
+                    setActiveSiteBuildingId(null);
+                    logBlueprintFlow('Step 7/9 site decomposition produced no isolated buildings; fallback to source model.', {
+                        conflicts: site.conflicts.length,
+                    });
+                    animateProgress(site.source_model);
+                    toast({
+                        title: 'Site Mode Fallback',
+                        description: 'No separate building clusters detected. Showing consolidated model.',
+                    });
+                }
+                return;
+            }
+
+            setSiteResult(null);
+            setActiveSiteBuildingId(null);
+            const result = await processBlueprintTo3D(b64);
             clearInterval(iv);
             logBlueprintFlow('Step 7/9 structured geometry received from AI pipeline.', summarizeReconstruction(result));
             animateProgress(result);
@@ -1938,6 +2143,8 @@ function BlueprintWorkspace() {
             toast({ title: 'Empty Description', description: 'Please describe the building you want.', variant: 'destructive' });
             return;
         }
+        setSiteResult(null);
+        setActiveSiteBuildingId(null);
         setStatus('analyzing'); setProgress(0);
         let cur = 0;
         const iv = setInterval(() => { cur += 0.012; if (cur <= 0.45) setProgress(cur); }, 80);
@@ -1990,6 +2197,8 @@ function BlueprintWorkspace() {
         setStatus('analyzing'); setProgress(0.5);
         const result = await loadModel(id);
         if (result.ok) {
+            setSiteResult(null);
+            setActiveSiteBuildingId(null);
             setStatus('complete'); setProgress(1);
             setShowProjects(false);
             toast({ title: "Project Loaded", description: "Successfully retrieved from Azure Cosmos DB." });
@@ -2021,6 +2230,24 @@ function BlueprintWorkspace() {
                                     <Layers className="h-4 w-4 mr-2" /> My Projects
                                 </Button>
                             </div>
+                            {siteResult && siteResult.buildings.length > 0 && (
+                                <div className="flex items-center gap-2 bg-white/40 backdrop-blur-md p-1.5 rounded-2xl border border-white/40 shadow-sm pointer-events-auto">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-600 px-2">
+                                        Site
+                                    </span>
+                                    <select
+                                        value={activeSiteBuildingId || siteResult.buildings[0].id}
+                                        onChange={(e) => handleSiteBuildingSelect(e.target.value)}
+                                        className="h-10 min-w-[220px] rounded-xl bg-white/80 border border-white/60 px-3 text-[11px] font-bold text-slate-700 focus:outline-none"
+                                    >
+                                        {siteResult.buildings.map((building) => (
+                                            <option key={building.id} value={building.id}>
+                                                {building.name} ({building.floor_count}F, {building.footprint_area.toFixed(0)}m²)
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex items-center gap-3 pointer-events-auto">
@@ -2365,6 +2592,24 @@ function BlueprintWorkspace() {
                             >
                                 <User className="h-3 w-3 mr-1.5" /> Human
                             </Button>
+                            {siteResult && siteResult.buildings.length > 0 && (
+                                <div className="flex items-center gap-1.5 pl-1">
+                                    <Badge className="h-7 bg-primary/10 border-primary/30 text-primary text-[9px] font-black uppercase tracking-widest px-2">
+                                        Site: {siteResult.buildings.length}
+                                    </Badge>
+                                    <select
+                                        value={activeSiteBuildingId || siteResult.buildings[0].id}
+                                        onChange={(e) => handleSiteBuildingSelect(e.target.value)}
+                                        className="h-7 min-w-[200px] rounded-lg bg-background/80 border border-white/20 px-2 text-[10px] font-bold text-foreground focus:outline-none"
+                                    >
+                                        {siteResult.buildings.map((building) => (
+                                            <option key={building.id} value={building.id}>
+                                                {building.name} ({building.floor_count}F)
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <div className="w-[1px] h-3 bg-white/20 mx-1" />
                             <Button variant="ghost" size="sm" className="h-7 text-muted-foreground hover:bg-white/5 text-[9px] font-black uppercase tracking-wider px-2" onClick={() => downloadStringAsFile(exportToSVG(elements, activeFloor), 'floorplan.svg', 'image/svg+xml')}>
                                 <FileCode className="h-3 w-3 mr-1.5" /> SVG
@@ -2468,8 +2713,24 @@ function BlueprintWorkspace() {
                                         openedDoorIds={walkOpenedDoorIds}
                                         hiddenFurnitureIds={walkCollectedItemIds}
                                     />
-                                    <Environment preset="apartment" />
-                                    <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2.5} far={15} />
+                                    {(() => {
+                                        const isNight = timeOfDay < 6 || timeOfDay > 18;
+                                        const envPreset = isNight
+                                            ? 'city'
+                                            : (timeOfDay < 9 || timeOfDay > 16 ? 'sunset' : 'apartment');
+                                        return (
+                                            <>
+                                                <Environment preset={envPreset as any} />
+                                                <ContactShadows
+                                                    position={[0, -0.01, 0]}
+                                                    opacity={isNight ? 0.34 : 0.46}
+                                                    scale={isNight ? 34 : 42}
+                                                    blur={isNight ? 3.2 : 2.2}
+                                                    far={isNight ? 14 : 18}
+                                                />
+                                            </>
+                                        );
+                                    })()}
 
                                     <EffectComposer>
                                         <SSAO
@@ -2565,11 +2826,16 @@ function BlueprintWorkspace() {
                         {status === 'complete' && !isFullscreen && (
                             <div className="absolute top-20 right-6 flex flex-col gap-2">
                                 <Badge className="bg-primary/20 backdrop-blur-md border-primary/30 text-primary font-black uppercase text-[10px] py-1 px-3 tracking-widest shadow-xl">
-                                    {elements?.building_name || 'BUILDING'}
+                                    {activeSiteBuilding?.name || elements?.building_name || 'BUILDING'}
                                 </Badge>
                                 <Badge className="bg-background/60 backdrop-blur-md border-border text-foreground/70 font-black uppercase text-[10px] py-1 px-3 tracking-widest shadow-xl">
                                     WALLS: {elements?.walls.length} | ROOMS: {elements?.rooms?.length || 0}
                                 </Badge>
+                                {siteResult && siteResult.buildings.length > 0 && (
+                                    <Badge className="bg-sky-500/15 backdrop-blur-md border-sky-500/30 text-sky-500 font-black uppercase text-[10px] py-1 px-3 tracking-widest shadow-xl">
+                                        SITE MODE: {siteResult.buildings.length} BUILDINGS
+                                    </Badge>
+                                )}
                                 {(elements?.conflicts?.length || 0) > 0 && (
                                     <Badge className="bg-red-500/15 backdrop-blur-md border-red-500/30 text-red-500 font-black uppercase text-[10px] py-1 px-3 tracking-widest shadow-xl">
                                         ⚠ {elements?.conflicts.length} ISSUE{(elements?.conflicts?.length || 0) > 1 ? 'S' : ''}
@@ -2783,6 +3049,20 @@ function BlueprintWorkspace() {
                                                 ))}
                                             </div>
                                         </div>
+                                        <label className="flex items-start gap-3 p-3 rounded-xl border border-border/70 bg-secondary/20 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                className="mt-0.5 h-4 w-4 accent-[#f97316]"
+                                                checked={siteModeEnabled}
+                                                onChange={(e) => setSiteModeEnabled(e.target.checked)}
+                                            />
+                                            <span className="text-[12px] leading-relaxed text-muted-foreground">
+                                                <span className="font-black uppercase tracking-wider text-foreground text-[10px] block mb-0.5">
+                                                    Site Mode (Society / Master Plan)
+                                                </span>
+                                                Enable this when one drawing contains multiple buildings or blocks. The engine will split and return building-wise models.
+                                            </span>
+                                        </label>
                                         <input type="file" id="blueprint-upload-centered" className="hidden" accept=".png,.jpg,.jpeg,.webp,image/*" onChange={handleFileUpload} />
                                         <Button
                                             onClick={() => document.getElementById('blueprint-upload-centered')?.click()}

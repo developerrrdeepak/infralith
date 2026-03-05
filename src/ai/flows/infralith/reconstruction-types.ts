@@ -129,3 +129,24 @@ export interface GeometricReconstruction {
     is_vision_only?: boolean;
 }
 
+export interface SiteBuildingReconstruction {
+    id: string;
+    name: string;
+    footprint_area: number;
+    floor_count: number;
+    bounds: {
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
+    };
+    model: GeometricReconstruction;
+}
+
+export interface SiteReconstruction {
+    site_name?: string;
+    buildings: SiteBuildingReconstruction[];
+    conflicts: ConstructionConflict[];
+    source_model: GeometricReconstruction;
+}
+

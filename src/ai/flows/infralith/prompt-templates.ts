@@ -4,6 +4,7 @@ const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
 const PROMPT_LINE_BBOX_LIMIT = 48;
 const PROMPT_LINE_TEXT_LIMIT = 22;
 const PROMPT_FLOOR_LABEL_LIMIT = 10;
+const PROMPT_SEMANTIC_ANCHOR_LIMIT = 24;
 
 const toFinite = (value: unknown): number | null => {
   const n = Number(value);
@@ -95,6 +96,14 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     }))
     .filter((entry) => Array.isArray(entry.bbox));
 
+  const semanticAnchors = (layoutHints.semanticAnchors || [])
+    .slice(0, PROMPT_SEMANTIC_ANCHOR_LIMIT)
+    .map((anchor) => ({
+      text: String(anchor?.text || '').slice(0, 96),
+      bbox: polygonToBoundingBox(anchor?.polygon || []),
+    }))
+    .filter((entry) => Array.isArray(entry.bbox));
+
   return JSON.stringify({
     caveat: "OCR line polygons are text-location boxes and are not wall vectors.",
     pageCount: layoutHints.pageCount || pageSummary.length,
@@ -106,6 +115,8 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
     sampledDimensionAnchors: dimensionAnchors,
     floorLabelAnchorCount: layoutHints.floorLabelAnchors?.length || 0,
     sampledFloorLabelAnchors: floorLabels,
+    semanticAnchorCount: layoutHints.semanticAnchors?.length || 0,
+    sampledSemanticAnchors: semanticAnchors,
   }, null, 2);
 };
 
@@ -176,10 +187,17 @@ MANDATORY PIPELINE:
 - If room dimension annotations are visible (e.g., 12'x14', 3.5m x 4.2m), align room polygon width/depth and location to those annotations.
 - Avoid cloning uniform room-size grids across floors unless the blueprint explicitly shows identical partitions.
 
+5.5) FOOTPRINT + AREA ADAPTATION (MANDATORY)
+- Derive footprint profile from outer wall polygon: shape class (compact/elongated/irregular) and usable area.
+- Room count and room-size distribution MUST scale with footprint area; do not reuse a fixed template split.
+- For elongated footprints, preserve linear zoning/circulation and avoid forcing square room clusters.
+- For compact footprints, avoid excessive corridor-heavy partitioning.
+- For irregular/non-Manhattan footprints, preserve boundary character and fit room polygons to that geometry.
+
 6) ROOF FOOTPRINT
 - Set roof polygon from the outer building shell.
 - Keep roof aligned with shell geometry.
-- If roof type is unclear, use "flat".
+- If roof type is unclear, infer from footprint profile (elongated -> likely gable, compact-medium/large -> likely hip, irregular -> flat).
 
 7) FURNITURE POLICY
 - Furniture is optional and conservative.
