@@ -1,4 +1,5 @@
 import type { BlueprintLayoutHints } from "@/ai/azure-ai";
+import { buildArchitecturalLineSemanticsReference } from "./architectural-line-semantics";
 
 const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
 const PROMPT_LINE_BBOX_LIMIT = 48;
@@ -158,6 +159,9 @@ MANDATORY PIPELINE:
 - Medium confidence: readable dimension annotations and room labels.
 - Lowest confidence: OCR text line boxes (text layout only, not wall geometry).
 - Never promote low-confidence text layout hints over clear drawing geometry.
+
+ARCHITECTURAL SEMANTICS (MANDATORY):
+${buildArchitecturalLineSemanticsReference()}
 
 2) STRUCTURAL GRAPH FIRST (JUNCTION -> EDGE -> WALL)
 - Detect wall junction candidates and wall edge candidates first.

@@ -21,6 +21,7 @@ import {
   buildBlueprintVisionPrompt,
   buildTextToBuildingPrompt,
 } from './prompt-templates';
+import { assessOpeningSemantics } from './architectural-line-semantics';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import path from 'path';
@@ -2115,10 +2116,19 @@ const mergeOpeningsFromRecovery = (
   };
 };
 
+type OpeningRecoveryDecision = {
+  shouldAttempt: boolean;
+  reasons: string[];
+  semanticScore: number;
+  semanticConfidence: number;
+  promptGuidance: string;
+};
+
 const shouldAttemptOpeningRecovery = (
   result: GeometricReconstruction,
   layoutHints: BlueprintLayoutHints | null
-): boolean => {
+): OpeningRecoveryDecision => {
+  const semanticAssessment = assessOpeningSemantics(layoutHints, result);
   const floorSignals = estimateFloorHintCount(layoutHints);
   const inferredFloorCount = Math.max(1, estimateResultFloorCount(result));
   const walls = result?.walls?.length || 0;
@@ -2126,12 +2136,35 @@ const shouldAttemptOpeningRecovery = (
   const openings = getOpeningCount(result);
   const openingsPerFloor = openings / inferredFloorCount;
   const roomsPerFloor = rooms / inferredFloorCount;
+  const reasons: string[] = [...semanticAssessment.reasons];
 
-  if (Math.max(floorSignals, inferredFloorCount) < 2) return false;
-  if (walls < 10 || rooms < 6) return false;
-  if (openings >= Math.max(6, Math.round(walls * 0.45))) return false;
+  const strictMultiFloorEligible =
+    Math.max(floorSignals, inferredFloorCount) >= 2 &&
+    walls >= 10 &&
+    rooms >= 6 &&
+    openings < Math.max(6, Math.round(walls * 0.45)) &&
+    openingsPerFloor < Math.max(0.7, roomsPerFloor * 0.5);
 
-  return openingsPerFloor < Math.max(0.7, roomsPerFloor * 0.5);
+  const relaxedFallbackEligible =
+    walls >= 8 &&
+    rooms >= 3 &&
+    openings < Math.max(2, Math.round(walls * 0.22));
+
+  const shouldAttempt = strictMultiFloorEligible || semanticAssessment.shouldAttemptRecovery || relaxedFallbackEligible;
+  if (strictMultiFloorEligible) {
+    reasons.push("Multi-floor topology indicates missing openings relative to wall/room density.");
+  }
+  if (relaxedFallbackEligible && !strictMultiFloorEligible) {
+    reasons.push("Relaxed opening gate activated: wall-room complexity suggests likely missed door/window symbols.");
+  }
+
+  return {
+    shouldAttempt,
+    reasons: reasons.slice(0, 5),
+    semanticScore: semanticAssessment.score,
+    semanticConfidence: semanticAssessment.confidence,
+    promptGuidance: semanticAssessment.promptGuidance,
+  };
 };
 
 const shouldAttemptInteriorLayoutRecovery = (
@@ -6226,28 +6259,37 @@ ROOM DIMENSION + POSITION ENFORCEMENT:
       }
     }
 
-    if (shouldAttemptOpeningRecovery(result, layoutHints) && canRunVisionPass('opening-recovery')) {
+    const openingDecision = shouldAttemptOpeningRecovery(result, layoutHints);
+    if (openingDecision.shouldAttempt && canRunVisionPass('opening-recovery')) {
       const baseScore = scoreReconstructionDensity(result, layoutHints);
       const baseOpenings = getOpeningCount(result);
       const openingRecoveryPromptSeed = `${prompt}
+
+${openingDecision.promptGuidance}
 
 OPENING-RECOVERY OVERRIDE:
 - Preserve all valid walls/rooms from the blueprint and avoid collapsing geometry.
 - Detect visible door symbols, arc swings, wall gaps, and window spans across all floors.
 - Populate doors[] and windows[] with proper host_wall_id mapping to reconstructed walls.
 - Prefer low-confidence openings over returning empty openings arrays when evidence exists.
+- Every uncertain line must be resolved via local topology first; when unresolved, emit conflict instead of suppressing all openings.
 `;
       const openingRecoveryPrompt = buildBlueprintRetryPrompt(
         openingRecoveryPromptSeed,
         [
           `Current reconstruction has ${result?.walls?.length || 0} wall(s), ${result?.rooms?.length || 0} room(s), but only ${result?.doors?.length || 0} door(s) and ${result?.windows?.length || 0} window(s).`,
+          `Opening semantics score ${openingDecision.semanticScore.toFixed(2)} (confidence ${openingDecision.semanticConfidence.toFixed(2)}).`,
+          ...openingDecision.reasons,
           'Recover openings without dropping wall or room topology.',
-        ]
+        ].slice(0, 6)
       );
 
       traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery pass triggered', {
         baseScore,
         baseOpenings,
+        semanticScore: openingDecision.semanticScore,
+        semanticConfidence: openingDecision.semanticConfidence,
+        reasons: openingDecision.reasons,
       }, 'warn');
 
       try {
@@ -6298,6 +6340,12 @@ OPENING-RECOVERY OVERRIDE:
           reason: error instanceof Error ? error.message : String(error),
         }, 'warn');
       }
+    } else if (!openingDecision.shouldAttempt) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'opening recovery not triggered by semantic gate', {
+        semanticScore: openingDecision.semanticScore,
+        semanticConfidence: openingDecision.semanticConfidence,
+        reasons: openingDecision.reasons,
+      });
     }
 
     const hintedFloorCount = estimateFloorHintCount(layoutHints);
