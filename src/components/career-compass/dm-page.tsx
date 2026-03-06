@@ -33,7 +33,7 @@ export default function DMPage() {
   const [isGroupDialogActive, setIsGroupDialogActive] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedEngineers, setSelectedEngineers] = useState<string[]>([]);
-  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found_member' | 'found_not_member' | 'not_found' | 'invited'>('idle');
+  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found_member' | 'not_found' | 'invited'>('idle');
   const [emailLookupUser, setEmailLookupUser] = useState<UserProfileData | null>(null);
   const latestLookupId = useRef(0);
   const lookupDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -259,8 +259,6 @@ export default function DMPage() {
           null;
         const isSelf = cachedMatch && cachedMatch.uid === user?.uid;
         const exists = !!cachedMatch && !isSelf;
-        // Placeholder: real workspace membership check would go here.
-        const workspaceMember = exists;
         const alreadyInvited = user ? inviteService.hasInvited(user.uid, normalized) : false;
 
         if (requestId !== latestLookupId.current) return; // stale response guard
@@ -273,7 +271,9 @@ export default function DMPage() {
 
         if (exists) {
           setEmailLookupUser(cachedMatch as UserProfileData);
-          setEmailLookupResult(workspaceMember ? 'found_member' : 'found_not_member');
+          // Product requirement: any portal-registered account is messageable by email,
+          // even when the sender is currently in Guest mode.
+          setEmailLookupResult('found_member');
           return;
         }
 
@@ -427,9 +427,7 @@ export default function DMPage() {
                     <div className={`rounded-xl border p-4 flex items-start gap-3 text-sm transition-all ${
                       emailLookupResult === 'found_member'
                         ? 'bg-emerald-500/5 border-emerald-500/20'
-                        : emailLookupResult === 'found_not_member'
-                          ? 'bg-amber-500/5 border-amber-500/20'
-                          : emailLookupResult === 'not_found'
+                        : emailLookupResult === 'not_found'
                             ? 'bg-orange-500/5 border-orange-500/20'
                             : emailLookupResult === 'invited'
                               ? 'bg-blue-500/5 border-blue-500/20'
@@ -437,7 +435,6 @@ export default function DMPage() {
                     }`}>
                       {emailLookupResult === 'loading' && <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin shrink-0" />}
                       {emailLookupResult === 'found_member' && <UserCheck className="h-5 w-5 text-emerald-500 shrink-0" />}
-                      {emailLookupResult === 'found_not_member' && <UserPlus className="h-5 w-5 text-amber-500 shrink-0" />}
                       {emailLookupResult === 'not_found' && <UserPlus className="h-5 w-5 text-orange-500 shrink-0" />}
                       {emailLookupResult === 'invited' && <Mail className="h-5 w-5 text-blue-500 shrink-0" />}
 
@@ -452,18 +449,6 @@ export default function DMPage() {
                               className="mt-3 w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg py-2 text-sm font-bold transition-colors"
                             >
                               <MessageCircle className="h-4 w-4" /> Start Conversation
-                            </button>
-                          </>
-                        )}
-                        {emailLookupResult === 'found_not_member' && emailLookupUser && (
-                          <>
-                            <p className="font-bold text-amber-700 dark:text-amber-400">On Infralith, not in this workspace</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">{emailLookupUser.name} - {emailLookupUser.email}</p>
-                            <button
-                              onClick={handleSendInvite}
-                              className="mt-3 w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg py-2 text-sm font-bold transition-colors"
-                            >
-                              <UserPlus className="h-4 w-4" /> Invite to workspace
                             </button>
                           </>
                         )}
