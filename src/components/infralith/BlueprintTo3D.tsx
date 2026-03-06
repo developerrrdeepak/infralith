@@ -159,6 +159,88 @@ const normalizeFloorLevel = (value: unknown): number => {
     return Math.max(0, Math.round(n));
 };
 
+const DEFAULT_FLOOR_HEIGHT = 2.8;
+const MIN_FLOOR_HEIGHT = 2.2;
+
+type FloorMetrics = {
+    levels: number[];
+    floorHeightByLevel: Map<number, number>;
+    floorBaseByLevel: Map<number, number>;
+    fallbackHeight: number;
+};
+
+const computeFloorMetrics = (model: GeometricReconstruction | null | undefined): FloorMetrics => {
+    const levels = new Set<number>();
+    const addLevel = (value: unknown) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return;
+        levels.add(Math.max(0, Math.round(parsed)));
+    };
+
+    for (const wall of model?.walls || []) addLevel(wall.floor_level);
+    for (const room of model?.rooms || []) addLevel(room.floor_level);
+    for (const door of model?.doors || []) addLevel(door.floor_level);
+    for (const win of model?.windows || []) addLevel(win.floor_level);
+    for (const item of model?.furnitures || []) addLevel(item.floor_level);
+
+    if (levels.size === 0) levels.add(0);
+
+    const hintedCountRaw = Number(model?.meta?.floor_count);
+    const hintedCount = Number.isFinite(hintedCountRaw) ? Math.max(0, Math.round(hintedCountRaw)) : 0;
+    const maxDetectedLevel = Math.max(...levels);
+    const maxLevel = Math.max(0, maxDetectedLevel, hintedCount > 0 ? hintedCount - 1 : 0);
+    const orderedLevels = Array.from({ length: maxLevel + 1 }, (_, level) => level);
+
+    const floorHeightByLevel = new Map<number, number>();
+    for (const wall of model?.walls || []) {
+        const floorLevel = normalizeFloorLevel(wall.floor_level);
+        const wallHeight = Math.max(
+            MIN_FLOOR_HEIGHT,
+            Number.isFinite(Number(wall.height)) ? Number(wall.height) : DEFAULT_FLOOR_HEIGHT
+        );
+        const current = floorHeightByLevel.get(floorLevel) || 0;
+        floorHeightByLevel.set(floorLevel, Math.max(current, wallHeight));
+    }
+
+    const sampledHeights = [...floorHeightByLevel.values()].filter((height) => Number.isFinite(height) && height > 0);
+    const averageHeight =
+        sampledHeights.length > 0
+            ? sampledHeights.reduce((sum, height) => sum + height, 0) / sampledHeights.length
+            : DEFAULT_FLOOR_HEIGHT;
+    const fallbackHeight = Math.max(MIN_FLOOR_HEIGHT, Number(averageHeight.toFixed(3)));
+
+    const floorBaseByLevel = new Map<number, number>();
+    let runningY = 0;
+    for (const level of orderedLevels) {
+        floorBaseByLevel.set(level, Number(runningY.toFixed(3)));
+        runningY += floorHeightByLevel.get(level) || fallbackHeight;
+    }
+
+    return {
+        levels: orderedLevels,
+        floorHeightByLevel,
+        floorBaseByLevel,
+        fallbackHeight,
+    };
+};
+
+const resolveFloorBaseYFromMetrics = (metrics: FloorMetrics, floorLevel: unknown): number => {
+    const level = normalizeFloorLevel(floorLevel);
+    const mapped = metrics.floorBaseByLevel.get(level);
+    if (mapped != null) return mapped;
+    if (metrics.levels.length === 0) return 0;
+    const maxKnownLevel = metrics.levels[metrics.levels.length - 1];
+    const maxKnownBase = metrics.floorBaseByLevel.get(maxKnownLevel) || 0;
+    const extensionHeight = metrics.floorHeightByLevel.get(maxKnownLevel) || metrics.fallbackHeight;
+    if (level <= maxKnownLevel) return level * metrics.fallbackHeight;
+    return maxKnownBase + ((level - maxKnownLevel) * extensionHeight);
+};
+
+const resolveFloorHeightFromMetrics = (metrics: FloorMetrics, floorLevel: unknown): number => {
+    const level = normalizeFloorLevel(floorLevel);
+    return metrics.floorHeightByLevel.get(level) || metrics.fallbackHeight;
+};
+
 const inferClientFloorCount = (model: GeometricReconstruction | null | undefined): number => {
     if (!model) return 1;
     const metaCount = Number(model.meta?.floor_count);
@@ -726,7 +808,8 @@ const WallSegment = React.memo(function WallSegment({
     openedDoorIds,
     useCsg = true,
     renderWallMesh = true,
-    renderOpeningAssets = true
+    renderOpeningAssets = true,
+    resolveFloorBaseY
 }: any) {
     const dx = wall.end[0] - wall.start[0];
     const dz = wall.end[1] - wall.start[1];
@@ -734,7 +817,11 @@ const WallSegment = React.memo(function WallSegment({
     const ang = Math.atan2(dz, dx);
     const cx = (wall.start[0] + wall.end[0]) / 2;
     const cz = (wall.start[1] + wall.end[1]) / 2;
-    const baseY = (wall.floor_level || 0) * 2.8 + (wall.base_offset || 0);
+    const floorLevel = normalizeFloorLevel(wall.floor_level);
+    const floorBaseY = typeof resolveFloorBaseY === 'function'
+        ? resolveFloorBaseY(floorLevel)
+        : floorLevel * DEFAULT_FLOOR_HEIGHT;
+    const baseY = floorBaseY + Number(wall.base_offset || 0);
 
     return (
         <group position={[cx, baseY + wall.height / 2, cz]} rotation={[0, -ang, 0]}>
@@ -894,14 +981,10 @@ function GeneratedStructure({
         minZ: Math.min(...allZ),
         maxZ: Math.max(...allZ),
     };
-    const wallHeightByFloor = new Map<number, number>();
-    for (const wall of data.walls || []) {
-        const floorLevel = normalizeFloorLevel(wall.floor_level);
-        const wallHeight = Math.max(2.2, Number(wall.height || 2.8));
-        const current = wallHeightByFloor.get(floorLevel) || 0;
-        wallHeightByFloor.set(floorLevel, Math.max(current, wallHeight));
-    }
-    const resolveFloorHeight = (floorLevel: number) => wallHeightByFloor.get(floorLevel) || 2.8;
+    const floorMetrics = useMemo(() => computeFloorMetrics(data), [data]);
+    const floorLevels = floorMetrics.levels;
+    const resolveFloorHeight = (floorLevel: number) => resolveFloorHeightFromMetrics(floorMetrics, floorLevel);
+    const resolveFloorBaseY = (floorLevel: number) => resolveFloorBaseYFromMetrics(floorMetrics, floorLevel);
     const groundPbr = { roughness: 0.88, metalness: 0.01, clearcoat: 0.03, clearcoatRoughness: 0.88, reflectivity: 0.08 };
     const slabPbr = { roughness: 0.82, metalness: 0.02, clearcoat: 0.05, clearcoatRoughness: 0.8, reflectivity: 0.08 };
     const ceilingPbr = { roughness: 0.9, metalness: 0, clearcoat: 0.02, clearcoatRoughness: 0.9, reflectivity: 0.04 };
@@ -925,18 +1008,39 @@ function GeneratedStructure({
             {p > 0 && (
                 <group scale={[1, p, 1]}>
                     {/* Floor Slabs for each level */}
-                    {Array.from(new Set(data.walls.map(w => w.floor_level || 0))).sort((a, b) => a - b).map(lvl => {
-                        const slabY = lvl * 2.8;
-                        const centerX = (bounds.minX + bounds.maxX) / 2;
-                        const centerZ = (bounds.minZ + bounds.maxZ) / 2;
-                        const sizeX = (bounds.maxX - bounds.minX) + 40;
-                        const sizeZ = (bounds.maxZ - bounds.minZ) + 40;
+                    {floorLevels.map((lvl) => {
+                        const slabY = resolveFloorBaseY(lvl);
+                        const ceilingY = slabY + resolveFloorHeight(lvl) - 0.02;
+                        const hasLevelAbove = floorLevels.some((nextLevel) => nextLevel > lvl);
+                        const shouldRenderCeilingPlate = hasLevelAbove || !data.roof;
+                        const floorWalls = (data.walls || []).filter((wall) => normalizeFloorLevel(wall.floor_level) === lvl);
+                        const footprintWalls = floorWalls.length > 0 ? floorWalls : (data.walls || []);
+                        const levelX = footprintWalls.flatMap((wall) => [wall.start[0], wall.end[0]]);
+                        const levelZ = footprintWalls.flatMap((wall) => [wall.start[1], wall.end[1]]);
+                        const levelBounds = {
+                            minX: levelX.length > 0 ? Math.min(...levelX) : bounds.minX,
+                            maxX: levelX.length > 0 ? Math.max(...levelX) : bounds.maxX,
+                            minZ: levelZ.length > 0 ? Math.min(...levelZ) : bounds.minZ,
+                            maxZ: levelZ.length > 0 ? Math.max(...levelZ) : bounds.maxZ,
+                        };
+                        const centerX = (levelBounds.minX + levelBounds.maxX) / 2;
+                        const centerZ = (levelBounds.minZ + levelBounds.maxZ) / 2;
+                        const sizeX = (levelBounds.maxX - levelBounds.minX) + 40;
+                        const sizeZ = (levelBounds.maxZ - levelBounds.minZ) + 40;
 
                         return (
-                            <mesh key={`slab - ${lvl} `} position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-                                <planeGeometry args={[sizeX, sizeZ]} />
-                                <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.15} {...slabPbr} />
-                            </mesh>
+                            <React.Fragment key={`slab-${lvl}`}>
+                                <mesh position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+                                    <planeGeometry args={[sizeX, sizeZ]} />
+                                    <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.2} side={THREE.DoubleSide} {...slabPbr} />
+                                </mesh>
+                                {shouldRenderCeilingPlate && (
+                                    <mesh position={[centerX, ceilingY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow={false}>
+                                        <planeGeometry args={[sizeX, sizeZ]} />
+                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.5 : 0.3} side={THREE.DoubleSide} {...ceilingPbr} />
+                                    </mesh>
+                                )}
+                            </React.Fragment>
                         );
                     })}
 
@@ -949,7 +1053,7 @@ function GeneratedStructure({
                         });
                         shape.closePath();
                         const floorLevel = normalizeFloorLevel(room.floor_level);
-                        const zPos = floorLevel * 2.8;
+                        const zPos = resolveFloorBaseY(floorLevel);
                         const ceilingY = zPos + resolveFloorHeight(floorLevel) - 0.02;
 
                         return (
@@ -998,6 +1102,7 @@ function GeneratedStructure({
                                 useCsg={useCsg}
                                 renderWallMesh={true}
                                 renderOpeningAssets={!useServerCuts}
+                                resolveFloorBaseY={resolveFloorBaseY}
                             />
                         ))}
 
@@ -1017,6 +1122,7 @@ function GeneratedStructure({
                                 useCsg={false}
                                 renderWallMesh={false}
                                 renderOpeningAssets={true}
+                                resolveFloorBaseY={resolveFloorBaseY}
                             />
                         ))}
 
@@ -1024,7 +1130,7 @@ function GeneratedStructure({
                     {data.furnitures?.map((furniture, i) => {
                         const furnitureInteractableId = `furniture-${String(furniture.id)}`;
                         if (hiddenFurnitureIds?.has(furnitureInteractableId)) return null;
-                        const zPos = (furniture.floor_level || 0) * 2.8;
+                        const zPos = resolveFloorBaseY(normalizeFloorLevel(furniture.floor_level));
                         const isHumanFurniture = isHumanLabel(furniture.type) || isHumanLabel(furniture.description);
                         const humanScale = Math.max(0.65, Math.min(1.8, (furniture.height || 1.7) / 1.7));
                         return (

@@ -3398,6 +3398,47 @@ const deriveFootprintProfileFromWalls = (
   return computeFootprintProfileFromPolygon(polygon);
 };
 
+const estimateMaxWallTopElevation = (walls: GeometricReconstruction['walls']): number => {
+  if (!Array.isArray(walls) || walls.length === 0) return 2.8;
+
+  const wallHeightByFloor = new Map<number, number>();
+  for (const wall of walls) {
+    const floorLevel = toFloorBucket(wall?.floor_level);
+    const wallHeightRaw = Number(wall?.height);
+    const wallHeight = Math.max(2.2, Number.isFinite(wallHeightRaw) ? wallHeightRaw : 2.8);
+    const current = wallHeightByFloor.get(floorLevel) || 0;
+    wallHeightByFloor.set(floorLevel, Math.max(current, wallHeight));
+  }
+
+  const sampledHeights = [...wallHeightByFloor.values()].filter((height) => Number.isFinite(height) && height > 0);
+  const averageHeight =
+    sampledHeights.length > 0
+      ? sampledHeights.reduce((sum, height) => sum + height, 0) / sampledHeights.length
+      : 2.8;
+  const fallbackHeight = Math.max(2.2, Number(averageHeight.toFixed(3)));
+
+  const maxFloorLevel = Math.max(0, ...walls.map((wall) => toFloorBucket(wall?.floor_level)));
+  const floorBaseByLevel = new Map<number, number>();
+  let runningY = 0;
+  for (let level = 0; level <= maxFloorLevel; level += 1) {
+    floorBaseByLevel.set(level, Number(runningY.toFixed(3)));
+    runningY += wallHeightByFloor.get(level) || fallbackHeight;
+  }
+
+  let maxWallTop = 0;
+  for (const wall of walls) {
+    const floorLevel = toFloorBucket(wall?.floor_level);
+    const baseY = floorBaseByLevel.get(floorLevel) || 0;
+    const wallHeightRaw = Number(wall?.height);
+    const wallHeight = Math.max(2.2, Number.isFinite(wallHeightRaw) ? wallHeightRaw : fallbackHeight);
+    const baseOffsetRaw = Number(wall?.base_offset);
+    const baseOffset = Number.isFinite(baseOffsetRaw) ? baseOffsetRaw : 0;
+    maxWallTop = Math.max(maxWallTop, baseY + baseOffset + wallHeight);
+  }
+
+  return Number(maxWallTop > 0 ? maxWallTop.toFixed(3) : fallbackHeight.toFixed(3));
+};
+
 const inferRoofFromWallFootprint = (payload: GeometricReconstruction): GeometricReconstruction => {
   if (payload.roof || !Array.isArray(payload.walls) || payload.walls.length < 3) {
     return payload;
@@ -3406,7 +3447,7 @@ const inferRoofFromWallFootprint = (payload: GeometricReconstruction): Geometric
   const footprintProfile = deriveFootprintProfileFromWalls(payload.walls);
   if (!footprintProfile) return payload;
 
-  const maxWallHeight = Math.max(...payload.walls.map((w) => Number(w?.height || 2.8)));
+  const maxWallTopElevation = estimateMaxWallTopElevation(payload.walls);
   const roofType = footprintProfile.recommendedRoofType;
   const roofHeightBase =
     footprintProfile.sizeClass === 'small'
@@ -3437,7 +3478,7 @@ const inferRoofFromWallFootprint = (payload: GeometricReconstruction): Geometric
       type: roofType,
       polygon: footprintProfile.polygon,
       height: roofHeight,
-      base_height: Number(maxWallHeight.toFixed(2)),
+      base_height: Number(maxWallTopElevation.toFixed(2)),
       color: '#a0522d',
     },
     conflicts: nextConflicts,

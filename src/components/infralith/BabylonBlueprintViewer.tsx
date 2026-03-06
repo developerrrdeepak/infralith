@@ -30,6 +30,94 @@ const hexToColor3 = (hex: string | undefined, fallback = '#cccccc') => {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const DEFAULT_FLOOR_HEIGHT = 2.8;
+const MIN_FLOOR_HEIGHT = 2.2;
+
+type FloorMetrics = {
+  levels: number[];
+  floorHeightByLevel: Map<number, number>;
+  floorBaseByLevel: Map<number, number>;
+  fallbackHeight: number;
+};
+
+const normalizeFloorLevel = (value: unknown): number => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.round(n));
+};
+
+const computeFloorMetrics = (model: GeometricReconstruction | null): FloorMetrics => {
+  const levels = new Set<number>();
+  const addLevel = (value: unknown) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    levels.add(Math.max(0, Math.round(parsed)));
+  };
+
+  for (const wall of model?.walls || []) addLevel(wall.floor_level);
+  for (const room of model?.rooms || []) addLevel(room.floor_level);
+  for (const door of model?.doors || []) addLevel(door.floor_level);
+  for (const win of model?.windows || []) addLevel(win.floor_level);
+  for (const item of model?.furnitures || []) addLevel(item.floor_level);
+
+  if (levels.size === 0) levels.add(0);
+
+  const hintedCountRaw = Number(model?.meta?.floor_count);
+  const hintedCount = Number.isFinite(hintedCountRaw) ? Math.max(0, Math.round(hintedCountRaw)) : 0;
+  const maxDetected = Math.max(...levels);
+  const maxLevel = Math.max(0, maxDetected, hintedCount > 0 ? hintedCount - 1 : 0);
+  const orderedLevels = Array.from({ length: maxLevel + 1 }, (_, level) => level);
+
+  const floorHeightByLevel = new Map<number, number>();
+  for (const wall of model?.walls || []) {
+    const floorLevel = normalizeFloorLevel(wall.floor_level);
+    const wallHeight = Math.max(
+      MIN_FLOOR_HEIGHT,
+      Number.isFinite(Number(wall.height)) ? Number(wall.height) : DEFAULT_FLOOR_HEIGHT
+    );
+    const current = floorHeightByLevel.get(floorLevel) || 0;
+    floorHeightByLevel.set(floorLevel, Math.max(current, wallHeight));
+  }
+
+  const sampledHeights = [...floorHeightByLevel.values()].filter((height) => Number.isFinite(height) && height > 0);
+  const averageHeight =
+    sampledHeights.length > 0
+      ? sampledHeights.reduce((sum, height) => sum + height, 0) / sampledHeights.length
+      : DEFAULT_FLOOR_HEIGHT;
+  const fallbackHeight = Math.max(MIN_FLOOR_HEIGHT, Number(averageHeight.toFixed(3)));
+
+  const floorBaseByLevel = new Map<number, number>();
+  let runningY = 0;
+  for (const level of orderedLevels) {
+    floorBaseByLevel.set(level, Number(runningY.toFixed(3)));
+    runningY += floorHeightByLevel.get(level) || fallbackHeight;
+  }
+
+  return {
+    levels: orderedLevels,
+    floorHeightByLevel,
+    floorBaseByLevel,
+    fallbackHeight,
+  };
+};
+
+const resolveFloorBaseY = (metrics: FloorMetrics, floorLevel: unknown): number => {
+  const level = normalizeFloorLevel(floorLevel);
+  const mapped = metrics.floorBaseByLevel.get(level);
+  if (mapped != null) return mapped;
+  if (metrics.levels.length === 0) return 0;
+  const maxKnownLevel = metrics.levels[metrics.levels.length - 1];
+  const maxKnownBase = metrics.floorBaseByLevel.get(maxKnownLevel) || 0;
+  const extensionHeight = metrics.floorHeightByLevel.get(maxKnownLevel) || metrics.fallbackHeight;
+  if (level <= maxKnownLevel) return level * metrics.fallbackHeight;
+  return maxKnownBase + ((level - maxKnownLevel) * extensionHeight);
+};
+
+const resolveFloorHeight = (metrics: FloorMetrics, floorLevel: unknown): number => {
+  const level = normalizeFloorLevel(floorLevel);
+  return metrics.floorHeightByLevel.get(level) || metrics.fallbackHeight;
+};
+
 export default function BabylonBlueprintViewer({ data, progress, isTopView = false }: BabylonBlueprintViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -48,6 +136,7 @@ export default function BabylonBlueprintViewer({ data, progress, isTopView = fal
       maxZ: Math.max(...allZ),
     };
   }, [data]);
+  const floorMetrics = useMemo(() => computeFloorMetrics(data), [data]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -130,6 +219,55 @@ export default function BabylonBlueprintViewer({ data, progress, isTopView = fal
 
     const wallMap = new Map<string, { cx: number; cz: number; dx: number; dz: number; len: number; ang: number; baseY: number; thickness: number }>();
 
+    for (const level of floorMetrics.levels) {
+      const floorWalls = (data.walls || []).filter((wall) => normalizeFloorLevel(wall.floor_level) === level);
+      const footprintWalls = floorWalls.length > 0 ? floorWalls : (data.walls || []);
+      const levelX = footprintWalls.flatMap((wall) => [wall.start[0], wall.end[0]]);
+      const levelZ = footprintWalls.flatMap((wall) => [wall.start[1], wall.end[1]]);
+      if (levelX.length === 0 || levelZ.length === 0) continue;
+
+      const minX = Math.min(...levelX);
+      const maxX = Math.max(...levelX);
+      const minZ = Math.min(...levelZ);
+      const maxZ = Math.max(...levelZ);
+      const centerX = (minX + maxX) / 2;
+      const centerZ = (minZ + maxZ) / 2;
+      const sizeX = (maxX - minX) + 40;
+      const sizeZ = (maxZ - minZ) + 40;
+      const slabY = resolveFloorBaseY(floorMetrics, level);
+      const levelHeight = resolveFloorHeight(floorMetrics, level);
+
+      const slab = MeshBuilder.CreateBox(`level-slab-${level}`, {
+        width: Math.max(0.2, sizeX),
+        height: 0.04,
+        depth: Math.max(0.2, sizeZ),
+      }, scene);
+      slab.position = new Vector3(centerX, slabY + 0.02, centerZ);
+      const slabMat = new StandardMaterial(`level-slab-mat-${level}`, scene);
+      slabMat.diffuseColor = new Color3(0.94, 0.94, 0.94);
+      slabMat.specularColor = new Color3(0.02, 0.02, 0.02);
+      slabMat.alpha = 0.28;
+      slab.material = slabMat;
+      slab.parent = root;
+
+      const hasLevelAbove = floorMetrics.levels.some((nextLevel) => nextLevel > level);
+      const shouldRenderCeiling = hasLevelAbove || !data.roof;
+      if (shouldRenderCeiling) {
+        const ceiling = MeshBuilder.CreateBox(`level-ceiling-${level}`, {
+          width: Math.max(0.2, sizeX),
+          height: 0.03,
+          depth: Math.max(0.2, sizeZ),
+        }, scene);
+        ceiling.position = new Vector3(centerX, slabY + levelHeight - 0.015, centerZ);
+        const ceilingMat = new StandardMaterial(`level-ceiling-mat-${level}`, scene);
+        ceilingMat.diffuseColor = new Color3(0.96, 0.95, 0.92);
+        ceilingMat.specularColor = new Color3(0.01, 0.01, 0.01);
+        ceilingMat.alpha = 0.35;
+        ceiling.material = ceilingMat;
+        ceiling.parent = root;
+      }
+    }
+
     for (const wall of data.walls) {
       const dx = wall.end[0] - wall.start[0];
       const dz = wall.end[1] - wall.start[1];
@@ -138,9 +276,9 @@ export default function BabylonBlueprintViewer({ data, progress, isTopView = fal
 
       const cx = (wall.start[0] + wall.end[0]) / 2;
       const cz = (wall.start[1] + wall.end[1]) / 2;
-      const baseY = (wall.floor_level || 0) * 2.8;
+      const baseY = resolveFloorBaseY(floorMetrics, wall.floor_level) + Number(wall.base_offset || 0);
       const thickness = Math.max(0.05, wall.thickness || 0.115);
-      const wallHeight = Math.max(1.6, wall.height || 2.8);
+      const wallHeight = Math.max(1.6, wall.height || floorMetrics.fallbackHeight);
       const ang = Math.atan2(dz, dx);
 
       const mesh = MeshBuilder.CreateBox(`wall-${String(wall.id)}`, {
@@ -170,7 +308,9 @@ export default function BabylonBlueprintViewer({ data, progress, isTopView = fal
       const maxZ = Math.max(...points.map((p) => p[1]));
       const rw = Math.max(0.2, maxX - minX);
       const rd = Math.max(0.2, maxZ - minZ);
-      const ry = (room.floor_level || 0) * 2.8;
+      const floorLevel = normalizeFloorLevel(room.floor_level);
+      const ry = resolveFloorBaseY(floorMetrics, floorLevel);
+      const ceilingY = ry + resolveFloorHeight(floorMetrics, floorLevel) - 0.015;
 
       const slab = MeshBuilder.CreateBox(`room-${String(room.id)}`, { width: rw, height: 0.04, depth: rd }, scene);
       slab.position = new Vector3(rx, ry + 0.02, rz);
@@ -179,6 +319,15 @@ export default function BabylonBlueprintViewer({ data, progress, isTopView = fal
       slabMat.specularColor = new Color3(0, 0, 0);
       slab.material = slabMat;
       slab.parent = root;
+
+      const ceiling = MeshBuilder.CreateBox(`room-ceiling-${String(room.id)}`, { width: rw, height: 0.03, depth: rd }, scene);
+      ceiling.position = new Vector3(rx, ceilingY, rz);
+      const ceilingMat = new StandardMaterial(`room-ceiling-mat-${String(room.id)}`, scene);
+      ceilingMat.diffuseColor = new Color3(0.96, 0.95, 0.92);
+      ceilingMat.specularColor = new Color3(0.01, 0.01, 0.01);
+      ceilingMat.alpha = 0.26;
+      ceiling.material = ceilingMat;
+      ceiling.parent = root;
     }
 
     const createOpeningMesh = (
@@ -248,7 +397,7 @@ export default function BabylonBlueprintViewer({ data, progress, isTopView = fal
       duration: 900,
       easing: 'easeOutExpo',
     });
-  }, [bounds, data, isTopView, progress]);
+  }, [bounds, data, floorMetrics, isTopView, progress]);
 
   useEffect(() => {
     if (!rootRef.current) return;
