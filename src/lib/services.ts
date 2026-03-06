@@ -147,19 +147,21 @@ export const userDbService = {
       );
       if (internalRes.ok) {
         const internal = await internalRes.json();
-        if (internal?.user?.uid) {
-          return {
-            uid: internal.user.uid,
-            name: internal.user.name || '',
-            email: normalizeEmail(internal.user.email || normalized),
-            avatar: internal.user.avatar || null,
-            role: internal.user.role || undefined,
-            profileCompleted: true,
-          } as UserProfileData;
+        // If API returns explicit `user` shape, trust it and skip external fallback.
+        // If shape is different (e.g. directory not configured), allow fallback.
+        if (internal && typeof internal === 'object' && 'user' in (internal as Record<string, unknown>)) {
+          if ((internal as any)?.user?.uid) {
+            return {
+              uid: (internal as any).user.uid,
+              name: (internal as any).user.name || '',
+              email: normalizeEmail((internal as any).user.email || normalized),
+              avatar: (internal as any).user.avatar || null,
+              role: (internal as any).user.role || undefined,
+              profileCompleted: true,
+            } as UserProfileData;
+          }
+          return null;
         }
-        // Internal directory responded successfully and found no match.
-        // Avoid external fallback to prevent timeout storms in production.
-        return null;
       }
     } catch (error) {
       console.warn('Internal user lookup failed, trying external directory fallback', error);
