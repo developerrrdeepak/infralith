@@ -1849,6 +1849,7 @@ function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
 
 function BlueprintWorkspace() {
     const { toast } = useToast();
+    const viewerRootRef = useRef<HTMLDivElement | null>(null);
     const [mode, setMode] = useState<'upload' | 'describe'>('upload');
     const [siteModeEnabled, setSiteModeEnabled] = useState(false);
     const [siteResult, setSiteResult] = useState<SiteReconstruction | null>(null);
@@ -1892,6 +1893,7 @@ function BlueprintWorkspace() {
         () => siteResult?.buildings.find((building) => building.id === activeSiteBuildingId) || null,
         [siteResult, activeSiteBuildingId]
     );
+    const useImmersiveLayout = status === 'complete' && !!elements;
 
     const summarizeReconstruction = (result: GeometricReconstruction | null | undefined) => ({
         walls: result?.walls?.length || 0,
@@ -2042,6 +2044,35 @@ function BlueprintWorkspace() {
         const timer = window.setTimeout(() => setWalkActionFeed(null), 2200);
         return () => window.clearTimeout(timer);
     }, [walkActionFeed]);
+
+    React.useEffect(() => {
+        // Keep browser scroll state consistent while the immersive shell is active.
+        const previousOverflow = document.body.style.overflow;
+        if (useImmersiveLayout) {
+            document.body.style.overflow = 'hidden';
+        }
+        return () => {
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [useImmersiveLayout]);
+
+    React.useEffect(() => {
+        // Force viewport-aware renderers (Three.js/Babylon) to recompute size after mode switch.
+        const fireResize = () => window.dispatchEvent(new Event('resize'));
+        fireResize();
+        const rafId = window.requestAnimationFrame(fireResize);
+        const t1 = window.setTimeout(fireResize, 120);
+        const t2 = window.setTimeout(fireResize, 420);
+        return () => {
+            window.cancelAnimationFrame(rafId);
+            window.clearTimeout(t1);
+            window.clearTimeout(t2);
+        };
+    }, [isFullscreen, useImmersiveLayout]);
+
+    React.useEffect(() => {
+        if (!useImmersiveLayout) setIsLeftPanelExpanded(false);
+    }, [useImmersiveLayout]);
 
     React.useEffect(() => {
         if (status === 'complete' && elements) {
@@ -2354,12 +2385,17 @@ function BlueprintWorkspace() {
     };
 
     return (
-        <div className={cn(
-            "w-full flex flex-col relative overflow-hidden transition-all duration-700",
-            isFullscreen ? "fixed inset-0 z-[9999] bg-[#f8f5f0]" : "h-[calc(100vh-100px)] bg-background"
-        )}>
+        <div
+            ref={viewerRootRef}
+            className={cn(
+                "w-full min-h-0 flex flex-col relative overflow-hidden transition-colors duration-300",
+                useImmersiveLayout
+                    ? "fixed inset-0 z-[9999] w-screen h-dvh bg-[#f8f5f0]"
+                    : "h-[calc(100dvh-100px)] bg-background"
+            )}
+        >
             {/* Fullscreen UI */}
-            {isFullscreen && status === 'complete' && elements && (
+            {useImmersiveLayout && (
                 <>
                     {/* --- TOP HEADER --- */}
                     <div className="absolute top-0 left-0 right-0 h-24 px-8 flex items-center justify-between z-[110] pointer-events-none">
@@ -2541,7 +2577,7 @@ function BlueprintWorkspace() {
                     </div>
 
                     {/* --- RIGHT NAVIGATION PANEL (Project / Room Inspector) --- */}
-                    {!isInspectorVisible && isFullscreen && (
+                    {!isInspectorVisible && useImmersiveLayout && (
                         <motion.button
                             initial={{ opacity: 0, x: 20 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -2697,7 +2733,7 @@ function BlueprintWorkspace() {
             )}
 
             {/* --- STANDARD (PRE-COMPLETION) UI --- */}
-            {!isFullscreen && (
+            {!useImmersiveLayout && (
 
                 <div className="flex flex-col z-30 pointer-events-none absolute top-0 w-full px-4 pt-3 pb-2 gap-2 bg-gradient-to-b from-background/90 to-transparent backdrop-blur-sm">
                     {/* Row 1: Title + Essential Actions */}
@@ -2804,14 +2840,14 @@ function BlueprintWorkspace() {
                 {/* 3D Viewport */}
                 <div className="absolute inset-0 z-0">
                     <div className="w-full h-full relative" style={{
-                        background: isFullscreen ? 'linear-gradient(180deg, #f8f5f0 0%, #e8e2d6 100%)' : 'linear-gradient(180deg, #f0ece4 0%, #e8e2d6 50%, #ddd7c9 100%)'
+                        background: useImmersiveLayout ? 'linear-gradient(180deg, #f8f5f0 0%, #e8e2d6 100%)' : 'linear-gradient(180deg, #f0ece4 0%, #e8e2d6 50%, #ddd7c9 100%)'
                     }}>
                         <Canvas
-                            key={`${isFullscreen ? 'canvas-fullscreen' : 'canvas-standard'}-${isWalkthrough ? 'walk' : (isTopView ? 'top' : 'orbit')}`}
+                            key={`${useImmersiveLayout ? 'canvas-fullscreen' : 'canvas-standard'}-${isWalkthrough ? 'walk' : (isTopView ? 'top' : 'orbit')}`}
                             dpr={[1, 2]}
-                            camera={{ position: [18, 14, 18], fov: isFullscreen ? 28 : 32 }}
+                            camera={{ position: [18, 14, 18], fov: useImmersiveLayout ? 28 : 32 }}
                             gl={{ antialias: true, alpha: true }}
-                            style={{ background: 'transparent' }}
+                            style={{ background: 'transparent', width: '100%', height: '100%', display: 'block' }}
                         >
                             {isWalkthrough ? (
                                 showWalkthroughHuman ? (
@@ -2835,7 +2871,7 @@ function BlueprintWorkspace() {
                                 <OrbitViewController
                                     data={elements}
                                     isTopView={isTopView}
-                                    isFullscreen={isFullscreen}
+                                    isFullscreen={useImmersiveLayout}
                                 />
                             )}
 
@@ -2989,7 +3025,7 @@ function BlueprintWorkspace() {
                         )}
 
                         {/* Overlays */}
-                        {status === 'complete' && !isFullscreen && (
+                        {status === 'complete' && !useImmersiveLayout && (
                             <div className="absolute top-20 right-6 flex flex-col gap-2">
                                 <Badge className="bg-primary/20 backdrop-blur-md border-primary/30 text-primary font-black uppercase text-[10px] py-1 px-3 tracking-widest shadow-xl">
                                     {activeSiteBuilding?.name || elements?.building_name || 'BUILDING'}
@@ -3010,7 +3046,7 @@ function BlueprintWorkspace() {
                             </div>
                         )}
 
-                        {preview && status !== 'idle' && !isFullscreen && (
+                        {preview && status !== 'idle' && !useImmersiveLayout && (
                             <div className="absolute bottom-6 right-6">
                                 <div className="w-24 h-24 rounded-xl overflow-hidden border-2 border-primary/30 shadow-2xl">
                                     <img src={preview} alt="Blueprint" className="w-full h-full object-cover" />
@@ -3059,7 +3095,7 @@ function BlueprintWorkspace() {
                         )}
 
                         {/* Sunlight Simulation Timeline */}
-                        {status === 'complete' && elements && !isFullscreen && (
+                        {status === 'complete' && elements && !useImmersiveLayout && (
                             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md pointer-events-auto">
                                 <div className="bg-background/80 backdrop-blur-xl border border-border p-3 rounded-[20px] shadow-2xl flex items-center gap-4">
                                     <Moon className="h-4 w-4 text-slate-400 shrink-0" />
@@ -3120,7 +3156,7 @@ function BlueprintWorkspace() {
                             </div>
                         )}
 
-                        {selectedElement && !showCost && !isFullscreen && (
+                        {selectedElement && !showCost && !useImmersiveLayout && (
                             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                                 className="absolute bottom-6 left-6 p-5 bg-background/95 backdrop-blur-xl border border-border rounded-[20px] shadow-2xl w-[320px] pointer-events-auto z-40">
                                 <h3 className="font-black text-foreground tracking-tight mb-4 flex items-center justify-between">
@@ -3278,7 +3314,7 @@ function BlueprintWorkspace() {
                 )}
 
                 {/* Side Info Sidebar (Floating Right) */}
-                {status !== 'idle' && !isFullscreen && (
+                {status !== 'idle' && !useImmersiveLayout && (
                     <div className="absolute right-4 top-16 bottom-20 z-20 w-[240px] pointer-events-none flex flex-col gap-3">
                         {/* Processing Status */}
                         {(status === 'preprocessing' || status === 'analyzing' || status === 'generating') && (
