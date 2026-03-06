@@ -127,6 +127,12 @@ const VISION_MIN_PASS_REMAINING_MS = parseTimeoutMs(process.env.INFRALITH_VISION
 const VISION_PASS_ESTIMATED_COST_MS = parseTimeoutMs(process.env.INFRALITH_VISION_PASS_ESTIMATED_COST_MS, 60_000, 10_000, 180_000);
 const VISION_PASS_TIMEOUT_BUFFER_MS = parseTimeoutMs(process.env.INFRALITH_VISION_PASS_TIMEOUT_BUFFER_MS, 5_000, 1_000, 30_000);
 const VISION_MAX_RETRIES = parseBoundedInt(process.env.INFRALITH_VISION_MAX_RETRIES, 1, 0, 3);
+const VISION_ORIGINAL_BASELINE_SCORE_OFFSET = parseBoundedFloat(
+  process.env.INFRALITH_VISION_ORIGINAL_BASELINE_SCORE_OFFSET,
+  5,
+  0,
+  25
+);
 const ENABLE_EXPENSIVE_VISION_RECOVERY = asBool(
   process.env.INFRALITH_ENABLE_EXPENSIVE_VISION_RECOVERY,
   process.env.NODE_ENV !== 'production'
@@ -1355,11 +1361,18 @@ const parseDimensionTokenMeters = (token: string, fullText: string): number | nu
 const extractDimensionPairFromText = (value: string): { widthM: number; depthM: number } | null => {
   const text = String(value || '').replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
   if (!text) return null;
-  const pairMatch = text.match(/(.{0,36}?\d[\d\s.'"\-]*(?:mm|cm|m|ft|feet|foot|in|inch|inches|["'])?)\s*[x×]\s*(\d[\d\s.'"\-]*(?:mm|cm|m|ft|feet|foot|in|inch|inches|["'])?.{0,20})/i);
+  // Normalize OCR separators so `3.5 x 4.2`, `3.5Ã—4.2`, `3.5 by 4.2`, and `3.5*4.2` are parsed consistently.
+  const normalized = text
+    .replace(/[Ã—âœ•âœ–]/g, 'x')
+    .replace(/\bby\b/gi, ' x ')
+    .replace(/\s*\*\s*/g, ' x ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const pairMatch = normalized.match(/(.{0,40}?\d[\d\s.'"\-]*(?:mm|cm|m|ft|feet|foot|in|inch|inches|["'])?)\s*x\s*(\d[\d\s.'"\-]*(?:mm|cm|m|ft|feet|foot|in|inch|inches|["'])?.{0,24})/i);
   if (!pairMatch?.[1] || !pairMatch?.[2]) return null;
 
-  const widthM = parseDimensionTokenMeters(pairMatch[1], text);
-  const depthM = parseDimensionTokenMeters(pairMatch[2], text);
+  const widthM = parseDimensionTokenMeters(pairMatch[1], normalized);
+  const depthM = parseDimensionTokenMeters(pairMatch[2], normalized);
   if (widthM == null || depthM == null) return null;
   if (widthM < 0.4 || depthM < 0.4 || widthM > 40 || depthM > 40) return null;
 
@@ -1476,6 +1489,16 @@ const extractRoomDimensionHints = (layoutHints: BlueprintLayoutHints | null): Ro
         const pairText = `${a.text} x ${b.text}`.slice(0, 120);
         pushHint(pairText, a.valueM, b.valueM, centerPx, floorLevel);
       }
+    }
+  }
+
+  // Fallback: parse room-size pairs directly from OCR line text when polygon anchors are sparse.
+  if (hints.length < 24) {
+    for (const lineText of layoutHints.lineTexts || []) {
+      if (hints.length >= 48) break;
+      const pair = extractDimensionPairFromText(String(lineText || ''));
+      if (!pair) continue;
+      pushHint(String(lineText || '').slice(0, 120), pair.widthM, pair.depthM, null, null);
     }
   }
 
@@ -5445,7 +5468,7 @@ async function preprocessBlueprintImage(base64Image: string, traceId = 'n/a'): P
       return originalPreprocessResult(base64Image);
     }
 
-    const maxDim = Math.max(512, Math.min(4096, Number(process.env.INFRALITH_PREPROCESS_MAX_DIM || 2400)));
+    const maxDim = Math.max(768, Math.min(4096, Number(process.env.INFRALITH_PREPROCESS_MAX_DIM || 3072)));
     const thresholdRaw = Number(process.env.INFRALITH_PREPROCESS_THRESHOLD || 0);
     const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 255
       ? Math.round(thresholdRaw)
@@ -7036,6 +7059,46 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       bestCandidateLabel = label;
       return true;
     };
+
+    const baselineScoreGate = Math.max(
+      20,
+      VISION_CONSENSUS_MIN_SCORE - VISION_ORIGINAL_BASELINE_SCORE_OFFSET
+    );
+    const shouldTryOriginalBaseline =
+      structuralInputImage !== imageUrl &&
+      (bestFidelity.shouldRetry || bestScore < baselineScoreGate);
+
+    if (shouldTryOriginalBaseline && canRunVisionPass('original-image-baseline', false)) {
+      traceLog('Infralith Vision Engine', traceId, '3/9', 'running adaptive original-image baseline pass', {
+        currentScore: bestScore,
+        baselineScoreGate,
+        fidelityReasons: bestFidelity.reasons,
+      }, 'warn');
+      try {
+        const originalCandidate = await runVisionPass('original-image-baseline', '3/9', prompt, imageUrl);
+        if (hasNonEmptyWalls(originalCandidate)) {
+          const promotedOriginal = promoteBestCandidate(originalCandidate, 'original-image-baseline', {
+            minScoreGain: 0.8,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+          if (promotedOriginal) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '3/9', 'original-image baseline improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '3/9', 'original-image baseline failed; continuing current best', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
 
     const maxRetries = VISION_MAX_RETRIES;
     let retryCount = 0;
