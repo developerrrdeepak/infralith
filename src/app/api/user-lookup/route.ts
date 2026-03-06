@@ -8,6 +8,8 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 20_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DEFAULT_BACKOFF_MS = 60_000;
+const TIMEOUT_LOG_THROTTLE_MS = 30_000;
 
 const lookupPayloadSchema = z.object({
   uid: z.union([z.string(), z.number()]).optional(),
@@ -33,6 +35,9 @@ const parseTimeoutMs = (value: string | undefined) => {
 };
 
 const FETCH_TIMEOUT_MS = parseTimeoutMs(process.env.USER_LOOKUP_TIMEOUT_MS);
+const BACKOFF_MS = parseTimeoutMs(process.env.USER_LOOKUP_BACKOFF_MS || String(DEFAULT_BACKOFF_MS));
+let backendBackoffUntil = 0;
+let lastTimeoutLogAt = 0;
 
 const pruneRateStore = (now: number) => {
   for (const [ip, bucket] of rateStore.entries()) {
@@ -74,6 +79,7 @@ const readJsonSafe = async (res: Response): Promise<unknown> => {
 };
 
 export async function GET(req: NextRequest) {
+  const now = Date.now();
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
@@ -91,6 +97,9 @@ export async function GET(req: NextRequest) {
 
   if (!backendUrl) {
     return NextResponse.json({ error: 'Lookup unavailable' }, { status: 503 });
+  }
+  if (now < backendBackoffUntil) {
+    return NextResponse.json({ error: 'Lookup unavailable', code: 'EBACKOFF' }, { status: 503 });
   }
 
   let backend: URL;
@@ -115,6 +124,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(null, { status: 200 });
     }
     if (!res.ok) {
+      if (res.status >= 500 || res.status === 429) {
+        backendBackoffUntil = Date.now() + BACKOFF_MS;
+      }
       const details = await readJsonSafe(res);
       console.error('User lookup backend failed', { status: res.status, details });
       return NextResponse.json({ error: 'Lookup failed' }, { status: 502 });
@@ -145,10 +157,15 @@ export async function GET(req: NextRequest) {
     const isAbortError = error instanceof Error && error.name === 'AbortError';
     const status = isAbortError ? 504 : 503;
     const code = isAbortError ? 'ETIMEOUT' : 'ELOOKUP';
-    console.error('User lookup proxy error', {
-      code,
-      message: error instanceof Error ? error.message : String(error),
-    });
+    backendBackoffUntil = Date.now() + BACKOFF_MS;
+    const shouldLog = !isAbortError || Date.now() - lastTimeoutLogAt > TIMEOUT_LOG_THROTTLE_MS;
+    if (shouldLog) {
+      lastTimeoutLogAt = Date.now();
+      console.error('User lookup proxy error', {
+        code,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     return NextResponse.json({ error: 'Lookup unavailable', code }, { status });
   } finally {
     clearTimeout(timeout);

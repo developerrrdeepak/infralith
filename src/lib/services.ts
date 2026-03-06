@@ -126,6 +126,9 @@ const setStorageItem = (key: string, value: any) => {
   localStorage.setItem(key, JSON.stringify(value));
 };
 
+let externalLookupBackoffUntil = 0;
+const EXTERNAL_LOOKUP_BACKOFF_MS = 5 * 60 * 1000;
+
 // --- USER DB SERVICE ---
 export const userDbService = {
   lookupRemoteUser: async (email: string): Promise<UserProfileData | null> => {
@@ -154,19 +157,30 @@ export const userDbService = {
             profileCompleted: true,
           } as UserProfileData;
         }
+        // Internal directory responded successfully and found no match.
+        // Avoid external fallback to prevent timeout storms in production.
+        return null;
       }
     } catch (error) {
       console.warn('Internal user lookup failed, trying external directory fallback', error);
     }
 
     // Secondary lookup: optional external corporate directory proxy.
+    if (Date.now() < externalLookupBackoffUntil) {
+      return null;
+    }
     try {
       const res = await fetch(`/api/user-lookup?email=${encodeURIComponent(normalized)}`, {
         method: 'GET',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        if (res.status >= 500 || res.status === 429) {
+          externalLookupBackoffUntil = Date.now() + EXTERNAL_LOOKUP_BACKOFF_MS;
+        }
+        return null;
+      }
       const data = await res.json();
       if (!data) return null;
       return {
@@ -178,6 +192,7 @@ export const userDbService = {
         profileCompleted: true,
       } as UserProfileData;
     } catch (error) {
+      externalLookupBackoffUntil = Date.now() + EXTERNAL_LOOKUP_BACKOFF_MS;
       console.warn('External user lookup failed, falling back to local storage', error);
       return null;
     }
