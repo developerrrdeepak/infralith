@@ -74,7 +74,6 @@ import {
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
 import { estimateConstructionCost } from '@/lib/cost-estimator';
-import BabylonBlueprintViewer from '@/components/infralith/BabylonBlueprintViewer';
 
 // -- Optional custom human model (GLB) for walkthrough --
 // Put your model at /public/models/human.glb (or override via NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL).
@@ -1170,6 +1169,56 @@ function GeneratedStructure({
                 <ConflictMarker key={`conflict - ${i} `} conflict={conflict} />
             ))}
         </group>
+    );
+}
+
+function OrbitViewController({
+    data,
+    isTopView,
+    isFullscreen,
+}: {
+    data: GeometricReconstruction | null | undefined;
+    isTopView: boolean;
+    isFullscreen: boolean;
+}) {
+    const { camera } = useThree();
+    const controlsRef = useRef<any>(null);
+    const bounds = useMemo(() => computeWalkBounds(data), [data]);
+
+    React.useEffect(() => {
+        const centerX = bounds ? (bounds.minX + bounds.maxX) / 2 : 0;
+        const centerZ = bounds ? (bounds.minZ + bounds.maxZ) / 2 : 0;
+        const footprint = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) : 20;
+        const orbitRadius = clampScalar(footprint * 2.05, 16, 190);
+
+        if (isTopView) {
+            const topY = clampScalar(footprint * 2.6, 26, 170);
+            camera.position.set(centerX, topY, centerZ + 0.001);
+        } else {
+            const sideY = clampScalar(footprint * 0.72, 12, 38);
+            camera.position.set(centerX + orbitRadius * 0.88, sideY, centerZ + orbitRadius * 0.88);
+        }
+
+        camera.lookAt(centerX, 1.2, centerZ);
+        if (controlsRef.current) {
+            controlsRef.current.target.set(centerX, 1.2, centerZ);
+            controlsRef.current.update();
+        }
+    }, [bounds, camera, isTopView, isFullscreen]);
+
+    return (
+        <OrbitControls
+            ref={controlsRef}
+            makeDefault
+            enableDamping
+            dampingFactor={0.08}
+            enablePan={!isTopView}
+            enableRotate={!isTopView}
+            minDistance={6}
+            maxDistance={220}
+            minPolarAngle={isTopView ? 0 : 0.22}
+            maxPolarAngle={isTopView ? 0.08 : Math.PI / 2.05}
+        />
     );
 }
 
@@ -2795,21 +2844,15 @@ function BlueprintWorkspace() {
                     <div className="w-full h-full relative" style={{
                         background: isFullscreen ? 'linear-gradient(180deg, #f8f5f0 0%, #e8e2d6 100%)' : 'linear-gradient(180deg, #f0ece4 0%, #e8e2d6 50%, #ddd7c9 100%)'
                     }}>
-                        {!isWalkthrough ? (
-                            <BabylonBlueprintViewer
-                                data={elements}
-                                progress={progress}
-                                isTopView={isTopView}
-                            />
-                        ) : (
-                            <Canvas
-                                key={isFullscreen ? 'canvas-fullscreen' : 'canvas-standard'}
-                                dpr={[1, 2]}
-                                camera={{ position: [18, 14, 18], fov: isFullscreen ? 28 : 32 }}
-                                gl={{ antialias: true, alpha: true }}
-                                style={{ background: 'transparent' }}
-                            >
-                                {showWalkthroughHuman ? (
+                        <Canvas
+                            key={`${isFullscreen ? 'canvas-fullscreen' : 'canvas-standard'}-${isWalkthrough ? 'walk' : (isTopView ? 'top' : 'orbit')}`}
+                            dpr={[1, 2]}
+                            camera={{ position: [18, 14, 18], fov: isFullscreen ? 28 : 32 }}
+                            gl={{ antialias: true, alpha: true }}
+                            style={{ background: 'transparent' }}
+                        >
+                            {isWalkthrough ? (
+                                showWalkthroughHuman ? (
                                     <FreefireWalkthroughController
                                         bounds={walkthroughBounds}
                                         humanModelUrl={CUSTOM_HUMAN_GLB_URL}
@@ -2825,87 +2868,93 @@ function BlueprintWorkspace() {
                                         onHudChange={handleWalkHudChange}
                                         onUseInteractable={handleWalkUseInteractable}
                                     />
-                                )}
+                                )
+                            ) : (
+                                <OrbitViewController
+                                    data={elements}
+                                    isTopView={isTopView}
+                                    isFullscreen={isFullscreen}
+                                />
+                            )}
 
-                                {/* Environmental Lighting based on Time of Day */}
+                            {/* Environmental Lighting based on Time of Day */}
+                            {(() => {
+                                const isNight = timeOfDay < 6 || timeOfDay > 18;
+                                const sunAngle = ((timeOfDay - 6) / 12) * Math.PI;
+                                const sunX = Math.cos(sunAngle) * -30;
+                                const sunY = Math.max(Math.sin(sunAngle) * 30, -5);
+                                const sunZ = 15;
+                                const intensity = isNight ? 0 : Math.sin(sunAngle) * 2.5;
+
+                                return (
+                                    <>
+                                        <ambientLight intensity={isNight ? 0.2 : 0.6} color={isNight ? "#4a5a70" : "#ffffff"} />
+                                        <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={[2048, 2048]} />
+                                        <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
+                                            shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
+                                        <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
+                                        {!isNight && (
+                                            <Sky distance={450000} sunPosition={[sunX, sunY, sunZ]} inclination={0} azimuth={0.25} rayleigh={1.5} turbidity={0.5} />
+                                        )}
+                                        {isNight && (
+                                            <>
+                                                <color attach="background" args={['#050812']} />
+                                                <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+                                            </>
+                                        )}
+                                        {!isNight && <color attach="background" args={['#d1eaff']} />}
+                                    </>
+                                );
+                            })()}
+
+                            <Suspense fallback={null}>
+                                <GeneratedStructure
+                                    progress={progress}
+                                    data={elements}
+                                    visibleElements={visibleElements}
+                                    onSelect={setSelectedElement}
+                                    isWalkthrough={isWalkthrough}
+                                    humanModelUrl={CUSTOM_HUMAN_GLB_URL}
+                                    openedDoorIds={walkOpenedDoorIds}
+                                    hiddenFurnitureIds={walkCollectedItemIds}
+                                />
                                 {(() => {
                                     const isNight = timeOfDay < 6 || timeOfDay > 18;
-                                    const sunAngle = ((timeOfDay - 6) / 12) * Math.PI;
-                                    const sunX = Math.cos(sunAngle) * -30;
-                                    const sunY = Math.max(Math.sin(sunAngle) * 30, -5);
-                                    const sunZ = 15;
-                                    const intensity = isNight ? 0 : Math.sin(sunAngle) * 2.5;
-
+                                    const envPreset = isNight
+                                        ? 'city'
+                                        : (timeOfDay < 9 || timeOfDay > 16 ? 'sunset' : 'apartment');
                                     return (
                                         <>
-                                            <ambientLight intensity={isNight ? 0.2 : 0.6} color={isNight ? "#4a5a70" : "#ffffff"} />
-                                            <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={[2048, 2048]} />
-                                            <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
-                                                shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
-                                            <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
-                                            {!isNight && (
-                                                <Sky distance={450000} sunPosition={[sunX, sunY, sunZ]} inclination={0} azimuth={0.25} rayleigh={1.5} turbidity={0.5} />
-                                            )}
-                                            {isNight && (
-                                                <>
-                                                    <color attach="background" args={['#050812']} />
-                                                    <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-                                                </>
-                                            )}
-                                            {!isNight && <color attach="background" args={['#d1eaff']} />}
+                                            <Environment preset={envPreset as any} />
+                                            <ContactShadows
+                                                position={[0, -0.01, 0]}
+                                                opacity={isNight ? 0.34 : 0.46}
+                                                scale={isNight ? 34 : 42}
+                                                blur={isNight ? 3.2 : 2.2}
+                                                far={isNight ? 14 : 18}
+                                            />
                                         </>
                                     );
                                 })()}
 
-                                <Suspense fallback={null}>
-                                    <GeneratedStructure
-                                        progress={progress}
-                                        data={elements}
-                                        visibleElements={visibleElements}
-                                        onSelect={setSelectedElement}
-                                        isWalkthrough={isWalkthrough}
-                                        humanModelUrl={CUSTOM_HUMAN_GLB_URL}
-                                        openedDoorIds={walkOpenedDoorIds}
-                                        hiddenFurnitureIds={walkCollectedItemIds}
+                                <EffectComposer>
+                                    <SSAO
+                                        intensity={20}
+                                        radius={0.4}
+                                        luminanceInfluence={0.5}
+                                        color={new THREE.Color("black")}
                                     />
-                                    {(() => {
-                                        const isNight = timeOfDay < 6 || timeOfDay > 18;
-                                        const envPreset = isNight
-                                            ? 'city'
-                                            : (timeOfDay < 9 || timeOfDay > 16 ? 'sunset' : 'apartment');
-                                        return (
-                                            <>
-                                                <Environment preset={envPreset as any} />
-                                                <ContactShadows
-                                                    position={[0, -0.01, 0]}
-                                                    opacity={isNight ? 0.34 : 0.46}
-                                                    scale={isNight ? 34 : 42}
-                                                    blur={isNight ? 3.2 : 2.2}
-                                                    far={isNight ? 14 : 18}
-                                                />
-                                            </>
-                                        );
-                                    })()}
-
-                                    <EffectComposer>
-                                        <SSAO
-                                            intensity={20}
-                                            radius={0.4}
-                                            luminanceInfluence={0.5}
-                                            color={new THREE.Color("black")}
-                                        />
-                                        <Bloom
-                                            luminanceThreshold={1.2}
-                                            mipmapBlur
-                                            intensity={0.4}
-                                            radius={0.4}
-                                        />
-                                        <Noise opacity={0.03} />
-                                        <Vignette eskil={false} offset={0.1} darkness={1.1} />
-                                    </EffectComposer>
-                                </Suspense>
-                            </Canvas>
-                        )}
+                                    <Bloom
+                                        luminanceThreshold={1.2}
+                                        mipmapBlur
+                                        intensity={0.4}
+                                        radius={0.4}
+                                    />
+                                    <Noise opacity={0.03} />
+                                    <Vignette eskil={false} offset={0.1} darkness={1.1} />
+                                </EffectComposer>
+                            </Suspense>
+                        </Canvas>
 
                         {/* PUBG-style Walkthrough UI */}
                         {isWalkthrough && status !== 'idle' && (
