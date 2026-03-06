@@ -15,12 +15,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const userRole = session.user.role;
-  const isEngineer = userRole === 'Engineer' || userRole === 'Admin';
-  if (!isEngineer) {
-    return NextResponse.json({ error: 'Forbidden: Engineer role required' }, { status: 403 });
-  }
-
   let payload: unknown = {};
   try {
     payload = await req.json();

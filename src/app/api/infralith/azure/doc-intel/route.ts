@@ -10,15 +10,10 @@ const probePayloadSchema = z.object({
   timeoutMs: z.number().int().min(5000).max(60000).optional(),
 });
 
-const isAllowedRole = (role?: string | null) => role === 'Engineer' || role === 'Admin';
-
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (!isAllowedRole(session.user.role)) {
-    return NextResponse.json({ error: 'Forbidden: Engineer or Admin role required' }, { status: 403 });
   }
 
   const runtime = getSanitizedAiRuntimeSummary();
@@ -45,9 +40,6 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (!isAllowedRole(session.user.role)) {
-    return NextResponse.json({ error: 'Forbidden: Engineer or Admin role required' }, { status: 403 });
   }
 
   let payload: unknown = {};

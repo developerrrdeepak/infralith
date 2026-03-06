@@ -29,9 +29,6 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     }
 
     const role = session.user.role || "Guest";
-    if (role !== "Engineer" && role !== "Admin") {
-        throw new Error("Forbidden: Engineer or Admin role required.");
-    }
 
     const startTime = Date.now();
     const runId = `RUN-${startTime.toString(36).toUpperCase()}`;

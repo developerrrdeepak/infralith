@@ -19,14 +19,14 @@ export default function BlueprintUpload() {
     const { toast } = useToast();
     const progress = pipelineStageToProgress(pipelineStage);
 
-    const isEngineer = user?.role === 'Engineer' || user?.role === 'Admin';
+    const canUpload = !!user;
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        if (!isEngineer) {
-            toast({ title: "Access Denied", description: "Only Sr. Structural Engineers can upload new documents.", variant: "destructive" });
+        if (!canUpload) {
+            toast({ title: "Access Denied", description: "Please sign in to upload documents.", variant: "destructive" });
             e.target.value = '';
             return;
         }
@@ -70,8 +70,8 @@ export default function BlueprintUpload() {
     };
 
     const triggerFileSelect = () => {
-        if (!isEngineer) {
-            toast({ title: "Access Denied", description: "Only site engineers can upload new documents.", variant: "destructive" });
+        if (!canUpload) {
+            toast({ title: "Access Denied", description: "Please sign in to upload documents.", variant: "destructive" });
             return;
         }
         fileInputRef.current?.click();
