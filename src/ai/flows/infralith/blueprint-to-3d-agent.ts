@@ -4288,6 +4288,322 @@ const shouldUseDeterministicRooms = (
   return false;
 };
 
+const FURNITURE_CENTER_BIASED_REGEX =
+  /\b(dining\s*table|coffee\s*table|center\s*table|table\b|island\b|rug\b|carpet\b|ottoman\b)\b/i;
+const FURNITURE_WALL_BIASED_REGEX =
+  /\b(bed\b|sofa\b|couch\b|wardrobe\b|cabinet\b|bookshelf\b|shelf\b|tv\b|television\b|desk\b|study\b|counter\b|vanity\b|toilet\b|wc\b|sink\b|basin\b|fridge\b|refrigerator\b|stove\b)\b/i;
+const FURNITURE_SKIP_REPOSITION_REGEX = /\b(stair|staircase|stairwell|human|person|plant)\b/i;
+
+const isPointInPolygon = (point: [number, number], polygon: [number, number][]): boolean => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  let inside = false;
+  const [px, py] = point;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = Number(polygon[i]?.[0]);
+    const yi = Number(polygon[i]?.[1]);
+    const xj = Number(polygon[j]?.[0]);
+    const yj = Number(polygon[j]?.[1]);
+    if (![xi, yi, xj, yj].every((value) => Number.isFinite(value))) continue;
+
+    const intersects =
+      yi > py !== yj > py &&
+      px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-9) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+
+const getPolygonCenter = (polygon: [number, number][]): [number, number] | null => {
+  if (!Array.isArray(polygon) || polygon.length === 0) return null;
+  let sx = 0;
+  let sy = 0;
+  let count = 0;
+  for (const point of polygon) {
+    const x = Number(point?.[0]);
+    const y = Number(point?.[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    sx += x;
+    sy += y;
+    count += 1;
+  }
+  if (count === 0) return null;
+  return [Number((sx / count).toFixed(3)), Number((sy / count).toFixed(3))];
+};
+
+const lerpPoint = (from: [number, number], to: [number, number], t: number): [number, number] => [
+  from[0] + ((to[0] - from[0]) * t),
+  from[1] + ((to[1] - from[1]) * t),
+];
+
+const normalizeFurniturePlacement = (
+  furnitures: GeometricReconstruction['furnitures'] | undefined,
+  walls: GeometricReconstruction['walls'],
+  rooms: GeometricReconstruction['rooms'],
+  doors: GeometricReconstruction['doors'],
+  windows: GeometricReconstruction['windows']
+): GeometricReconstruction['furnitures'] => {
+  const items = furnitures || [];
+  if (items.length === 0 || !Array.isArray(walls) || walls.length === 0) return items;
+
+  const wallsByFloor = new Map<number, GeometricReconstruction['walls']>();
+  for (const wall of walls) {
+    const floor = toFloorBucket(wall?.floor_level);
+    const bucket = wallsByFloor.get(floor) || [];
+    bucket.push(wall);
+    wallsByFloor.set(floor, bucket);
+  }
+
+  const roomCandidatesByFloor = new Map<
+    number,
+    Array<{
+      room: GeometricReconstruction['rooms'][number];
+      bounds: NonNullable<ReturnType<typeof collectRoomBounds>>;
+      center: [number, number];
+    }>
+  >();
+
+  for (const room of rooms || []) {
+    const bounds = collectRoomBounds(room?.polygon || []);
+    const center = getPolygonCenter(room?.polygon || []);
+    if (!bounds || !center) continue;
+    const floor = toFloorBucket(room?.floor_level);
+    const bucket = roomCandidatesByFloor.get(floor) || [];
+    bucket.push({ room, bounds, center });
+    roomCandidatesByFloor.set(floor, bucket);
+  }
+
+  const openingsByFloor = new Map<number, Array<[number, number]>>();
+  const addOpening = (floor: number, point: [number, number]) => {
+    const bucket = openingsByFloor.get(floor) || [];
+    bucket.push(point);
+    openingsByFloor.set(floor, bucket);
+  };
+  for (const door of doors || []) {
+    const point = asPoint2D(door?.position);
+    if (!point) continue;
+    addOpening(toFloorBucket(door?.floor_level), point);
+  }
+  for (const win of windows || []) {
+    const point = asPoint2D(win?.position);
+    if (!point) continue;
+    addOpening(toFloorBucket(win?.floor_level), point);
+  }
+
+  return items.map((item) => {
+    const initialPos = asPoint2D(item?.position);
+    if (!initialPos) return item;
+
+    const floor = toFloorBucket(item?.floor_level);
+    const floorWalls = wallsByFloor.get(floor) || walls;
+    if (!Array.isArray(floorWalls) || floorWalls.length === 0) return item;
+
+    const semanticKey = normalizeSemanticText(`${item?.type || ''} ${item?.description || ''}`);
+    if (FURNITURE_SKIP_REPOSITION_REGEX.test(semanticKey)) return item;
+
+    const width = Math.max(0.35, Number(item?.width || 0.8));
+    const depth = Math.max(0.35, Number(item?.depth || 0.8));
+    const halfSpan = Math.max(width, depth) * 0.5;
+
+    const roomCandidates = roomCandidatesByFloor.get(floor) || [];
+    let selectedRoom:
+      | {
+        room: GeometricReconstruction['rooms'][number];
+        bounds: NonNullable<ReturnType<typeof collectRoomBounds>>;
+        center: [number, number];
+      }
+      | null = null;
+
+    if (roomCandidates.length > 0) {
+      const containing = roomCandidates
+        .filter((entry) => isPointInPolygon(initialPos, entry.room.polygon || []))
+        .sort((a, b) => a.bounds.area - b.bounds.area);
+      if (containing.length > 0) {
+        selectedRoom = containing[0];
+      } else {
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (const entry of roomCandidates) {
+          const distance = pointDistance(initialPos, entry.center);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            selectedRoom = entry;
+          }
+        }
+      }
+    }
+
+    let candidatePos: [number, number] = [initialPos[0], initialPos[1]];
+    if (selectedRoom) {
+      if (FURNITURE_CENTER_BIASED_REGEX.test(semanticKey)) {
+        candidatePos = lerpPoint(candidatePos, selectedRoom.center, 0.58);
+      } else if (FURNITURE_WALL_BIASED_REGEX.test(semanticKey)) {
+        let bestWall:
+          | {
+            wall: GeometricReconstruction['walls'][number];
+            projected: ReturnType<typeof closestPointOnSegment>;
+            score: number;
+          }
+          | null = null;
+
+        const wallPasses = [true, false] as const;
+        for (const nearBoundsOnly of wallPasses) {
+          for (const wall of floorWalls) {
+            const start = asPoint2D(wall?.start);
+            const end = asPoint2D(wall?.end);
+            if (!start || !end) continue;
+            const midpoint: [number, number] = [
+              Number(((start[0] + end[0]) * 0.5).toFixed(3)),
+              Number(((start[1] + end[1]) * 0.5).toFixed(3)),
+            ];
+            if (
+              nearBoundsOnly &&
+              !isDoorNearRoomBounds(
+                midpoint,
+                selectedRoom.bounds,
+                Math.max(0.5, halfSpan * 0.9),
+                0.65
+              )
+            ) {
+              continue;
+            }
+            const projected = closestPointOnSegment(candidatePos, start, end);
+            const centerDist = pointDistance(projected.point, selectedRoom.center);
+            const score = projected.distance + (centerDist * 0.12);
+            if (!bestWall || score < bestWall.score) {
+              bestWall = { wall, projected, score };
+            }
+          }
+          if (bestWall) break;
+        }
+
+        if (bestWall) {
+          const start = asPoint2D(bestWall.wall.start)!;
+          const end = asPoint2D(bestWall.wall.end)!;
+          const wallDx = end[0] - start[0];
+          const wallDy = end[1] - start[1];
+          const wallLen = Math.hypot(wallDx, wallDy) || 1;
+          const n1: [number, number] = [-wallDy / wallLen, wallDx / wallLen];
+          const n2: [number, number] = [wallDy / wallLen, -wallDx / wallLen];
+          const towardCenter1 = pointDistance(
+            [
+              bestWall.projected.point[0] + n1[0] * 0.4,
+              bestWall.projected.point[1] + n1[1] * 0.4,
+            ],
+            selectedRoom.center
+          );
+          const towardCenter2 = pointDistance(
+            [
+              bestWall.projected.point[0] + n2[0] * 0.4,
+              bestWall.projected.point[1] + n2[1] * 0.4,
+            ],
+            selectedRoom.center
+          );
+          const inwardNormal = towardCenter1 <= towardCenter2 ? n1 : n2;
+          const inset = Math.max(0.24, (depth * 0.5) + 0.2);
+          candidatePos = [
+            bestWall.projected.point[0] + inwardNormal[0] * inset,
+            bestWall.projected.point[1] + inwardNormal[1] * inset,
+          ];
+        }
+      } else {
+        candidatePos = lerpPoint(candidatePos, selectedRoom.center, 0.18);
+      }
+
+      const floorOpenings = openingsByFloor.get(floor) || [];
+      for (const openingPoint of floorOpenings) {
+        const distance = pointDistance(candidatePos, openingPoint);
+        const minClearance = Math.max(0.58, halfSpan + 0.28);
+        if (!Number.isFinite(distance) || distance >= minClearance) continue;
+
+        let pushX = candidatePos[0] - openingPoint[0];
+        let pushY = candidatePos[1] - openingPoint[1];
+        let pushLen = Math.hypot(pushX, pushY);
+        if (pushLen < 1e-6) {
+          pushX = selectedRoom.center[0] - openingPoint[0];
+          pushY = selectedRoom.center[1] - openingPoint[1];
+          pushLen = Math.hypot(pushX, pushY);
+        }
+        if (pushLen < 1e-6) continue;
+        const pushScale = (minClearance - distance) + 0.05;
+        candidatePos = [
+          candidatePos[0] + (pushX / pushLen) * pushScale,
+          candidatePos[1] + (pushY / pushLen) * pushScale,
+        ];
+      }
+
+      if (!isPointInPolygon(candidatePos, selectedRoom.room.polygon || [])) {
+        for (let i = 0; i < 8; i += 1) {
+          candidatePos = lerpPoint(candidatePos, selectedRoom.center, 0.32);
+          if (isPointInPolygon(candidatePos, selectedRoom.room.polygon || [])) break;
+        }
+      }
+
+      if (!isPointInPolygon(candidatePos, selectedRoom.room.polygon || [])) {
+        const pad = Math.max(0.18, halfSpan * 0.7);
+        candidatePos = [
+          Math.max(
+            selectedRoom.bounds.minX + pad,
+            Math.min(selectedRoom.bounds.maxX - pad, candidatePos[0])
+          ),
+          Math.max(
+            selectedRoom.bounds.minY + pad,
+            Math.min(selectedRoom.bounds.maxY - pad, candidatePos[1])
+          ),
+        ];
+      }
+    }
+
+    let nearestWall:
+      | { wallStart: [number, number]; wallEnd: [number, number]; closest: [number, number]; distance: number }
+      | null = null;
+    for (const wall of floorWalls) {
+      const start = asPoint2D(wall?.start);
+      const end = asPoint2D(wall?.end);
+      if (!start || !end) continue;
+      const projected = closestPointOnSegment(candidatePos, start, end);
+      if (!nearestWall || projected.distance < nearestWall.distance) {
+        nearestWall = {
+          wallStart: start,
+          wallEnd: end,
+          closest: projected.point,
+          distance: projected.distance,
+        };
+      }
+    }
+
+    if (nearestWall) {
+      const clearance = Math.max(0.25, Math.min(0.9, Math.max(width, depth) * 0.35));
+      if (nearestWall.distance < clearance) {
+        let nx = candidatePos[0] - nearestWall.closest[0];
+        let ny = candidatePos[1] - nearestWall.closest[1];
+        const nLen = Math.hypot(nx, ny);
+        if (nLen < 1e-6) {
+          const wx = nearestWall.wallEnd[0] - nearestWall.wallStart[0];
+          const wy = nearestWall.wallEnd[1] - nearestWall.wallStart[1];
+          const wLen = Math.hypot(wx, wy) || 1;
+          nx = -wy / wLen;
+          ny = wx / wLen;
+        } else {
+          nx /= nLen;
+          ny /= nLen;
+        }
+        const delta = clearance - nearestWall.distance + 0.02;
+        candidatePos = [
+          candidatePos[0] + nx * delta,
+          candidatePos[1] + ny * delta,
+        ];
+      }
+    }
+
+    return {
+      ...item,
+      position: [
+        Number(candidatePos[0].toFixed(3)),
+        Number(candidatePos[1].toFixed(3)),
+      ] as [number, number],
+    };
+  });
+};
+
 const normalizeReconstructionGeometry = (payload: GeometricReconstruction): GeometricReconstruction => {
   if (!Array.isArray(payload?.walls) || payload.walls.length === 0) return payload;
 
@@ -4695,43 +5011,13 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     });
   }
 
-  const normalizedFurnitures = (payload.furnitures || []).map((item) => {
-    const initialPos: [number, number] = [Number(item.position[0]), Number(item.position[1])];
-    let best: { wallStart: [number, number]; wallEnd: [number, number]; closest: [number, number]; distance: number } | null = null;
-    for (const wall of finalizedWalls) {
-      const projected = closestPointOnSegment(initialPos, wall.start, wall.end);
-      if (!best || projected.distance < best.distance) {
-        best = { wallStart: wall.start, wallEnd: wall.end, closest: projected.point, distance: projected.distance };
-      }
-    }
-
-    if (!best) return item;
-    const clearance = Math.max(0.25, Math.min(0.9, Math.max(Number(item.width || 0.6), Number(item.depth || 0.6)) * 0.35));
-    if (best.distance >= clearance) return item;
-
-    let nx = initialPos[0] - best.closest[0];
-    let nz = initialPos[1] - best.closest[1];
-    const nLen = Math.hypot(nx, nz);
-    if (nLen < 1e-6) {
-      const wx = best.wallEnd[0] - best.wallStart[0];
-      const wz = best.wallEnd[1] - best.wallStart[1];
-      const wLen = Math.hypot(wx, wz) || 1;
-      nx = -wz / wLen;
-      nz = wx / wLen;
-    } else {
-      nx /= nLen;
-      nz /= nLen;
-    }
-
-    const delta = clearance - best.distance + 0.02;
-    return {
-      ...item,
-      position: [
-        Number((initialPos[0] + nx * delta).toFixed(3)),
-        Number((initialPos[1] + nz * delta).toFixed(3)),
-      ] as [number, number],
-    };
-  });
+  const normalizedFurnitures = normalizeFurniturePlacement(
+    payload.furnitures,
+    finalizedWalls,
+    resolvedRooms,
+    normalizedDoors,
+    normalizedWindows
+  );
 
   const wallSolids = buildServerCutWallSolids(finalizedWalls, normalizedDoors, normalizedWindows);
 
