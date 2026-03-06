@@ -17,7 +17,7 @@ import { EffectComposer, SSAO, Bloom, Noise, Vignette } from '@react-three/postp
 import { Geometry, Base, Subtraction } from '@react-three/csg';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
-import { AlertTriangle, ShieldAlert, Sparkles, Footprints } from 'lucide-react';
+import { Sparkles, Footprints } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
     Upload,
@@ -60,7 +60,6 @@ import { useToast } from '@/hooks/use-toast';
 import {
     GeometricReconstruction,
     RoofGeometry,
-    ConstructionConflict,
     AIAsset,
     SiteReconstruction,
 } from '@/ai/flows/infralith/reconstruction-types';
@@ -575,37 +574,6 @@ const InspectorItem = ({ icon, label, sublabel, active, visible, onSelect, onTog
         </div>
     </div>
 );
-
-// -- Conflict Markers --
-
-function ConflictMarker({ conflict }: { conflict: ConstructionConflict }) {
-    const meshRef = useRef<THREE.Mesh>(null);
-    useFrame((state) => {
-        if (meshRef.current) meshRef.current.position.y = 2 + Math.sin(state.clock.elapsedTime * 3) * 0.2;
-    });
-    const color = conflict.severity === 'high' ? '#ef4444' : conflict.severity === 'medium' ? '#f59e0b' : '#3b82f6';
-    return (
-        <group position={[conflict.location[0], 0, conflict.location[1]]}>
-            <mesh ref={meshRef}>
-                <octahedronGeometry args={[0.3, 0]} />
-                <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2} transparent opacity={0.8} />
-            </mesh>
-            <Html distanceFactor={10} position={[0, 2.8, 0]} center zIndexRange={[100, 0]}>
-                <div className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur-xl shadow-2xl pointer-events-none",
-                    conflict.severity === 'high' ? "bg-red-500/20 border-red-500/50 text-red-500" :
-                        conflict.severity === 'medium' ? "bg-amber-500/20 border-amber-500/50 text-amber-500" :
-                            "bg-blue-500/20 border-blue-500/50 text-blue-500"
-                )}>
-                    {conflict.severity === 'high' ? <ShieldAlert className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                    <span className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap">
-                        {conflict.type}: {conflict.description}
-                    </span>
-                </div>
-            </Html>
-        </group>
-    );
-}
 
 // -- Gable Roof --
 
@@ -1162,12 +1130,6 @@ function GeneratedStructure({
                 </group>
             )}
 
-
-
-            {/* Conflict markers */}
-            {p >= 1 && data.conflicts?.map((conflict, i) => (
-                <ConflictMarker key={`conflict - ${i} `} conflict={conflict} />
-            ))}
         </group>
     );
 }
