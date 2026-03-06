@@ -39,6 +39,17 @@ export default function DMPage() {
   const lookupDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canCreateGroups = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
+  const canStartMeet = Boolean(user?.uid);
+
+  const isInternalMeetLink = (value: string): boolean => {
+    try {
+      if (typeof window === 'undefined') return false;
+      const parsed = new URL(value);
+      return parsed.origin === window.location.origin && /^\/meet\/[a-zA-Z0-9_-]{3,64}$/.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  };
 
   const fetchChats = useCallback(async () => {
     if (!user) return;
@@ -333,6 +344,36 @@ export default function DMPage() {
     setIsNewChatOpen(false);
   };
 
+  const handleStartMeet = async () => {
+    if (!user || !selectedChat) return;
+
+    const roomId = `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const meetLink = `${window.location.origin}/meet/${roomId}`;
+    const meetingInviteText = `Please join my secure video meeting: ${meetLink}`;
+
+    try {
+      await dmService.sendMessage(
+        user.uid,
+        selectedChat.otherUserId,
+        selectedChat.otherUserName,
+        selectedChat.otherUserAvatar,
+        user.name || user.email || 'Team Member',
+        user.avatar || '',
+        meetingInviteText,
+        null
+      );
+      toast({ title: 'Meeting Started', description: 'Secure video meeting link sent. Opening room...' });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Link send failed',
+        description: 'Room opened, but message delivery failed. Share the URL manually.',
+      });
+    }
+
+    window.location.assign(`/meet/${roomId}`);
+  };
+
   const isWaitingForAcceptance = user && messages.length > 0 && messages.every(m => m.senderId === user.uid);
   const isIncomingRequest = selectedChat?.status === 'pending';
 
@@ -601,22 +642,8 @@ export default function DMPage() {
                 </div>
               </div>
 
-              {canCreateGroups && (
-                <Button className="bg-[#1d4ed8] hover:bg-[#1e40af] text-white shadow-md shadow-blue-500/20 h-10 px-5 rounded-full font-bold transition-all gap-2" onClick={() => {
-                  if (!user || !selectedChat) return;
-                  const meetLink = `${window.location.origin}/meet/room-${Math.floor(Math.random() * 1000000)}`;
-	                  dmService.sendMessage(
-	                    user.uid,
-	                    selectedChat.otherUserId,
-	                    selectedChat.otherUserName,
-	                    selectedChat.otherUserAvatar,
-	                    user.name || user.email || 'Team Member',
-	                    user.avatar || '',
-	                    `Please join my secure video meeting: ${meetLink}`,
-	                    null
-	                  );
-                  toast({ title: "Meeting Started", description: "Secure video meeting link sent." });
-                }}>
+              {canStartMeet && (
+                <Button className="bg-[#1d4ed8] hover:bg-[#1e40af] text-white shadow-md shadow-blue-500/20 h-10 px-5 rounded-full font-bold transition-all gap-2" onClick={handleStartMeet}>
                   <Video className="h-4 w-4" /> <span className="hidden sm:inline">Meet</span>
                 </Button>
               )}
@@ -660,8 +687,14 @@ export default function DMPage() {
                         {msg.text && (
                           <span className="break-words whitespace-pre-wrap">
                             {msg.text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
-                              /(https?:\/\/[^\s]+)/g.test(part) ? (
-                                <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline inline-flex items-center gap-1 font-bold">
+                              /^https?:\/\/[^\s]+$/i.test(part) ? (
+                                <a
+                                  key={i}
+                                  href={part}
+                                  target={isInternalMeetLink(part) ? '_self' : '_blank'}
+                                  rel="noopener noreferrer"
+                                  className="text-blue-500 dark:text-blue-400 hover:underline inline-flex items-center gap-1 font-bold"
+                                >
                                   {part}
                                 </a>
                               ) : (

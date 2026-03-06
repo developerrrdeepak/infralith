@@ -40,9 +40,6 @@ const toUserProfile = (doc: UserDirectoryDoc) => ({
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
   if (!isCollabStoreConfigured()) {
     return NextResponse.json({ users: [] }, { status: 200 });
   }
@@ -50,13 +47,20 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const email = normalizeEmail(searchParams.get('email') || '');
   const q = String(searchParams.get('q') || '').trim().toLowerCase();
+  const isAuthenticated = Boolean(session?.user);
+
+  // Allow exact email lookup without an authenticated session so Guest-mode
+  // users can still discover portal-registered accounts by email.
+  if (!isAuthenticated && !email) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   try {
     if (email) {
       const matches = await queryCollabDocs<UserDirectoryDoc>(
         {
           query:
-            'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND c.emailNormalized = @email',
+            'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (c.emailNormalized = @email OR LOWER(c.email) = @email)',
           parameters: [
             { name: '@pk', value: USERS_PK },
             { name: '@type', value: 'userProfile' },
@@ -74,7 +78,7 @@ export async function GET(req: Request) {
       const users = await queryCollabDocs<UserDirectoryDoc>(
         {
           query:
-            'SELECT TOP 50 * FROM c WHERE c.pk = @pk AND c.type = @type AND (CONTAINS(LOWER(c.name), @q) OR CONTAINS(c.emailNormalized, @q)) ORDER BY c.updatedAt DESC',
+            'SELECT TOP 50 * FROM c WHERE c.pk = @pk AND c.type = @type AND (CONTAINS(LOWER(c.name), @q) OR CONTAINS(c.emailNormalized, @q) OR CONTAINS(LOWER(c.email), @q)) ORDER BY c.updatedAt DESC',
           parameters: [
             { name: '@pk', value: USERS_PK },
             { name: '@type', value: 'userProfile' },
