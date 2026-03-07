@@ -33,7 +33,7 @@ export default function DMPage() {
   const [isGroupDialogActive, setIsGroupDialogActive] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedEngineers, setSelectedEngineers] = useState<string[]>([]);
-  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found_member' | 'not_found' | 'invited' | 'lookup_unavailable'>('idle');
+  const [emailLookupResult, setEmailLookupResult] = useState<'idle' | 'loading' | 'found_member' | 'not_found' | 'invited'>('idle');
   const [emailLookupUser, setEmailLookupUser] = useState<UserProfileData | null>(null);
   const latestLookupId = useRef(0);
   const lookupDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -259,38 +259,6 @@ export default function DMPage() {
     setIsNewChatOpen(true);
   };
 
-  const isLookupBackendUnavailable = async (email: string): Promise<boolean> => {
-    try {
-      const encoded = encodeURIComponent(email);
-      const [internalRes, externalRes] = await Promise.all([
-        fetch(`/api/infralith/users?email=${encoded}`, {
-          method: 'GET',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-        }),
-        fetch(`/api/user-lookup?email=${encoded}`, {
-          method: 'GET',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      ]);
-
-      const internalPayload = internalRes.ok ? await internalRes.json().catch(() => null) : null;
-      const internalSupportsEmailLookup =
-        !!internalPayload &&
-        typeof internalPayload === 'object' &&
-        Object.prototype.hasOwnProperty.call(internalPayload, 'user');
-      const externalUnavailable =
-        !externalRes.ok && (externalRes.status === 429 || externalRes.status >= 500);
-
-      // Unavailable only when internal directory does not support email lookup shape
-      // and external fallback is failing.
-      return !internalSupportsEmailLookup && externalUnavailable;
-    } catch {
-      return true;
-    }
-  };
-
   // Called whenever the search input changes - auto-lookup if valid email
   const handleSearchChange = (value: string) => {
     setSearchUser(value);
@@ -368,18 +336,11 @@ export default function DMPage() {
         }
 
         setEmailLookupUser(null);
-        const unavailable = await isLookupBackendUnavailable(normalized);
-        if (requestId !== latestLookupId.current) return;
-        if (unavailable) {
-          setEmailLookupResult('lookup_unavailable');
-          return;
-        }
-
         setEmailLookupResult(alreadyInvited ? 'invited' : 'not_found');
       } catch (error) {
         if (requestId !== latestLookupId.current) return;
         console.error('Lookup failed', error);
-        setEmailLookupResult('lookup_unavailable');
+        setEmailLookupResult('not_found');
       }
     }, 350);
   };
@@ -558,15 +519,12 @@ export default function DMPage() {
                             ? 'bg-orange-500/5 border-orange-500/20'
                             : emailLookupResult === 'invited'
                               ? 'bg-blue-500/5 border-blue-500/20'
-                              : emailLookupResult === 'lookup_unavailable'
-                                ? 'bg-red-500/5 border-red-500/20'
                                 : 'bg-muted/40 border-border'
                     }`}>
                       {emailLookupResult === 'loading' && <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin shrink-0" />}
                       {emailLookupResult === 'found_member' && <UserCheck className="h-5 w-5 text-emerald-500 shrink-0" />}
                       {emailLookupResult === 'not_found' && <UserPlus className="h-5 w-5 text-orange-500 shrink-0" />}
                       {emailLookupResult === 'invited' && <Mail className="h-5 w-5 text-blue-500 shrink-0" />}
-                      {emailLookupResult === 'lookup_unavailable' && <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />}
 
                       <div className="flex-1">
                         {emailLookupResult === 'loading' && <p className="text-muted-foreground">Checking registry...</p>}
@@ -601,14 +559,6 @@ export default function DMPage() {
                             <p className="font-bold text-blue-700 dark:text-blue-400">Invitation already sent</p>
                             <p className="text-xs text-muted-foreground mt-0.5">
                               An invite to {searchUser.trim()} is pending acceptance. You'll be notified when they join.
-                            </p>
-                          </>
-                        )}
-                        {emailLookupResult === 'lookup_unavailable' && (
-                          <>
-                            <p className="font-bold text-red-700 dark:text-red-400">Directory lookup unavailable</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              Team email search backend is not reachable. Please ask admin to configure user directory envs in production.
                             </p>
                           </>
                         )}
