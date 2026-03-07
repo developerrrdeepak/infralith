@@ -11,7 +11,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { azureRuntime, getDeploymentOrder } from '@/ai/config/azure-runtime';
 
-const ORCHESTRATOR_VERSION = '3.0.0'; // Bumped for Native OpenCV.js Migration
+const ORCHESTRATOR_VERSION = '3.0.1';
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
@@ -57,7 +57,7 @@ const getRequiredStandardHints = (): string[] => {
 };
 
 function paramHash(): string {
-    const seed = `blueprint-parser-v3|opencv-js-native|compliance-is456-nbc2016|risk-seismic-v2|cost-capex-india|devops-github-v1|${ORCHESTRATOR_VERSION}`;
+    const seed = `blueprint-parser-v3|compliance-is456-nbc2016|risk-seismic-v2|cost-capex-india|devops-github-v1|${ORCHESTRATOR_VERSION}`;
     let h = 0;
     for (let i = 0; i < seed.length; i++) { h = (h << 5) - h + seed.charCodeAt(i); h |= 0; }
     return Math.abs(h).toString(16).toUpperCase();
@@ -75,7 +75,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     const startTime = Date.now();
     const runId = `RUN-${startTime.toString(36).toUpperCase()}`;
-    console.log(`[${runId}] Infralith Orchestrator v${ORCHESTRATOR_VERSION}: Initiating Native OpenCV.js + AI analysis...`);
+    console.log(`[${runId}] Infralith Orchestrator v${ORCHESTRATOR_VERSION}: Initiating AI analysis...`);
 
     const input = formData.get('file');
     if (!(input instanceof File)) throw new Error("No input blueprint file provided.");
@@ -413,14 +413,20 @@ const validateRagContext = (
 ) => {
     if (!options.strict) return;
 
+    const isIgnorableStrictError = (message: string): boolean => {
+        const normalized = String(message || '').toLowerCase();
+        return normalized.startsWith('embedding unavailable:');
+    };
+
     if (!context.diagnostics.configured) {
         throw new Error('Strict real-data mode: Azure AI Search is not configured.');
     }
     if (context.chunks.length === 0) {
         throw new Error('Strict real-data mode: no RAG chunks were retrieved for this document.');
     }
-    if (context.diagnostics.errors.length > 0) {
-        throw new Error(`Strict real-data mode: RAG retrieval errors detected (${context.diagnostics.errors.join(' | ')}).`);
+    const blockingErrors = context.diagnostics.errors.filter((message) => !isIgnorableStrictError(message));
+    if (blockingErrors.length > 0) {
+        throw new Error(`Strict real-data mode: RAG retrieval errors detected (${blockingErrors.join(' | ')}).`);
     }
 
     const corpus = context.chunks
