@@ -129,6 +129,45 @@ const setStorageItem = (key: string, value: any) => {
 let externalLookupBackoffUntil = 0;
 const EXTERNAL_LOOKUP_BACKOFF_MS = 5 * 60 * 1000;
 
+const getLocalDirectoryUsers = (): UserProfileData[] => {
+  const users = getStorageItem('infralith_users') || {};
+  return (Object.values(users) as UserProfileData[]).map((user) => ({
+    ...user,
+    email: normalizeEmail(user.email || ''),
+  }));
+};
+
+const mergeDirectoryUsers = (...lists: UserProfileData[][]): UserProfileData[] => {
+  const merged = new Map<string, UserProfileData>();
+
+  lists.flat().forEach((user) => {
+    const normalizedEmail = normalizeEmail(user.email || '');
+    const key = String(user.uid || normalizedEmail).trim();
+    if (!key) return;
+
+    const normalizedUser: UserProfileData = {
+      ...user,
+      email: normalizedEmail,
+    };
+
+    if (!merged.has(key)) {
+      merged.set(key, normalizedUser);
+      return;
+    }
+
+    const existing = merged.get(key)!;
+    merged.set(key, {
+      ...existing,
+      ...normalizedUser,
+      name: normalizedUser.name || existing.name,
+      avatar: normalizedUser.avatar ?? existing.avatar ?? null,
+      role: normalizedUser.role || existing.role,
+    });
+  });
+
+  return Array.from(merged.values());
+};
+
 // --- USER DB SERVICE ---
 export const userDbService = {
   lookupRemoteUser: async (email: string): Promise<UserProfileData | null> => {
@@ -218,6 +257,8 @@ export const userDbService = {
   },
 
   getAllUsers: async (): Promise<UserProfileData[]> => {
+    const localUsers = getLocalDirectoryUsers();
+
     if (typeof fetch !== 'undefined') {
       try {
         const res = await fetch('/api/infralith/users', {
@@ -228,7 +269,11 @@ export const userDbService = {
         if (res.ok) {
           const payload = await res.json();
           if (Array.isArray(payload?.users)) {
-            return payload.users as UserProfileData[];
+            const remoteUsers = (payload.users as UserProfileData[]).map((user) => ({
+              ...user,
+              email: normalizeEmail(user.email || ''),
+            }));
+            return mergeDirectoryUsers(remoteUsers, localUsers);
           }
         }
       } catch (error) {
@@ -236,8 +281,43 @@ export const userDbService = {
       }
     }
 
-    const users = getStorageItem('infralith_users') || {};
-    return Object.values(users);
+    return localUsers;
+  },
+
+  searchUsers: async (query: string): Promise<UserProfileData[]> => {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) {
+      return await userDbService.getAllUsers();
+    }
+
+    if (typeof fetch !== 'undefined') {
+      try {
+        const res = await fetch(`/api/infralith/users?q=${encodeURIComponent(q)}`, {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (res.ok) {
+          const payload = await res.json();
+          if (Array.isArray(payload?.users)) {
+            const remoteUsers = (payload.users as UserProfileData[]).map((user) => ({
+              ...user,
+              email: normalizeEmail(user.email || ''),
+            }));
+            if (remoteUsers.length > 0) return remoteUsers;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to search users from directory API, using local fallback', error);
+      }
+    }
+
+    const allUsers = await userDbService.getAllUsers();
+    return allUsers.filter(
+      (user) =>
+        (user.name || '').toLowerCase().includes(q) ||
+        normalizeEmail(user.email || '').includes(q)
+    );
   },
 
   getUserByEmail: async (email: string): Promise<UserProfileData | null> => {

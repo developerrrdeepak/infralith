@@ -37,6 +37,8 @@ export default function DMPage() {
   const [emailLookupUser, setEmailLookupUser] = useState<UserProfileData | null>(null);
   const latestLookupId = useRef(0);
   const lookupDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestDirectoryLookupId = useRef(0);
+  const directoryLookupDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canCreateGroups = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
   const canStartMeet = Boolean(user?.uid);
@@ -120,7 +122,14 @@ export default function DMPage() {
         setAllUsers(users.filter(u => u.uid !== user?.uid)); // Filter out current user
       });
     }
-  }, [user]);
+  }, [user?.uid, canCreateGroups]);
+
+  useEffect(() => {
+    return () => {
+      if (lookupDebounce.current) clearTimeout(lookupDebounce.current);
+      if (directoryLookupDebounce.current) clearTimeout(directoryLookupDebounce.current);
+    };
+  }, []);
 
   // 2. Handle Redirects and Updates - EFFECT
   useEffect(() => {
@@ -237,8 +246,13 @@ export default function DMPage() {
   };
 
   const openNewChatDialog = async () => {
-    const users = await userDbService.getAllUsers();
-    setAllUsers(users.filter(u => u.uid !== user?.uid));
+    try {
+      const users = await userDbService.getAllUsers();
+      setAllUsers(users.filter((u) => u.uid !== user?.uid));
+    } catch (error) {
+      console.error('Failed to open user directory', error);
+      setAllUsers([]);
+    }
     setSearchUser('');
     setEmailLookupResult('idle');
     setEmailLookupUser(null);
@@ -250,9 +264,28 @@ export default function DMPage() {
     setSearchUser(value);
     const normalized = normalizeEmail(value);
     const isEmail = normalized.includes('@') && normalized.includes('.');
+
+    if (directoryLookupDebounce.current) clearTimeout(directoryLookupDebounce.current);
+
     if (!isEmail) {
       setEmailLookupResult('idle');
       setEmailLookupUser(null);
+      if (lookupDebounce.current) clearTimeout(lookupDebounce.current);
+
+      directoryLookupDebounce.current = setTimeout(async () => {
+        const requestId = ++latestDirectoryLookupId.current;
+        try {
+          const users = normalized
+            ? await userDbService.searchUsers(normalized)
+            : await userDbService.getAllUsers();
+
+          if (requestId !== latestDirectoryLookupId.current) return;
+          setAllUsers(users.filter((u) => u.uid !== user?.uid));
+        } catch (error) {
+          if (requestId !== latestDirectoryLookupId.current) return;
+          console.error('Directory search failed', error);
+        }
+      }, 250);
       return;
     }
 
