@@ -14,6 +14,121 @@ import { useNotifications } from './NotificationBell';
 import { auditLog } from '@/lib/audit-log';
 import { cn } from '@/lib/utils';
 
+const resolveEnvText = (value: string | undefined, fallback: string) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : fallback;
+};
+
+const parseNumberEnv = (value: string | undefined, fallback: number) => {
+    if (!value) return fallback;
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const DECISION_COPY = {
+    title: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_TITLE, 'Decision Hub'),
+    subtitle: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_SUBTITLE,
+        'Review AI insights and authorize cross-functional project progression.'
+    ),
+    permissionTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_PERMISSION_TITLE, 'Permission Required'),
+    permissionDescription: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_PERMISSION_DESC,
+        'Only Supervisors or Administrators can authorize project progression.'
+    ),
+    dataRequiredTitle: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_DATA_REQUIRED_TITLE,
+        'Live Report Data Required'
+    ),
+    dataRequiredDescription: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_DATA_REQUIRED_DESC,
+        'Run AI analysis first. Decision Hub now accepts only live project cost data.'
+    ),
+    decisionSubmitFailedTitle: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_SUBMIT_FAILED_TITLE,
+        'Decision Submission Failed'
+    ),
+    decisionSubmitFailedDescription: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_SUBMIT_FAILED_DESC,
+        'Could not submit decision to approval API. Please retry.'
+    ),
+    notifyApprovedTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_NOTIFY_APPROVED_TITLE, 'Project Approved'),
+    notifyRejectedTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_NOTIFY_REJECTED_TITLE, 'Project Rejected'),
+    notifyApprovedPrefix: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_NOTIFY_APPROVED_PREFIX, 'authorized the project at'),
+    notifyApprovedSuffix: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_NOTIFY_APPROVED_SUFFIX, 'Report is now finalized.'),
+    notifyRejectedBody: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_NOTIFY_REJECTED_BODY,
+        'rejected the project. Requires revision before re-submission.'
+    ),
+    toastApprovedTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_TOAST_APPROVED_TITLE, 'Project Approved'),
+    toastRejectedTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_TOAST_REJECTED_TITLE, 'Project Rejected'),
+    toastActionRecordedPrefix: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_TOAST_ACTION_PREFIX,
+        'Action recorded in audit trail by'
+    ),
+    budgetTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_BUDGET_TITLE, 'Budget What-If Sandbox'),
+    budgetSubtitle: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_BUDGET_SUBTITLE,
+        'Adjust variables to forecast cost and compliance risk impacts.'
+    ),
+    scheduleLabel: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_SCHEDULE_LABEL, 'Schedule Acceleration Target'),
+    scheduleUnit: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_SCHEDULE_UNIT, 'Days'),
+    scheduleHelpText: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_SCHEDULE_HELP,
+        'Accelerating the schedule lowers heavy machinery holding costs but moderately increases logistical collision risk.'
+    ),
+    qualityLabel: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_QUALITY_LABEL, 'Material Cost Threshold'),
+    qualityUnit: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_QUALITY_UNIT, 'Standard'),
+    qualityWarningTemplate: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_QUALITY_WARNING,
+        'Warning: Materials below {threshold}% standard exponentially increase compliance failure risk.'
+    ),
+    qualityHelpTemplate: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_QUALITY_HELP,
+        'Targeting cheaper materials (below {threshold}% standard) exponentially increases compliance failure permutations.'
+    ),
+    projectedCostLabel: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_PROJECTED_COST_LABEL, 'AI Projected Cost'),
+    savingsPrefix: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_SAVINGS_PREFIX, 'Saving'),
+    checklistTitle: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_CHECKLIST_TITLE, 'Approval Checklist'),
+    checklistSubtitle: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_CHECKLIST_SUBTITLE,
+        'Confirm review of all AI-generated evaluations before authorizing.'
+    ),
+    checklistCompliance: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_CHECKLIST_COMPLIANCE,
+        'I acknowledge the compliance violations found in the report.'
+    ),
+    checklistCost: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_CHECKLIST_COST,
+        'I accept the projected cost impact and budget timeline.'
+    ),
+    checklistManual: resolveEnvText(
+        process.env.NEXT_PUBLIC_DECISION_CHECKLIST_MANUAL,
+        'I confirm manual review of all critical risk factors.'
+    ),
+    confirmationsLabel: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_CONFIRMATIONS_LABEL, 'Confirmations'),
+    rejectAction: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_REJECT_ACTION, 'Reject Project'),
+    approveAction: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_APPROVE_ACTION, 'Approve & Generate Report'),
+    approvalChainLabel: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_CHAIN_LABEL, 'Approval Chain'),
+    approvedByPrefix: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_APPROVED_BY_PREFIX, 'Approved by'),
+    rejectedByPrefix: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_REJECTED_BY_PREFIX, 'Rejected by'),
+    awaitingSignoff: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_AWAITING_STATUS, 'Awaiting Supervisor Sign-off'),
+    pendingStep: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_PENDING_STEP, 'Step 1 of 1 - Authorization pending'),
+};
+
+const DECISION_SETTINGS = {
+    locale: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_LOCALE, 'en-US'),
+    currency: resolveEnvText(process.env.NEXT_PUBLIC_DECISION_CURRENCY, 'USD'),
+    baseCost: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_BASE_COST, 2_500_000),
+    scheduleCostDelta: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_SCHEDULE_COST_DELTA, -12_500),
+    qualityCostDelta: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_QUALITY_COST_DELTA, -5_000),
+    scheduleMax: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_SCHEDULE_MAX, 30),
+    qualityMin: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_QUALITY_MIN, 70),
+    qualityMax: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_QUALITY_MAX, 100),
+    qualityStep: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_QUALITY_STEP, 5),
+    qualityRiskThreshold: parseNumberEnv(process.env.NEXT_PUBLIC_DECISION_QUALITY_RISK_THRESHOLD, 85),
+};
+
 export default function DecisionPanel() {
     const { handleNavigate, user, infralithResult } = useAppContext();
     const { toast } = useToast();
@@ -21,65 +136,146 @@ export default function DecisionPanel() {
 
     const [agreed, setAgreed] = useState({ compliance: false, cost: false, manual: false });
     const [schedule, setSchedule] = useState([0]);
-    const [quality, setQuality] = useState([100]);
+    const [quality, setQuality] = useState([DECISION_SETTINGS.qualityMax]);
     const [submitting, setSubmitting] = useState(false);
     const [decisionMade, setDecisionMade] = useState<'approved' | 'rejected' | null>(null);
     const [decisionTime, setDecisionTime] = useState<string | null>(null);
 
-    const baseCost = 2_500_000;
-    const dynamicCost = baseCost + (schedule[0] * -12500) + ((100 - quality[0]) * -5000);
-    const savings = baseCost - dynamicCost;
-    const fmt = (v: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
+    const checklistItems = [
+        { key: 'compliance' as const, label: DECISION_COPY.checklistCompliance, val: agreed.compliance },
+        { key: 'cost' as const, label: DECISION_COPY.checklistCost, val: agreed.cost },
+        { key: 'manual' as const, label: DECISION_COPY.checklistManual, val: agreed.manual },
+    ];
+    const completedChecklistCount = checklistItems.filter((item) => item.val).length;
+    const totalChecklistCount = checklistItems.length;
+    const actorName = user?.name || 'System User';
+    const qualityWarningText = DECISION_COPY.qualityWarningTemplate.replace('{threshold}', `${DECISION_SETTINGS.qualityRiskThreshold}`);
+    const qualityHelpText = DECISION_COPY.qualityHelpTemplate.replace('{threshold}', `${DECISION_SETTINGS.qualityRiskThreshold}`);
 
-    const canApprove = agreed.compliance && agreed.cost && agreed.manual;
-    const hasPrivilege = user?.role === 'Engineer' || user?.role === 'Supervisor' || user?.role === 'Admin';
-    const qualityRisk = quality[0] < 85;
+    const reportBaseCost =
+        typeof infralithResult?.costEstimate?.total === 'number'
+            ? infralithResult.costEstimate.total
+            : typeof infralithResult?.costImpactEstimate === 'number'
+                ? infralithResult.costImpactEstimate
+                : null;
+    const reportCurrency =
+        typeof infralithResult?.costEstimate?.currency === 'string' && infralithResult.costEstimate.currency.trim()
+            ? infralithResult.costEstimate.currency.trim()
+            : typeof infralithResult?.currency === 'string' && infralithResult.currency.trim()
+                ? infralithResult.currency.trim()
+                : null;
+    const hasRealReportData =
+        !!infralithResult?.id &&
+        Number.isFinite(Number(reportBaseCost)) &&
+        Number(reportBaseCost) > 0 &&
+        !!reportCurrency;
+
+    const baseCost = hasRealReportData ? Number(reportBaseCost) : 0;
+    const dynamicCost =
+        baseCost +
+        (schedule[0] * DECISION_SETTINGS.scheduleCostDelta) +
+        ((DECISION_SETTINGS.qualityMax - quality[0]) * DECISION_SETTINGS.qualityCostDelta);
+    const savings = baseCost - dynamicCost;
+    const fmt = (v: number) =>
+        reportCurrency
+            ? new Intl.NumberFormat(DECISION_SETTINGS.locale, {
+                style: 'currency',
+                currency: reportCurrency,
+                maximumFractionDigits: 0,
+            }).format(v)
+            : 'N/A';
+
+    const canApprove = hasRealReportData && completedChecklistCount === totalChecklistCount;
+    const hasPrivilege = user?.role === 'Supervisor' || user?.role === 'Admin';
+    const qualityRisk = quality[0] < DECISION_SETTINGS.qualityRiskThreshold;
 
     const handleDecision = async (approved: boolean) => {
         if (!hasPrivilege) {
-            toast({ title: "Permission Required", description: "Only Engineers, Supervisors, or Administrators can authorize project progression.", variant: "destructive" });
+            toast({
+                title: DECISION_COPY.permissionTitle,
+                description: DECISION_COPY.permissionDescription,
+                variant: 'destructive',
+            });
             return;
         }
-        setSubmitting(true);
-        await new Promise(r => setTimeout(r, 1000));
-        setSubmitting(false);
-
-        const now = new Date().toISOString();
-        setDecisionMade(approved ? 'approved' : 'rejected');
-        setDecisionTime(now);
-
-        // Audit log the decision
-        if (user) {
-            auditLog.record(
-                approved ? 'PROJECT_APPROVED' : 'PROJECT_REJECTED',
-                { uid: user.uid, name: user.name, role: user.role, email: user.email },
-                {
-                    reportId: infralithResult?.id || 'unknown',
-                    projectScope: infralithResult?.projectScope || 'unknown',
-                    budgetApproved: fmt(dynamicCost),
-                    qualityLevel: quality[0],
-                    scheduleAcceleration: schedule[0],
-                    timestamp: now,
-                }
-            );
+        if (!hasRealReportData) {
+            toast({
+                title: DECISION_COPY.dataRequiredTitle,
+                description: DECISION_COPY.dataRequiredDescription,
+                variant: 'destructive',
+            });
+            return;
         }
 
-        // Push notification
-        addNotification({
-            type: approved ? 'success' : 'warning',
-            title: approved ? '✅ Project Approved' : '❌ Project Rejected',
-            body: approved
-                ? `${user?.name} authorized the project at ${fmt(dynamicCost)}. Report is now finalized.`
-                : `${user?.name} rejected the project. Requires revision before re-submission.`,
-        });
+        setSubmitting(true);
+        try {
+            const response = await fetch('/api/infralith/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    approved,
+                    reportId: infralithResult.id,
+                    projectScope: infralithResult.projectScope,
+                    budgetApproved: dynamicCost,
+                    currency: reportCurrency,
+                    qualityLevel: quality[0],
+                    scheduleAcceleration: schedule[0],
+                    reason: approved ? undefined : 'Rejected from Decision Hub',
+                }),
+            });
 
-        toast({
-            title: approved ? "Project Approved" : "Project Rejected",
-            description: `Action recorded in audit trail by ${user?.name}.`,
-            variant: approved ? "default" : "destructive",
-        });
+            if (!response.ok) {
+                throw new Error(`Approval API failed with status ${response.status}`);
+            }
 
-        if (approved) handleNavigate('report');
+            const approvalPayload = await response.json();
+            const now = typeof approvalPayload?.audit?.timestamp === 'string'
+                ? approvalPayload.audit.timestamp
+                : new Date().toISOString();
+
+            setDecisionMade(approved ? 'approved' : 'rejected');
+            setDecisionTime(now);
+
+            if (user) {
+                auditLog.record(
+                    approved ? 'PROJECT_APPROVED' : 'PROJECT_REJECTED',
+                    { uid: user.uid, name: user.name, role: user.role, email: user.email },
+                    {
+                        reportId: infralithResult.id,
+                        projectScope: infralithResult.projectScope,
+                        budgetApproved: fmt(dynamicCost),
+                        qualityLevel: quality[0],
+                        scheduleAcceleration: schedule[0],
+                        timestamp: now,
+                    }
+                );
+            }
+
+            addNotification({
+                type: approved ? 'success' : 'warning',
+                title: approved ? DECISION_COPY.notifyApprovedTitle : DECISION_COPY.notifyRejectedTitle,
+                body: approved
+                    ? `${actorName} ${DECISION_COPY.notifyApprovedPrefix} ${fmt(dynamicCost)}. ${DECISION_COPY.notifyApprovedSuffix}`
+                    : `${actorName} ${DECISION_COPY.notifyRejectedBody}`,
+            });
+
+            toast({
+                title: approved ? DECISION_COPY.toastApprovedTitle : DECISION_COPY.toastRejectedTitle,
+                description: `${DECISION_COPY.toastActionRecordedPrefix} ${actorName}.`,
+                variant: approved ? 'default' : 'destructive',
+            });
+
+            if (approved) handleNavigate('report');
+        } catch (error) {
+            console.error('Decision submit failed', error);
+            toast({
+                title: DECISION_COPY.decisionSubmitFailedTitle,
+                description: DECISION_COPY.decisionSubmitFailedDescription,
+                variant: 'destructive',
+            });
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     return (
@@ -91,10 +287,16 @@ export default function DecisionPanel() {
                     <div className="h-11 w-11 bg-amber-50 dark:bg-amber-900/30 rounded-2xl flex items-center justify-center border border-amber-100 dark:border-amber-800 shadow-sm">
                         <SlidersHorizontal className="h-5 w-5 text-amber-500" />
                     </div>
-                    <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white">Decision Hub</h1>
+                    <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white">{DECISION_COPY.title}</h1>
                 </div>
-                <p className="text-slate-500 font-semibold ml-14 text-sm">Review AI insights and authorize cross-functional project progression.</p>
+                <p className="text-slate-500 font-semibold ml-14 text-sm">{DECISION_COPY.subtitle}</p>
             </div>
+            {!hasRealReportData && (
+                <div className="rounded-2xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-900/20 px-5 py-4">
+                    <p className="text-sm font-black text-rose-700 dark:text-rose-300">{DECISION_COPY.dataRequiredTitle}</p>
+                    <p className="text-xs mt-1 text-rose-600 dark:text-rose-400">{DECISION_COPY.dataRequiredDescription}</p>
+                </div>
+            )}
 
             {/* Budget Sandbox Card */}
             <div className="bg-white dark:bg-slate-900 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.07)] overflow-hidden">
@@ -104,8 +306,8 @@ export default function DecisionPanel() {
                         <Calculator className="h-5 w-5 text-amber-500" />
                     </div>
                     <div>
-                        <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">Budget "What-If" Sandbox</h2>
-                        <p className="text-sm text-slate-500 font-medium">Adjust variables to forecast cost and compliance risk impacts.</p>
+                        <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">{DECISION_COPY.budgetTitle}</h2>
+                        <p className="text-sm text-slate-500 font-medium">{DECISION_COPY.budgetSubtitle}</p>
                     </div>
                 </div>
 
@@ -116,20 +318,23 @@ export default function DecisionPanel() {
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2.5">
                                 <Clock className="h-4 w-4 text-slate-400" />
-                                <span className="font-black text-slate-800 dark:text-slate-100 text-sm">Schedule Acceleration Target</span>
+                                <span className="font-black text-slate-800 dark:text-slate-100 text-sm">{DECISION_COPY.scheduleLabel}</span>
                             </div>
                             <div className="px-3.5 py-1.5 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-full">
-                                <span className="text-[11px] font-black text-amber-600 dark:text-amber-400 tracking-widest uppercase">{schedule[0]} Days</span>
+                                <span className="text-[11px] font-black text-amber-600 dark:text-amber-400 tracking-widest uppercase">
+                                    {schedule[0]} {DECISION_COPY.scheduleUnit}
+                                </span>
                             </div>
                         </div>
                         <Slider
                             value={schedule}
                             onValueChange={setSchedule}
-                            max={30}
+                            max={DECISION_SETTINGS.scheduleMax}
                             step={1}
+                            disabled={!hasRealReportData || submitting}
                             className="[&>span:first-child]:bg-slate-200 dark:[&>span:first-child]:bg-slate-700 [&>span:first-child>span]:bg-amber-500 [&>span[role=slider]]:bg-amber-500 [&>span[role=slider]]:border-amber-400 [&>span[role=slider]]:shadow-lg [&>span[role=slider]]:shadow-amber-500/30"
                         />
-                        <p className="text-xs text-slate-400 leading-relaxed font-medium">Accelerating the schedule lowers heavy machinery holding costs but moderately increases logistical collision risk.</p>
+                        <p className="text-xs text-slate-400 leading-relaxed font-medium">{DECISION_COPY.scheduleHelpText}</p>
                     </div>
 
                     {/* Quality Slider */}
@@ -137,7 +342,7 @@ export default function DecisionPanel() {
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2.5">
                                 <Zap className="h-4 w-4 text-slate-400" />
-                                <span className="font-black text-slate-800 dark:text-slate-100 text-sm">Material Cost Threshold</span>
+                                <span className="font-black text-slate-800 dark:text-slate-100 text-sm">{DECISION_COPY.qualityLabel}</span>
                             </div>
                             <div className={cn(
                                 "px-3.5 py-1.5 rounded-full border",
@@ -148,15 +353,18 @@ export default function DecisionPanel() {
                                 <span className={cn(
                                     "text-[11px] font-black tracking-widest uppercase",
                                     qualityRisk ? "text-rose-500" : "text-emerald-600 dark:text-emerald-400"
-                                )}>{quality[0]}% Standard</span>
+                                )}>
+                                    {quality[0]}% {DECISION_COPY.qualityUnit}
+                                </span>
                             </div>
                         </div>
                         <Slider
                             value={quality}
                             onValueChange={setQuality}
-                            min={70}
-                            max={100}
-                            step={5}
+                            min={DECISION_SETTINGS.qualityMin}
+                            max={DECISION_SETTINGS.qualityMax}
+                            step={DECISION_SETTINGS.qualityStep}
+                            disabled={!hasRealReportData || submitting}
                             className={cn(
                                 "[&>span:first-child]:bg-slate-200 dark:[&>span:first-child]:bg-slate-700 [&>span[role=slider]]:shadow-lg",
                                 qualityRisk
@@ -167,21 +375,21 @@ export default function DecisionPanel() {
                         {qualityRisk && (
                             <div className="flex items-start gap-2 p-3 bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-800 rounded-xl">
                                 <AlertCircle className="h-4 w-4 text-rose-500 mt-0.5 shrink-0" />
-                                <p className="text-xs text-rose-600 dark:text-rose-400 font-semibold leading-relaxed">Warning: Materials below 90% ISO standard exponentially increase compliance failure risk.</p>
+                                <p className="text-xs text-rose-600 dark:text-rose-400 font-semibold leading-relaxed">{qualityWarningText}</p>
                             </div>
                         )}
-                        {!qualityRisk && <p className="text-xs text-slate-400 leading-relaxed font-medium">Targeting cheaper materials (below 90% ISO standard) exponentially increases compliance failure permutations.</p>}
+                        {!qualityRisk && <p className="text-xs text-slate-400 leading-relaxed font-medium">{qualityHelpText}</p>}
                     </div>
                 </div>
 
                 {/* Cost Footer */}
                 <div className="mx-8 mb-8 p-6 bg-slate-50 dark:bg-slate-800 rounded-[20px] border border-slate-100 dark:border-slate-700 flex items-center justify-between">
                     <div className="space-y-1">
-                        <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">AI Projected Cost</p>
-                        {savings > 0 && (
+                        <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">{DECISION_COPY.projectedCostLabel}</p>
+                        {hasRealReportData && savings > 0 && (
                             <div className="flex items-center gap-1.5">
                                 <TrendingDown className="h-3.5 w-3.5 text-emerald-500" />
-                                <span className="text-xs font-black text-emerald-500">Saving {fmt(savings)}</span>
+                                <span className="text-xs font-black text-emerald-500">{DECISION_COPY.savingsPrefix} {fmt(savings)}</span>
                             </div>
                         )}
                     </div>
@@ -192,16 +400,12 @@ export default function DecisionPanel() {
             {/* Approval Checklist Card */}
             <div className="bg-white dark:bg-slate-900 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.07)] overflow-hidden">
                 <div className="px-8 pt-8 pb-6 border-b border-slate-100 dark:border-slate-800">
-                    <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">Approval Checklist</h2>
-                    <p className="text-sm text-slate-500 font-medium mt-0.5">Confirm review of all AI-generated evaluations before authorizing.</p>
+                    <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">{DECISION_COPY.checklistTitle}</h2>
+                    <p className="text-sm text-slate-500 font-medium mt-0.5">{DECISION_COPY.checklistSubtitle}</p>
                 </div>
 
                 <div className="px-8 py-8 space-y-5">
-                    {[
-                        { key: 'compliance', label: 'I acknowledge the compliance violations found in the report.', val: agreed.compliance },
-                        { key: 'cost', label: 'I accept the projected cost impact and budget timeline.', val: agreed.cost },
-                        { key: 'manual', label: 'I confirm manual review of all critical risk factors.', val: agreed.manual },
-                    ].map(item => (
+                    {checklistItems.map((item) => (
                         <label
                             key={item.key}
                             htmlFor={item.key}
@@ -236,11 +440,11 @@ export default function DecisionPanel() {
                     <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                         <div
                             className="h-full bg-gradient-to-r from-amber-400 to-emerald-500 rounded-full transition-all duration-500"
-                            style={{ width: `${(Object.values(agreed).filter(Boolean).length / 3) * 100}%` }}
+                            style={{ width: `${(completedChecklistCount / totalChecklistCount) * 100}%` }}
                         />
                     </div>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2 mb-6">
-                        {Object.values(agreed).filter(Boolean).length} / 3 Confirmations
+                        {completedChecklistCount} / {totalChecklistCount} {DECISION_COPY.confirmationsLabel}
                     </p>
                 </div>
 
@@ -249,15 +453,15 @@ export default function DecisionPanel() {
                     <Button
                         variant="ghost"
                         onClick={() => handleDecision(false)}
-                        disabled={submitting}
+                        disabled={!hasRealReportData || submitting || !hasPrivilege}
                         className="flex-1 h-12 text-rose-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 font-bold rounded-[14px] border border-rose-100 dark:border-rose-900 gap-2"
                     >
                         {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertCircle className="h-4 w-4" />}
-                        Reject Project
+                        {DECISION_COPY.rejectAction}
                     </Button>
                     <Button
                         onClick={() => handleDecision(true)}
-                        disabled={!canApprove || submitting}
+                        disabled={!canApprove || submitting || !hasPrivilege}
                         className={cn(
                             "flex-1 h-12 font-black rounded-[14px] gap-2 transition-all",
                             canApprove
@@ -266,7 +470,7 @@ export default function DecisionPanel() {
                         )}
                     >
                         {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                        Approve & Generate Report
+                        {DECISION_COPY.approveAction}
                     </Button>
                 </div>
 
@@ -274,7 +478,7 @@ export default function DecisionPanel() {
 
                 <div className="px-8 pb-8 pt-2">
                     <div className="p-5 bg-slate-50 dark:bg-slate-800 rounded-[18px] border border-slate-100 dark:border-slate-700">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4">Approval Chain</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4">{DECISION_COPY.approvalChainLabel}</p>
                         <div className="flex items-center gap-3">
                             <div className={cn(
                                 "h-9 w-9 rounded-full flex items-center justify-center shrink-0 border-2 transition-all",
@@ -288,14 +492,14 @@ export default function DecisionPanel() {
                             </div>
                             <div className="flex-1">
                                 <p className="text-sm font-black text-slate-800 dark:text-slate-100">
-                                    {decisionMade === 'approved' ? 'Approved by ' + user?.name :
-                                        decisionMade === 'rejected' ? 'Rejected by ' + user?.name :
-                                            'Awaiting Supervisor Sign-off'}
+                                    {decisionMade === 'approved' ? `${DECISION_COPY.approvedByPrefix} ${actorName}` :
+                                        decisionMade === 'rejected' ? `${DECISION_COPY.rejectedByPrefix} ${actorName}` :
+                                            DECISION_COPY.awaitingSignoff}
                                 </p>
                                 <p className="text-xs text-slate-400 font-medium">
                                     {decisionMade && decisionTime
-                                        ? new Date(decisionTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
-                                        : 'Step 1 of 1 — Authorization pending'}
+                                        ? new Date(decisionTime).toLocaleString(DECISION_SETTINGS.locale, { dateStyle: 'medium', timeStyle: 'short' })
+                                        : DECISION_COPY.pendingStep}
                                 </p>
                             </div>
                             <span className={cn(
