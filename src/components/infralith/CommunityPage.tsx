@@ -95,6 +95,127 @@ const createDefaultThread = (): CommentThread => ({
 const ONE_MINUTE = 60_000;
 const ONE_HOUR = 60 * ONE_MINUTE;
 const ONE_DAY = 24 * ONE_HOUR;
+const resolveEnvText = (value: string | undefined, fallback: string) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+};
+const parseBooleanEnv = (value: string | undefined, fallback = false) => {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
+const COMMUNITY_COPY = {
+  title: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TITLE, 'Global Community'),
+  subtitle: resolveEnvText(
+    process.env.NEXT_PUBLIC_COMMUNITY_SUBTITLE,
+    'Collaboration feed for engineering updates, questions, and bounty challenges.'
+  ),
+  communityName: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_NAME, 'Infralith Community'),
+  feedAll: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FEED_ALL, 'All'),
+  feedFollowing: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FEED_FOLLOWING, 'Following'),
+  feedBounties: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FEED_BOUNTIES, 'Bounties'),
+  feedSaved: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FEED_SAVED, 'Saved'),
+  feedMine: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FEED_MINE, 'My Posts'),
+  statPosts: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_STAT_POSTS, 'Posts'),
+  statFollowing: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_STAT_FOLLOWING, 'Following'),
+  statOpenBounties: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_STAT_OPEN_BOUNTIES, 'Open Bounties'),
+  searchPlaceholder: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SEARCH_PLACEHOLDER, 'Search by author, content, or tags'),
+  sortLatest: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SORT_LATEST, 'Sort: Latest'),
+  sortPopular: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SORT_POPULAR, 'Sort: Most Popular'),
+  sortDiscussed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SORT_DISCUSSED, 'Sort: Most Discussed'),
+  composePlaceholder: resolveEnvText(
+    process.env.NEXT_PUBLIC_COMMUNITY_COMPOSE_PLACEHOLDER,
+    'Share a project update, blocker, lesson, or ask for peer input...'
+  ),
+  imageUrlPlaceholder: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_IMAGE_PLACEHOLDER, 'Optional image URL (https://...)'),
+  tagsPlaceholder: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TAGS_PLACEHOLDER, 'Tags (comma separated): seismic, concrete'),
+  uploadImage: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_UPLOAD_IMAGE, 'Upload Image'),
+  createBounty: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_CREATE_BOUNTY, 'Create Bounty'),
+  bountyEnabled: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_BOUNTY_ENABLED, 'Bounty Enabled'),
+  bountyAmountPlaceholder: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_BOUNTY_AMOUNT_PLACEHOLDER, 'Bounty amount (USD)'),
+  publish: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_PUBLISH_LABEL, 'Publish'),
+  repost: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REPOST_LABEL, 'Repost'),
+  follow: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FOLLOW_LABEL, 'Follow'),
+  following: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_FOLLOWING_LABEL, 'Following'),
+  unfollowed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_UNFOLLOWED_LABEL, 'Unfollowed'),
+  verifiedNetwork: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_VERIFIED_NETWORK, 'Verified Network'),
+  noPostsMessage: resolveEnvText(
+    process.env.NEXT_PUBLIC_COMMUNITY_EMPTY_FEED,
+    'No posts found for this feed/filter. Try another filter or publish a new update.'
+  ),
+  noCommentsMessage: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_NO_COMMENTS, 'No comments yet. Start the conversation.'),
+  commentPlaceholder: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_COMMENT_PLACEHOLDER, 'Add a constructive comment'),
+  shareTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SHARE_TITLE, 'Community Update'),
+  shareBodyPrefix: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SHARE_PREFIX, 'posted on'),
+  postImageAlt: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POST_IMAGE_ALT, 'Post attachment'),
+  uploadPreviewAlt: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_UPLOAD_PREVIEW_ALT, 'Upload preview'),
+  removeImage: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REMOVE_IMAGE, 'Remove'),
+  deleteConfirm: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_DELETE_CONFIRM, 'Delete this post permanently?'),
+  deletePostAriaLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_DELETE_POST_ARIA, 'Delete post'),
+  repostPrompt: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REPOST_PROMPT, 'Add commentary for repost (optional):'),
+  sortAriaLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_SORT_ARIA, 'Sort posts'),
+  postTypeAriaLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POST_TYPE_ARIA, 'Post type'),
+  postTypeUpdateLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_UPDATE, 'Update'),
+  postTypeUpdateHint: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_UPDATE_HINT, 'General status update'),
+  postTypeProjectLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_PROJECT, 'Project'),
+  postTypeProjectHint: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_PROJECT_HINT, 'Milestone or showcase'),
+  postTypeHiringLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_HIRING, 'Hiring'),
+  postTypeHiringHint: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_HIRING_HINT, 'Roles and opportunities'),
+  postTypeAnnouncementLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_ANNOUNCEMENT, 'Announcement'),
+  postTypeAnnouncementHint: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_POSTTYPE_ANNOUNCEMENT_HINT, 'Important notice'),
+  reactionLikeLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REACTION_LIKE, 'Like'),
+  reactionInsightfulLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REACTION_INSIGHTFUL, 'Insightful'),
+  reactionCelebrateLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REACTION_CELEBRATE, 'Celebrate'),
+  reactionSupportLabel: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_REACTION_SUPPORT, 'Support'),
+  bountySuffix: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_BOUNTY_SUFFIX, 'Bounty'),
+};
+const COMMUNITY_TOAST = {
+  loadFeedFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_LOAD_FAILED, 'Could not load community feed'),
+  loginRequired: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_LOGIN_REQUIRED, 'Login required'),
+  followLoginDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_FOLLOW_LOGIN, 'Sign in to follow members.'),
+  followDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_FOLLOWED_DESC, 'You will now see this member in your Following feed.'),
+  unfollowDescription: resolveEnvText(
+    process.env.NEXT_PUBLIC_COMMUNITY_TOAST_UNFOLLOWED_DESC,
+    'This member has been removed from your Following feed.'
+  ),
+  unsupportedFileTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_UNSUPPORTED_FILE, 'Unsupported file'),
+  unsupportedFileDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_UNSUPPORTED_FILE_DESC, 'Please upload a valid image.'),
+  imageTooLargeTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_IMAGE_TOO_LARGE, 'Image too large'),
+  imageTooLargeDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_IMAGE_TOO_LARGE_DESC, 'Upload an image smaller than 4MB.'),
+  publishLoginDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_PUBLISH_LOGIN, 'Sign in to publish updates.'),
+  postEmptyTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_POST_EMPTY, 'Post is empty'),
+  postEmptyDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_POST_EMPTY_DESC, 'Add text or image before publishing.'),
+  invalidImageTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_INVALID_IMAGE, 'Invalid image URL'),
+  invalidImageDescription: resolveEnvText(
+    process.env.NEXT_PUBLIC_COMMUNITY_TOAST_INVALID_IMAGE_DESC,
+    'Image URL must start with http:// or https://.'
+  ),
+  invalidBountyTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_INVALID_BOUNTY, 'Invalid bounty amount'),
+  invalidBountyDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_INVALID_BOUNTY_DESC, 'Enter a positive bounty amount.'),
+  postPublishedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_POST_PUBLISHED, 'Post published'),
+  publishFailedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_PUBLISH_FAILED, 'Could not publish post'),
+  reactLoginDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_REACT_LOGIN, 'Sign in to react to posts.'),
+  reactionFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_REACTION_FAILED, 'Could not update reaction'),
+  saveLoginDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_SAVE_LOGIN, 'Sign in to save posts.'),
+  savedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_SAVED, 'Saved'),
+  unsavedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_UNSAVED, 'Removed from saved'),
+  saveFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_SAVE_FAILED, 'Could not update saved posts'),
+  repostLoginDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_REPOST_LOGIN, 'Sign in to repost.'),
+  repostedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_REPOSTED, 'Reposted'),
+  repostedDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_REPOSTED_DESC, 'Shared to your network feed.'),
+  repostFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_REPOST_FAILED, 'Could not repost'),
+  commentsLoadFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_COMMENTS_LOAD_FAILED, 'Could not load comments'),
+  commentLoginDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_COMMENT_LOGIN, 'Sign in to comment.'),
+  commentFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_COMMENT_FAILED, 'Could not post comment'),
+  sharedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_SHARED, 'Shared'),
+  sharedDescription: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_SHARED_DESC, 'Post copied/shared successfully.'),
+  shareFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_SHARE_FAILED, 'Share failed'),
+  postDeletedTitle: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_DELETED, 'Post deleted'),
+  deleteFailed: resolveEnvText(process.env.NEXT_PUBLIC_COMMUNITY_TOAST_DELETE_FAILED, 'Could not delete post'),
+};
+const ENABLE_SEED_POSTS = parseBooleanEnv(process.env.NEXT_PUBLIC_COMMUNITY_ENABLE_SEED, false);
 const REACTION_ORDER: ReactionType[] = ['like', 'insightful', 'celebrate', 'support'];
 const POST_TYPE_OPTIONS: Array<{
   key: PostType;
@@ -102,17 +223,17 @@ const POST_TYPE_OPTIONS: Array<{
   icon: any;
   hint: string;
 }> = [
-  { key: 'update', label: 'Update', icon: Megaphone, hint: 'General status update' },
-  { key: 'project', label: 'Project', icon: BriefcaseBusiness, hint: 'Milestone or showcase' },
-  { key: 'hiring', label: 'Hiring', icon: Users, hint: 'Roles and opportunities' },
-  { key: 'announcement', label: 'Announcement', icon: Sparkles, hint: 'Important notice' },
+  { key: 'update', label: COMMUNITY_COPY.postTypeUpdateLabel, icon: Megaphone, hint: COMMUNITY_COPY.postTypeUpdateHint },
+  { key: 'project', label: COMMUNITY_COPY.postTypeProjectLabel, icon: BriefcaseBusiness, hint: COMMUNITY_COPY.postTypeProjectHint },
+  { key: 'hiring', label: COMMUNITY_COPY.postTypeHiringLabel, icon: Users, hint: COMMUNITY_COPY.postTypeHiringHint },
+  { key: 'announcement', label: COMMUNITY_COPY.postTypeAnnouncementLabel, icon: Sparkles, hint: COMMUNITY_COPY.postTypeAnnouncementHint },
 ];
 
 const REACTION_META: Record<ReactionType, { label: string; icon: any; className: string }> = {
-  like: { label: 'Like', icon: ThumbsUp, className: 'text-blue-500' },
-  insightful: { label: 'Insightful', icon: Lightbulb, className: 'text-amber-500' },
-  celebrate: { label: 'Celebrate', icon: Sparkles, className: 'text-fuchsia-500' },
-  support: { label: 'Support', icon: HandHeart, className: 'text-emerald-500' },
+  like: { label: COMMUNITY_COPY.reactionLikeLabel, icon: ThumbsUp, className: 'text-blue-500' },
+  insightful: { label: COMMUNITY_COPY.reactionInsightfulLabel, icon: Lightbulb, className: 'text-amber-500' },
+  celebrate: { label: COMMUNITY_COPY.reactionCelebrateLabel, icon: Sparkles, className: 'text-fuchsia-500' },
+  support: { label: COMMUNITY_COPY.reactionSupportLabel, icon: HandHeart, className: 'text-emerald-500' },
 };
 
 const MOCK_POSTS: Post[] = [
@@ -378,7 +499,7 @@ export default function CommunityPage() {
       try {
         let data = await postService.getAllPosts();
 
-        if (data.length === 0 && process.env.NODE_ENV !== 'production') {
+        if (data.length === 0 && ENABLE_SEED_POSTS) {
           data = await postService.seedPosts(
             MOCK_POSTS.map((post) => ({
               id: post.id,
@@ -411,12 +532,12 @@ export default function CommunityPage() {
       } catch (error) {
         console.error('Failed to load community feed', error);
         if (!cancelled) {
-          if (process.env.NODE_ENV !== 'production') {
+          if (ENABLE_SEED_POSTS) {
             setPosts(MOCK_POSTS.map((post) => ({ ...post, hasLiked: false })));
           } else {
             setPosts([]);
           }
-          toast({ variant: 'destructive', title: 'Could not load community feed' });
+          toast({ variant: 'destructive', title: COMMUNITY_TOAST.loadFeedFailed });
         }
       } finally {
         if (!cancelled) {
@@ -512,7 +633,7 @@ export default function CommunityPage() {
 
   const toggleFollow = (authorId: string, authorName: string) => {
     if (!followingKey) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to follow members.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.loginRequired, description: COMMUNITY_TOAST.followLoginDescription });
       return;
     }
 
@@ -521,10 +642,10 @@ export default function CommunityPage() {
       const next = { ...prev, [authorId]: isFollowing };
       persistFollowing(next);
       toast({
-        title: isFollowing ? `Following ${authorName}` : `Unfollowed ${authorName}`,
+        title: isFollowing ? `${COMMUNITY_COPY.following} ${authorName}` : `${COMMUNITY_COPY.unfollowed} ${authorName}`,
         description: isFollowing
-          ? 'You will now see this member in your Following feed.'
-          : 'This member has been removed from your Following feed.',
+          ? COMMUNITY_TOAST.followDescription
+          : COMMUNITY_TOAST.unfollowDescription,
       });
       return next;
     });
@@ -534,11 +655,11 @@ export default function CommunityPage() {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-      toast({ variant: 'destructive', title: 'Unsupported file', description: 'Please upload a valid image.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.unsupportedFileTitle, description: COMMUNITY_TOAST.unsupportedFileDescription });
       return;
     }
     if (file.size > 4 * 1024 * 1024) {
-      toast({ variant: 'destructive', title: 'Image too large', description: 'Upload an image smaller than 4MB.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.imageTooLargeTitle, description: COMMUNITY_TOAST.imageTooLargeDescription });
       return;
     }
 
@@ -558,7 +679,7 @@ export default function CommunityPage() {
 
   const handlePostSubmit = async () => {
     if (!user?.uid) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to publish updates.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.loginRequired, description: COMMUNITY_TOAST.publishLoginDescription });
       return;
     }
 
@@ -568,11 +689,11 @@ export default function CommunityPage() {
     const tags = parseTags(newPostTags);
 
     if (!content && !image) {
-      toast({ variant: 'destructive', title: 'Post is empty', description: 'Add text or image before publishing.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.postEmptyTitle, description: COMMUNITY_TOAST.postEmptyDescription });
       return;
     }
     if (imageUrl && !isValidHttpUrl(imageUrl)) {
-      toast({ variant: 'destructive', title: 'Invalid image URL', description: 'Image URL must start with http:// or https://.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.invalidImageTitle, description: COMMUNITY_TOAST.invalidImageDescription });
       return;
     }
 
@@ -580,7 +701,7 @@ export default function CommunityPage() {
     if (isBountyDraft) {
       const parsedBounty = Number(newBountyAmount);
       if (!Number.isFinite(parsedBounty) || parsedBounty <= 0) {
-        toast({ variant: 'destructive', title: 'Invalid bounty amount', description: 'Enter a positive bounty amount.' });
+        toast({ variant: 'destructive', title: COMMUNITY_TOAST.invalidBountyTitle, description: COMMUNITY_TOAST.invalidBountyDescription });
         return;
       }
       bountyAmount = Math.round(parsedBounty);
@@ -617,10 +738,10 @@ export default function CommunityPage() {
       setIsBountyDraft(false);
       setNewPostType('update');
       setNewBountyAmount('5000');
-      toast({ title: 'Post published', description: 'Your update is now live in Global Community.' });
+      toast({ title: COMMUNITY_TOAST.postPublishedTitle, description: `Your update is now live in ${COMMUNITY_COPY.title}.` });
     } catch (error) {
       console.error('Failed to publish post', error);
-      toast({ variant: 'destructive', title: 'Could not publish post' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.publishFailedTitle });
     } finally {
       setIsPublishing(false);
     }
@@ -628,7 +749,7 @@ export default function CommunityPage() {
 
   const handleReaction = async (postId: string, reaction: ReactionType) => {
     if (!user?.uid) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to react to posts.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.loginRequired, description: COMMUNITY_TOAST.reactLoginDescription });
       return;
     }
 
@@ -654,13 +775,13 @@ export default function CommunityPage() {
       );
     } catch (error) {
       console.error('Failed to set reaction', error);
-      toast({ variant: 'destructive', title: 'Could not update reaction' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.reactionFailed });
     }
   };
 
   const handleToggleSave = async (postId: string) => {
     if (!user?.uid) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to save posts.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.loginRequired, description: COMMUNITY_TOAST.saveLoginDescription });
       return;
     }
     try {
@@ -676,20 +797,20 @@ export default function CommunityPage() {
             : post
         )
       );
-      toast({ title: result.saved ? 'Saved' : 'Removed from saved' });
+      toast({ title: result.saved ? COMMUNITY_TOAST.savedTitle : COMMUNITY_TOAST.unsavedTitle });
     } catch (error) {
       console.error('Failed to toggle save', error);
-      toast({ variant: 'destructive', title: 'Could not update saved posts' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.saveFailed });
     }
   };
 
   const handleRepost = async (post: Post) => {
     if (!user?.uid) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to repost.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.loginRequired, description: COMMUNITY_TOAST.repostLoginDescription });
       return;
     }
 
-    const quote = window.prompt('Add commentary for repost (optional):', '');
+    const quote = window.prompt(COMMUNITY_COPY.repostPrompt, '');
     if (quote === null) return;
 
     try {
@@ -706,10 +827,10 @@ export default function CommunityPage() {
       if (repost) {
         setPosts((prev) => [toPostView(repost, user.uid), ...prev]);
       }
-      toast({ title: 'Reposted', description: 'Shared to your network feed.' });
+      toast({ title: COMMUNITY_TOAST.repostedTitle, description: COMMUNITY_TOAST.repostedDescription });
     } catch (error) {
       console.error('Failed to repost', error);
-      toast({ variant: 'destructive', title: 'Could not repost' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.repostFailed });
     }
   };
 
@@ -745,7 +866,7 @@ export default function CommunityPage() {
       }));
     } catch (error) {
       console.error('Failed to load comments', error);
-      toast({ variant: 'destructive', title: 'Could not load comments' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.commentsLoadFailed });
       setCommentThreads((prev) => ({
         ...prev,
         [postId]: {
@@ -759,7 +880,7 @@ export default function CommunityPage() {
 
   const handleCommentSubmit = async (postId: string) => {
     if (!user?.uid) {
-      toast({ variant: 'destructive', title: 'Login required', description: 'Sign in to comment.' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.loginRequired, description: COMMUNITY_TOAST.commentLoginDescription });
       return;
     }
 
@@ -810,7 +931,7 @@ export default function CommunityPage() {
       setPosts((prev) => prev.map((post) => (post.id === postId ? { ...post, comments: post.comments + 1 } : post)));
     } catch (error) {
       console.error('Failed to post comment', error);
-      toast({ variant: 'destructive', title: 'Could not post comment' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.commentFailed });
       setCommentThreads((prev) => ({
         ...prev,
         [postId]: {
@@ -822,10 +943,10 @@ export default function CommunityPage() {
   };
 
   const handleShare = async (post: Post) => {
-    const shareText = `${post.author.name} on Infralith Global Community:\n\n${post.content}`;
+    const shareText = `${post.author.name} ${COMMUNITY_COPY.shareBodyPrefix} ${COMMUNITY_COPY.title}:\n\n${post.content}`;
     try {
       if (navigator.share) {
-        await navigator.share({ title: 'Infralith Community', text: shareText });
+        await navigator.share({ title: COMMUNITY_COPY.shareTitle, text: shareText });
       } else if (navigator.clipboard) {
         await navigator.clipboard.writeText(shareText);
       } else {
@@ -834,18 +955,18 @@ export default function CommunityPage() {
 
       await postService.incrementShare(post.id);
       setPosts((prev) => prev.map((item) => (item.id === post.id ? { ...item, shares: item.shares + 1 } : item)));
-      toast({ title: 'Shared', description: 'Post copied/shared successfully.' });
+      toast({ title: COMMUNITY_TOAST.sharedTitle, description: COMMUNITY_TOAST.sharedDescription });
     } catch (error: any) {
       if (error?.name === 'AbortError') return;
       console.error('Share failed', error);
-      toast({ variant: 'destructive', title: 'Share failed' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.shareFailed });
     }
   };
 
   const handleDeletePost = async (post: Post) => {
     if (!user?.uid || post.authorId !== user.uid) return;
 
-    const confirmed = window.confirm('Delete this post permanently?');
+    const confirmed = window.confirm(COMMUNITY_COPY.deleteConfirm);
     if (!confirmed) return;
 
     try {
@@ -856,19 +977,19 @@ export default function CommunityPage() {
         delete next[post.id];
         return next;
       });
-      toast({ title: 'Post deleted' });
+      toast({ title: COMMUNITY_TOAST.postDeletedTitle });
     } catch (error) {
       console.error('Failed to delete post', error);
-      toast({ variant: 'destructive', title: 'Could not delete post' });
+      toast({ variant: 'destructive', title: COMMUNITY_TOAST.deleteFailed });
     }
   };
 
   const feedOptions: Array<{ key: FeedMode; label: string; count: number }> = [
-    { key: 'all', label: 'All', count: feedCounts.all },
-    { key: 'following', label: 'Following', count: feedCounts.following },
-    { key: 'bounties', label: 'Bounties', count: feedCounts.bounties },
-    { key: 'saved', label: 'Saved', count: feedCounts.saved },
-    { key: 'mine', label: 'My Posts', count: feedCounts.mine },
+    { key: 'all', label: COMMUNITY_COPY.feedAll, count: feedCounts.all },
+    { key: 'following', label: COMMUNITY_COPY.feedFollowing, count: feedCounts.following },
+    { key: 'bounties', label: COMMUNITY_COPY.feedBounties, count: feedCounts.bounties },
+    { key: 'saved', label: COMMUNITY_COPY.feedSaved, count: feedCounts.saved },
+    { key: 'mine', label: COMMUNITY_COPY.feedMine, count: feedCounts.mine },
   ];
 
   const renderLoading = () => (
@@ -898,25 +1019,24 @@ export default function CommunityPage() {
               <div className="h-11 w-11 rounded-xl bg-primary/20 flex items-center justify-center">
                 <Trophy className="h-6 w-6 text-primary" />
               </div>
-              <h1 className="text-3xl font-black tracking-tight">Global Community</h1>
-              <Badge className="text-[10px] uppercase tracking-wider">Community Sync - 2026-03-07</Badge>
+              <h1 className="text-3xl font-black tracking-tight">{COMMUNITY_COPY.title}</h1>
             </div>
             <p className="text-muted-foreground font-mono text-xs md:text-sm tracking-widest mt-2">
-              Collaboration feed for engineering updates, questions, and bounty challenges.
+              {COMMUNITY_COPY.subtitle}
             </p>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full md:w-auto md:min-w-[420px]">
             <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Posts</p>
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{COMMUNITY_COPY.statPosts}</p>
               <p className="text-xl font-black">{feedCounts.all}</p>
             </div>
             <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Following</p>
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{COMMUNITY_COPY.statFollowing}</p>
               <p className="text-xl font-black">{Object.values(following).filter(Boolean).length}</p>
             </div>
             <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 col-span-2 md:col-span-1">
-              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Open Bounties</p>
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{COMMUNITY_COPY.statOpenBounties}</p>
               <p className="text-xl font-black">{feedCounts.bounties}</p>
             </div>
           </div>
@@ -931,7 +1051,7 @@ export default function CommunityPage() {
               <Input
                 value={searchText}
                 onChange={(event) => setSearchText(event.target.value)}
-                placeholder="Search by author, content, or tags"
+                placeholder={COMMUNITY_COPY.searchPlaceholder}
                 className="pl-9"
               />
             </div>
@@ -939,11 +1059,11 @@ export default function CommunityPage() {
               value={sortMode}
               onChange={(event) => setSortMode(event.target.value as SortMode)}
               className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-              aria-label="Sort posts"
+              aria-label={COMMUNITY_COPY.sortAriaLabel}
             >
-              <option value="latest">Sort: Latest</option>
-              <option value="popular">Sort: Most Popular</option>
-              <option value="discussed">Sort: Most Discussed</option>
+              <option value="latest">{COMMUNITY_COPY.sortLatest}</option>
+              <option value="popular">{COMMUNITY_COPY.sortPopular}</option>
+              <option value="discussed">{COMMUNITY_COPY.sortDiscussed}</option>
             </select>
           </div>
 
@@ -978,13 +1098,13 @@ export default function CommunityPage() {
             <Textarea
               value={newPostContent}
               onChange={(event) => setNewPostContent(event.target.value)}
-              placeholder="Share a project update, blocker, lesson, or ask for peer input..."
+              placeholder={COMMUNITY_COPY.composePlaceholder}
               className="min-h-[110px]"
             />
 
             {newPostImageData && (
               <div className="relative rounded-xl overflow-hidden border border-primary/20 bg-black/10 max-h-[280px]">
-                <img src={newPostImageData} alt="Upload preview" className="w-full h-full object-cover" />
+                <img src={newPostImageData} alt={COMMUNITY_COPY.uploadPreviewAlt} className="w-full h-full object-cover" />
                 <Button
                   type="button"
                   variant="secondary"
@@ -992,7 +1112,7 @@ export default function CommunityPage() {
                   className="absolute right-3 top-3"
                   onClick={handleClearImageSelection}
                 >
-                  Remove
+                  {COMMUNITY_COPY.removeImage}
                 </Button>
               </div>
             )}
@@ -1002,7 +1122,7 @@ export default function CommunityPage() {
                 value={newPostType}
                 onChange={(event) => setNewPostType(event.target.value as PostType)}
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                aria-label="Post type"
+                aria-label={COMMUNITY_COPY.postTypeAriaLabel}
               >
                 {POST_TYPE_OPTIONS.map((option) => (
                   <option key={option.key} value={option.key}>
@@ -1013,12 +1133,12 @@ export default function CommunityPage() {
               <Input
                 value={newPostImage}
                 onChange={(event) => setNewPostImage(event.target.value)}
-                placeholder="Optional image URL (https://...)"
+                placeholder={COMMUNITY_COPY.imageUrlPlaceholder}
               />
               <Input
                 value={newPostTags}
                 onChange={(event) => setNewPostTags(event.target.value)}
-                placeholder="Tags (comma separated): seismic, concrete"
+                placeholder={COMMUNITY_COPY.tagsPlaceholder}
               />
             </div>
 
@@ -1038,7 +1158,7 @@ export default function CommunityPage() {
                   onClick={() => imageUploadRef.current?.click()}
                 >
                   <ImageIcon className="h-4 w-4 mr-2" />
-                  Upload Image
+                  {COMMUNITY_COPY.uploadImage}
                 </Button>
                 <Button
                   type="button"
@@ -1048,7 +1168,7 @@ export default function CommunityPage() {
                   className={cn(isBountyDraft ? 'bg-orange-500 hover:bg-orange-500/90 text-white' : '')}
                 >
                   <Flame className="h-4 w-4 mr-2" />
-                  {isBountyDraft ? 'Bounty Enabled' : 'Create Bounty'}
+                  {isBountyDraft ? COMMUNITY_COPY.bountyEnabled : COMMUNITY_COPY.createBounty}
                 </Button>
 
                 {isBountyDraft && (
@@ -1056,7 +1176,7 @@ export default function CommunityPage() {
                     value={newBountyAmount}
                     onChange={(event) => setNewBountyAmount(event.target.value)}
                     className="w-[180px]"
-                    placeholder="Bounty amount (USD)"
+                    placeholder={COMMUNITY_COPY.bountyAmountPlaceholder}
                   />
                 )}
 
@@ -1071,7 +1191,7 @@ export default function CommunityPage() {
                 disabled={isPublishing || (!newPostContent.trim() && !newPostImage.trim() && !newPostImageData)}
                 className="bg-primary text-background-dark font-bold px-6"
               >
-                {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Publish'}
+                {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : COMMUNITY_COPY.publish}
               </Button>
             </div>
           </div>
@@ -1083,7 +1203,7 @@ export default function CommunityPage() {
           renderLoading()
         ) : visiblePosts.length === 0 ? (
           <Card className="premium-glass p-8 text-center">
-            <p className="text-muted-foreground">No posts found for this feed/filter. Try another filter or publish a new update.</p>
+            <p className="text-muted-foreground">{COMMUNITY_COPY.noPostsMessage}</p>
           </Card>
         ) : (
           visiblePosts.map((post) => {
@@ -1120,7 +1240,7 @@ export default function CommunityPage() {
                   <div className="flex items-center gap-2 shrink-0">
                     {post.isBounty && (
                       <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-500 border-orange-500/30 flex items-center gap-1">
-                        <Flame className="h-3 w-3" /> ${post.bountyAmount?.toLocaleString() || 0} Bounty
+                        <Flame className="h-3 w-3" /> ${post.bountyAmount?.toLocaleString() || 0} {COMMUNITY_COPY.bountySuffix}
                       </Badge>
                     )}
                     <Badge variant="secondary" className="text-[10px] uppercase tracking-widest font-bold flex items-center gap-1">
@@ -1140,7 +1260,7 @@ export default function CommunityPage() {
                         onClick={() => toggleFollow(post.authorId, post.author.name)}
                       >
                         <UserPlus className="h-3.5 w-3.5 mr-1" />
-                        {following[post.authorId] ? 'Following' : 'Follow'}
+                        {following[post.authorId] ? COMMUNITY_COPY.following : COMMUNITY_COPY.follow}
                       </Button>
                     )}
 
@@ -1151,7 +1271,7 @@ export default function CommunityPage() {
                         variant="ghost"
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
                         onClick={() => handleDeletePost(post)}
-                        aria-label="Delete post"
+                        aria-label={COMMUNITY_COPY.deletePostAriaLabel}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -1172,7 +1292,7 @@ export default function CommunityPage() {
 
                     {post.repostPreview && (
                       <div className="mt-3 rounded-xl border border-primary/15 bg-primary/5 p-3 space-y-2">
-                        <p className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">Repost</p>
+                        <p className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">{COMMUNITY_COPY.repost}</p>
                         <p className="text-xs text-foreground font-semibold">{post.repostPreview.authorName}</p>
                         <p className="text-xs text-muted-foreground whitespace-pre-wrap">{post.repostPreview.content}</p>
                       </div>
@@ -1183,7 +1303,7 @@ export default function CommunityPage() {
                     <div className="w-full max-h-[420px] overflow-hidden bg-black/20 border-y border-white/5">
                       <img
                         src={post.image}
-                        alt="Post attachment"
+                        alt={COMMUNITY_COPY.postImageAlt}
                         className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
                         loading="lazy"
                       />
@@ -1238,7 +1358,7 @@ export default function CommunityPage() {
                         className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
                       >
                         <Repeat2 className="h-4 w-4" />
-                        <span>Repost</span>
+                        <span>{COMMUNITY_COPY.repost}</span>
                       </button>
                     </div>
 
@@ -1258,7 +1378,7 @@ export default function CommunityPage() {
                       </button>
 
                       <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-widest border-primary/20 bg-primary/5 text-primary">
-                        <Users className="h-3 w-3 mr-1" /> Verified Network
+                        <Users className="h-3 w-3 mr-1" /> {COMMUNITY_COPY.verifiedNetwork}
                       </Badge>
                     </div>
                   </div>
@@ -1290,14 +1410,14 @@ export default function CommunityPage() {
                               </div>
                             ))
                           ) : (
-                            <p className="text-sm text-muted-foreground">No comments yet. Start the conversation.</p>
+                            <p className="text-sm text-muted-foreground">{COMMUNITY_COPY.noCommentsMessage}</p>
                           )}
                         </div>
                       )}
 
                       <div className="flex items-start gap-2">
                         <Textarea
-                          placeholder="Add a constructive comment"
+                          placeholder={COMMUNITY_COPY.commentPlaceholder}
                           value={thread.newComment}
                           onChange={(event) =>
                             setCommentThreads((prev) => ({
