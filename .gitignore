@@ -53,3 +53,15 @@ tsc.log
 tsc_output.txt
 .modified
 .azure/
+
+# local cleanup / generated artifacts
+.azure-cli/
+artifacts/
+release.zip
+Screenshot *.png
+tmp_*.webp
+tmp-*.ts
+az_gh.log
+diff.txt
+remote.txt
+publish.xml
