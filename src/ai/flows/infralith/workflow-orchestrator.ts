@@ -9,11 +9,27 @@ import { runDevOpsAgent } from './devops-agent';
 import { formatRagPromptContext, retrieveConstructionContext } from './rag-retrieval';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
+import { azureRuntime, getDeploymentOrder } from '@/ai/config/azure-runtime';
 
 const ORCHESTRATOR_VERSION = '3.0.0'; // Bumped for Native OpenCV.js Migration
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
+const ALLOWED_MIME_BY_EXTENSION: Record<string, string[]> = {
+    '.pdf': ['application/pdf'],
+    '.docx': [
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/zip',
+    ],
+    '.png': ['image/png'],
+    '.jpg': ['image/jpeg'],
+    '.jpeg': ['image/jpeg'],
+    '.webp': ['image/webp'],
+};
+
+type ComplianceAnalysis = Awaited<ReturnType<typeof checkCompliance>>;
+type RiskAnalysis = Awaited<ReturnType<typeof analyzeRisk>>;
+type CostAnalysis = Awaited<ReturnType<typeof predictCost>>;
 
 function paramHash(): string {
     const seed = `blueprint-parser-v3|opencv-js-native|compliance-is456-nbc2016|risk-seismic-v2|cost-capex-india|devops-github-v1|${ORCHESTRATOR_VERSION}`;
@@ -50,6 +66,8 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     if (!ALLOWED_UPLOAD_EXTENSIONS.has(extension)) {
         throw new Error("Unsupported file type. Please upload PDF, DOCX, PNG, JPG, JPEG, or WEBP.");
     }
+    validateMimeAgainstExtension(extension, input.type);
+    await validateFileSignature(input, extension);
 
     // 1. Context Generation
     const blueprint = await parseBlueprint(input);
@@ -61,11 +79,15 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     const ragPromptContext = await formatRagPromptContext(ragContext, 8_500);
 
     // 2. Parallel Domain Expert Analysis
-    const [compliance, risk, cost] = await Promise.all([
+    const [complianceSettled, riskSettled, costSettled] = await Promise.allSettled([
         checkCompliance(JSON.stringify(blueprint), ragPromptContext),
         analyzeRisk(JSON.stringify(blueprint), ragPromptContext),
         predictCost(JSON.stringify(blueprint), ragPromptContext),
     ]);
+    const analysisWarnings: string[] = [];
+    const compliance = resolveComplianceAnalysis(complianceSettled, analysisWarnings);
+    const risk = resolveRiskAnalysis(riskSettled, analysisWarnings);
+    const cost = resolveCostAnalysis(costSettled, analysisWarnings);
 
     const extractionQuality = buildExtractionQuality(blueprint);
     if (ragContext.diagnostics.warning) {
@@ -78,6 +100,11 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         extractionQuality.warnings.push('No external reference chunks retrieved. Report is grounded only on extracted project data.');
     } else {
         extractionQuality.warnings.push(`RAG grounded with ${ragContext.chunks.length} retrieved chunk(s) across index(es): ${ragContext.diagnostics.indexesQueried.join(', ') || 'N/A'}.`);
+    }
+    if (analysisWarnings.length > 0) {
+        extractionQuality.reviewRequired = true;
+        extractionQuality.warnings.push(...analysisWarnings);
+        extractionQuality.warnings.push('Partial AI analysis mode enabled: one or more specialist agents failed and conservative fallback values were applied.');
     }
     const materialRows = Array.isArray(blueprint?.materials) ? blueprint.materials : [];
 
@@ -151,12 +178,15 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         }
     ];
 
-    const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || process.env.AZURE_OPENAI_DEPLOYMENT || 'model-router';
+    const deploymentOrder = getDeploymentOrder();
+    const deploymentName = deploymentOrder[0] || azureRuntime.routerDeploymentName || 'model-router';
+    const configuredModelName = String(process.env.AZURE_OPENAI_MODEL_NAME || process.env.AZURE_OPENAI_MODEL || '').trim();
+    const llmModel = configuredModelName || deploymentOrder.join(' -> ') || deploymentName;
 
     const modelVersion: ModelVersion = {
         orchestratorVersion: ORCHESTRATOR_VERSION,
         blueprintParserModel: 'azure-doc-intelligence-v4',
-        llmModel: 'gpt-4o-2024-11-20',
+        llmModel,
         deploymentName,
         parameterHash: paramHash(),
         runId,
@@ -234,6 +264,146 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     console.log(`[${runId}] Orchestrator: Synthesis Complete in ${result.pipelineLatencyMs}ms via Node.js Native Pipeline.`);
     return result;
 }
+
+const startsWithBytes = (source: Uint8Array, signature: number[]): boolean => {
+    if (source.length < signature.length) return false;
+    for (let i = 0; i < signature.length; i++) {
+        if (source[i] !== signature[i]) return false;
+    }
+    return true;
+};
+
+const readFileHeader = async (file: File, bytes = 16): Promise<Uint8Array> => {
+    const chunk = file.slice(0, Math.max(4, bytes));
+    return new Uint8Array(await chunk.arrayBuffer());
+};
+
+const validateMimeAgainstExtension = (extension: string, mimeType: string): void => {
+    const normalizedMime = String(mimeType || '').toLowerCase().trim();
+    if (!normalizedMime) return;
+
+    const allowed = ALLOWED_MIME_BY_EXTENSION[extension];
+    if (!Array.isArray(allowed) || allowed.length === 0) return;
+    if (allowed.includes(normalizedMime)) return;
+
+    throw new Error(`File MIME type "${normalizedMime}" does not match extension "${extension}".`);
+};
+
+const validateFileSignature = async (file: File, extension: string): Promise<void> => {
+    const header = await readFileHeader(file, 16);
+    if (header.length < 4) {
+        throw new Error('Uploaded file appears truncated or unreadable.');
+    }
+
+    if (extension === '.pdf' && !startsWithBytes(header, [0x25, 0x50, 0x44, 0x46, 0x2D])) {
+        throw new Error('Invalid PDF signature. Please upload a valid PDF document.');
+    }
+
+    if (extension === '.png' && !startsWithBytes(header, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
+        throw new Error('Invalid PNG signature. Please upload a valid PNG image.');
+    }
+
+    if ((extension === '.jpg' || extension === '.jpeg') && !startsWithBytes(header, [0xFF, 0xD8, 0xFF])) {
+        throw new Error('Invalid JPEG signature. Please upload a valid JPG/JPEG image.');
+    }
+
+    if (extension === '.webp') {
+        const hasRiff = startsWithBytes(header, [0x52, 0x49, 0x46, 0x46]); // RIFF
+        const hasWebp = header.length >= 12 &&
+            header[8] === 0x57 && // W
+            header[9] === 0x45 && // E
+            header[10] === 0x42 && // B
+            header[11] === 0x50; // P
+        if (!hasRiff || !hasWebp) {
+            throw new Error('Invalid WEBP signature. Please upload a valid WEBP image.');
+        }
+    }
+
+    if (extension === '.docx') {
+        const validZipSignature =
+            startsWithBytes(header, [0x50, 0x4B, 0x03, 0x04]) ||
+            startsWithBytes(header, [0x50, 0x4B, 0x05, 0x06]) ||
+            startsWithBytes(header, [0x50, 0x4B, 0x07, 0x08]);
+        if (!validZipSignature) {
+            throw new Error('Invalid DOCX signature. Please upload a valid DOCX document.');
+        }
+    }
+};
+
+const toErrorMessage = (reason: unknown): string => {
+    if (reason instanceof Error) return reason.message;
+    return String(reason || 'Unknown error');
+};
+
+const resolveComplianceAnalysis = (
+    settled: PromiseSettledResult<ComplianceAnalysis>,
+    warnings: string[]
+): ComplianceAnalysis => {
+    if (settled.status === 'fulfilled') return settled.value;
+    const errorMessage = toErrorMessage(settled.reason);
+    console.error('Compliance analysis failed, applying conservative fallback.', settled.reason);
+    warnings.push(`Compliance fallback applied: ${errorMessage}`);
+    return {
+        overallStatus: 'Warning',
+        violations: [
+            {
+                ruleId: 'ANALYSIS-UNAVAILABLE',
+                severity: 'Warning',
+                location: 'Project-Wide',
+                requiredValue: NOT_AVAILABLE_TEXT,
+                measuredValue: NOT_AVAILABLE_TEXT,
+                evidence: `Compliance analysis failed: ${errorMessage}`,
+                description: 'Compliance analysis was unavailable for this run.',
+                comment: 'Perform manual compliance review before approval.',
+                confidence: 0,
+                citationIds: [],
+            },
+        ],
+    };
+};
+
+const resolveRiskAnalysis = (
+    settled: PromiseSettledResult<RiskAnalysis>,
+    warnings: string[]
+): RiskAnalysis => {
+    if (settled.status === 'fulfilled') return settled.value;
+    const errorMessage = toErrorMessage(settled.reason);
+    console.error('Risk analysis failed, applying conservative fallback.', settled.reason);
+    warnings.push(`Risk fallback applied: ${errorMessage}`);
+    return {
+        riskIndex: 60,
+        level: 'High',
+        hazards: [
+            {
+                type: 'Analysis Coverage',
+                severity: 'Warning',
+                description: `Risk analysis unavailable. ${errorMessage}`,
+                mitigation: 'Run manual safety risk workshop before execution decisions.',
+            },
+        ],
+    };
+};
+
+const resolveCostAnalysis = (
+    settled: PromiseSettledResult<CostAnalysis>,
+    warnings: string[]
+): CostAnalysis => {
+    if (settled.status === 'fulfilled') return settled.value;
+    const errorMessage = toErrorMessage(settled.reason);
+    console.error('Cost analysis failed, applying conservative fallback.', settled.reason);
+    warnings.push(`Cost fallback applied: ${errorMessage}`);
+    return {
+        total: 0,
+        currency: 'INR',
+        breakdown: [],
+        duration: NOT_AVAILABLE_TEXT,
+        confidenceScore: 0,
+        assumptions: [
+            `Cost analysis unavailable: ${errorMessage}`,
+            'Manual quantity-surveyor estimate is required before budget approval.',
+        ],
+    };
+};
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 

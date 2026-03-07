@@ -687,7 +687,6 @@ export async function generateAzureVisionObject<T>(prompt: string, base64Image: 
                 const result = await generateObject({
                     model: getAzureModel(true, deployment),
                     schema,
-                    temperature: 0.1, // Reduced to prevent unclosed JSON from hallucinated extreme details
                     system: VISION_SYSTEM_PROMPT,
                     messages: [
                         {
@@ -771,7 +770,6 @@ export async function generateAzureObject<T>(prompt: string, dynamicSchema?: z.Z
                 const result = await generateObject({
                     model: getAzureModel(false, deployment),
                     schema,
-                    temperature: 0.2, // Lower variety for strict structured output without hallucinated massive structures
                     system: TEXT_SYSTEM_PROMPT,
                     prompt: prompt
                 });
