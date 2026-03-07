@@ -991,11 +991,17 @@ export default function CommunityPage() {
     { key: 'saved', label: COMMUNITY_COPY.feedSaved, count: feedCounts.saved },
     { key: 'mine', label: COMMUNITY_COPY.feedMine, count: feedCounts.mine },
   ];
+  const surfaceCardClass =
+    'border border-slate-200/80 dark:border-slate-700/70 bg-white/95 dark:bg-slate-900/70 shadow-sm backdrop-blur-sm';
+  const metricCardClass =
+    'rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 p-3';
+  const activeFilterClass =
+    'bg-slate-900 text-white border-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 dark:hover:bg-slate-200';
 
   const renderLoading = () => (
     <div className="space-y-4">
       {[...Array(3)].map((_, idx) => (
-        <Card key={idx} className="premium-glass p-4">
+        <Card key={idx} className={`${surfaceCardClass} rounded-xl p-4`}>
           <div className="flex items-center gap-3 mb-3">
             <Skeleton className="h-12 w-12 rounded-full" />
             <div className="space-y-2 flex-1">
@@ -1011,39 +1017,39 @@ export default function CommunityPage() {
   );
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 pb-14">
-      <Card className="premium-glass border-primary/20 overflow-hidden">
+    <div className="max-w-6xl mx-auto space-y-6 pb-12">
+      <Card className={`${surfaceCardClass} rounded-xl overflow-hidden`}>
         <CardContent className="p-5 md:p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
           <div>
             <div className="flex items-center gap-3">
-              <div className="h-11 w-11 rounded-xl bg-primary/20 flex items-center justify-center">
-                <Trophy className="h-6 w-6 text-primary" />
+              <div className="h-10 w-10 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                <Trophy className="h-5 w-5 text-slate-700 dark:text-slate-300" />
               </div>
-              <h1 className="text-3xl font-black tracking-tight">{COMMUNITY_COPY.title}</h1>
+              <h1 className="text-2xl md:text-[28px] font-semibold tracking-tight text-slate-900 dark:text-slate-100">{COMMUNITY_COPY.title}</h1>
             </div>
-            <p className="text-muted-foreground font-mono text-xs md:text-sm tracking-widest mt-2">
+            <p className="text-muted-foreground text-sm mt-2 max-w-xl leading-relaxed">
               {COMMUNITY_COPY.subtitle}
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full md:w-auto md:min-w-[420px]">
-            <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{COMMUNITY_COPY.statPosts}</p>
-              <p className="text-xl font-black">{feedCounts.all}</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full md:w-auto md:min-w-[380px]">
+            <div className={metricCardClass}>
+              <p className="text-[11px] text-muted-foreground">{COMMUNITY_COPY.statPosts}</p>
+              <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">{feedCounts.all}</p>
             </div>
-            <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{COMMUNITY_COPY.statFollowing}</p>
-              <p className="text-xl font-black">{Object.values(following).filter(Boolean).length}</p>
+            <div className={metricCardClass}>
+              <p className="text-[11px] text-muted-foreground">{COMMUNITY_COPY.statFollowing}</p>
+              <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">{Object.values(following).filter(Boolean).length}</p>
             </div>
-            <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 col-span-2 md:col-span-1">
-              <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{COMMUNITY_COPY.statOpenBounties}</p>
-              <p className="text-xl font-black">{feedCounts.bounties}</p>
+            <div className={`${metricCardClass} col-span-2 md:col-span-1`}>
+              <p className="text-[11px] text-muted-foreground">{COMMUNITY_COPY.statOpenBounties}</p>
+              <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">{feedCounts.bounties}</p>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="premium-glass border-primary/10">
+      <Card className={`${surfaceCardClass} rounded-xl`}>
         <CardContent className="p-4 space-y-4">
           <div className="flex flex-col md:flex-row gap-3">
             <div className="relative flex-1">
@@ -1075,10 +1081,10 @@ export default function CommunityPage() {
                 size="sm"
                 variant={feedMode === option.key ? 'default' : 'outline'}
                 onClick={() => setFeedMode(option.key)}
-                className={cn('h-8 px-3 text-xs font-bold', feedMode === option.key ? 'bg-primary text-background-dark' : '')}
+                className={cn('h-8 px-3 text-xs font-semibold rounded-md', feedMode === option.key ? activeFilterClass : '')}
               >
                 {option.label}
-                <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-[10px] bg-black/10 dark:bg-white/10">
+                <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-[10px]">
                   {option.count}
                 </Badge>
               </Button>
@@ -1087,9 +1093,9 @@ export default function CommunityPage() {
         </CardContent>
       </Card>
 
-      <Card className="premium-glass border-primary/15">
+      <Card className={`${surfaceCardClass} rounded-xl`}>
         <CardContent className="p-4 md:p-5 flex gap-4">
-          <Avatar className="h-11 w-11 border border-primary/30 shrink-0">
+          <Avatar className="h-11 w-11 border border-slate-200 dark:border-slate-700 shrink-0">
             <AvatarImage src={user?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.email || 'guest'}`} />
             <AvatarFallback>{user?.name?.charAt(0) || 'U'}</AvatarFallback>
           </Avatar>
@@ -1103,7 +1109,7 @@ export default function CommunityPage() {
             />
 
             {newPostImageData && (
-              <div className="relative rounded-xl overflow-hidden border border-primary/20 bg-black/10 max-h-[280px]">
+              <div className="relative rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 max-h-[280px]">
                 <img src={newPostImageData} alt={COMMUNITY_COPY.uploadPreviewAlt} className="w-full h-full object-cover" />
                 <Button
                   type="button"
@@ -1165,7 +1171,7 @@ export default function CommunityPage() {
                   variant={isBountyDraft ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => setIsBountyDraft((prev) => !prev)}
-                  className={cn(isBountyDraft ? 'bg-orange-500 hover:bg-orange-500/90 text-white' : '')}
+                  className={cn(isBountyDraft ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-600' : '')}
                 >
                   <Flame className="h-4 w-4 mr-2" />
                   {isBountyDraft ? COMMUNITY_COPY.bountyEnabled : COMMUNITY_COPY.createBounty}
@@ -1189,7 +1195,7 @@ export default function CommunityPage() {
                 type="button"
                 onClick={handlePostSubmit}
                 disabled={isPublishing || (!newPostContent.trim() && !newPostImage.trim() && !newPostImageData)}
-                className="bg-primary text-background-dark font-bold px-6"
+                className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200 font-semibold px-6"
               >
                 {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : COMMUNITY_COPY.publish}
               </Button>
@@ -1202,7 +1208,7 @@ export default function CommunityPage() {
         {isLoading ? (
           renderLoading()
         ) : visiblePosts.length === 0 ? (
-          <Card className="premium-glass p-8 text-center">
+          <Card className={`${surfaceCardClass} rounded-xl p-8 text-center`}>
             <p className="text-muted-foreground">{COMMUNITY_COPY.noPostsMessage}</p>
           </Card>
         ) : (
@@ -1214,10 +1220,10 @@ export default function CommunityPage() {
             const PostTypeIcon = postTypeMeta.icon;
 
             return (
-              <Card key={post.id} className="premium-glass premium-glass-hover overflow-hidden transition-all duration-300">
+              <Card key={post.id} className={`${surfaceCardClass} rounded-xl overflow-hidden transition-all duration-200 hover:shadow-md`}>
                 <CardHeader className="flex flex-row items-center justify-between gap-3 p-5 pb-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <Avatar className="h-11 w-11 border border-primary/20">
+                    <Avatar className="h-11 w-11 border border-slate-200 dark:border-slate-700">
                       <AvatarImage src={post.author.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${post.author.name}`} />
                       <AvatarFallback>{post.author.name.charAt(0)}</AvatarFallback>
                     </Avatar>
@@ -1228,8 +1234,8 @@ export default function CommunityPage() {
                         {post.author.verified && <CheckCircle2 className="h-3.5 w-3.5 text-blue-400 shrink-0" />}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span className="font-medium text-primary/80 truncate">{post.author.role}</span>
-                        <span>•</span>
+                        <span className="font-medium text-slate-600 dark:text-slate-300 truncate">{post.author.role}</span>
+                        <span>|</span>
                         <span className="flex items-center gap-1 shrink-0">
                           <Clock className="h-3 w-3" /> {formatRelativeTime(post.timestamp)}
                         </span>
@@ -1239,11 +1245,11 @@ export default function CommunityPage() {
 
                   <div className="flex items-center gap-2 shrink-0">
                     {post.isBounty && (
-                      <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-500 border-orange-500/30 flex items-center gap-1">
+                      <Badge variant="outline" className="text-[11px] bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300 flex items-center gap-1">
                         <Flame className="h-3 w-3" /> ${post.bountyAmount?.toLocaleString() || 0} {COMMUNITY_COPY.bountySuffix}
                       </Badge>
                     )}
-                    <Badge variant="secondary" className="text-[10px] uppercase tracking-widest font-bold flex items-center gap-1">
+                    <Badge variant="secondary" className="text-[10px] uppercase tracking-wide font-semibold border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 flex items-center gap-1">
                       <PostTypeIcon className="h-3 w-3" />
                       {postTypeMeta.label}
                     </Badge>
@@ -1254,8 +1260,8 @@ export default function CommunityPage() {
                         size="sm"
                         variant={following[post.authorId] ? 'outline' : 'default'}
                         className={cn(
-                          'h-8 px-3 text-xs font-bold',
-                          following[post.authorId] ? '' : 'bg-primary text-background-dark'
+                          'h-8 px-3 text-xs font-semibold',
+                          following[post.authorId] ? 'border-slate-300 text-slate-700 dark:border-slate-600 dark:text-slate-200' : 'bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200'
                         )}
                         onClick={() => toggleFollow(post.authorId, post.author.name)}
                       >
@@ -1284,15 +1290,15 @@ export default function CommunityPage() {
                     <p className="text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap">{post.content}</p>
                     <div className="flex flex-wrap gap-2 mt-3">
                       {post.tags.map((tag) => (
-                        <span key={`${post.id}_${tag}`} className="text-xs font-bold text-primary">
+                        <span key={`${post.id}_${tag}`} className="inline-flex items-center rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-2 py-0.5 text-xs font-medium text-slate-600 dark:text-slate-300">
                           {tag}
                         </span>
                       ))}
                     </div>
 
                     {post.repostPreview && (
-                      <div className="mt-3 rounded-xl border border-primary/15 bg-primary/5 p-3 space-y-2">
-                        <p className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">{COMMUNITY_COPY.repost}</p>
+                      <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 p-3 space-y-2">
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">{COMMUNITY_COPY.repost}</p>
                         <p className="text-xs text-foreground font-semibold">{post.repostPreview.authorName}</p>
                         <p className="text-xs text-muted-foreground whitespace-pre-wrap">{post.repostPreview.content}</p>
                       </div>
@@ -1300,7 +1306,7 @@ export default function CommunityPage() {
                   </div>
 
                   {post.image && (
-                    <div className="w-full max-h-[420px] overflow-hidden bg-black/20 border-y border-white/5">
+                    <div className="w-full max-h-[420px] overflow-hidden bg-slate-100 dark:bg-slate-800/40 border-y border-slate-200 dark:border-slate-700">
                       <img
                         src={post.image}
                         alt={COMMUNITY_COPY.postImageAlt}
@@ -1324,11 +1330,11 @@ export default function CommunityPage() {
                             className={cn(
                               'flex items-center gap-1.5 text-xs font-semibold rounded-full px-2.5 py-1 border transition-all',
                               active
-                                ? 'bg-primary/15 text-primary border-primary/25'
-                                : 'bg-white/70 dark:bg-black/40 text-muted-foreground border-transparent hover:border-primary/20'
+                                ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100'
+                                : 'bg-white dark:bg-slate-900/40 text-muted-foreground border-slate-200 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-500'
                             )}
                           >
-                            <Icon className={cn('h-3.5 w-3.5', active ? 'text-primary' : config.className)} />
+                            <Icon className={cn('h-3.5 w-3.5', active ? 'text-current' : config.className)} />
                             <span>{post.reactions[reactionKey] || 0}</span>
                           </button>
                         );
@@ -1337,7 +1343,7 @@ export default function CommunityPage() {
                       <button
                         type="button"
                         onClick={() => toggleComments(post.id)}
-                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
+                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-all px-2"
                       >
                         <MessageCircle className="h-5 w-5" />
                         <span>{post.comments}</span>
@@ -1346,7 +1352,7 @@ export default function CommunityPage() {
                       <button
                         type="button"
                         onClick={() => handleShare(post)}
-                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
+                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-all px-2"
                       >
                         <Share2 className="h-5 w-5" />
                         <span>{post.shares}</span>
@@ -1355,7 +1361,7 @@ export default function CommunityPage() {
                       <button
                         type="button"
                         onClick={() => handleRepost(post)}
-                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-primary transition-all px-2"
+                        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-all px-2"
                       >
                         <Repeat2 className="h-4 w-4" />
                         <span>{COMMUNITY_COPY.repost}</span>
@@ -1369,15 +1375,15 @@ export default function CommunityPage() {
                         className={cn(
                           'flex items-center gap-1.5 text-xs font-semibold rounded-full px-2.5 py-1 border transition-all',
                           post.isSaved
-                            ? 'bg-primary/15 text-primary border-primary/25'
-                            : 'bg-white/70 dark:bg-black/40 text-muted-foreground border-transparent hover:border-primary/20'
+                            ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100'
+                            : 'bg-white dark:bg-slate-900/40 text-muted-foreground border-slate-200 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-500'
                         )}
                       >
                         <Bookmark className={cn('h-3.5 w-3.5', post.isSaved ? 'fill-current' : '')} />
                         <span>{post.saveCount}</span>
                       </button>
 
-                      <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-widest border-primary/20 bg-primary/5 text-primary">
+                      <Badge variant="outline" className="text-[10px] uppercase font-semibold tracking-wide border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                         <Users className="h-3 w-3 mr-1" /> {COMMUNITY_COPY.verifiedNetwork}
                       </Badge>
                     </div>
@@ -1395,14 +1401,14 @@ export default function CommunityPage() {
                           {thread.comments.length > 0 ? (
                             thread.comments.map((comment) => (
                               <div key={comment.id} className="flex gap-3">
-                                <Avatar className="h-8 w-8 border border-primary/20">
+                                <Avatar className="h-8 w-8 border border-slate-200 dark:border-slate-700">
                                   <AvatarImage src={comment.authorAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${comment.authorName}`} />
                                   <AvatarFallback>{comment.authorName.charAt(0)}</AvatarFallback>
                                 </Avatar>
                                 <div className="flex-1">
                                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                     <span className="font-semibold text-foreground">{comment.authorName}</span>
-                                    <span>•</span>
+                                    <span>|</span>
                                     <span>{formatRelativeTime(comment.timestamp)}</span>
                                   </div>
                                   <p className="text-sm text-foreground/90 whitespace-pre-wrap">{comment.text}</p>
