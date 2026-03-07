@@ -899,6 +899,7 @@ export default function CommunityPage() {
                 <Trophy className="h-6 w-6 text-primary" />
               </div>
               <h1 className="text-3xl font-black tracking-tight">Global Community</h1>
+              <Badge className="text-[10px] uppercase tracking-wider">Community Sync - 2026-03-07</Badge>
             </div>
             <p className="text-muted-foreground font-mono text-xs md:text-sm tracking-widest mt-2">
               Collaboration feed for engineering updates, questions, and bounty challenges.
