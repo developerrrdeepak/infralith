@@ -147,8 +147,8 @@ export const userDbService = {
       );
       if (internalRes.ok) {
         const internal = await internalRes.json();
-        // If API returns explicit `user` shape, trust it and skip external fallback.
-        // If shape is different (e.g. directory not configured), allow fallback.
+        // If API returns explicit `user` shape and includes a valid user, use it.
+        // If user is null/missing, continue to external fallback.
         if (internal && typeof internal === 'object' && 'user' in (internal as Record<string, unknown>)) {
           if ((internal as any)?.user?.uid) {
             return {
@@ -160,7 +160,6 @@ export const userDbService = {
               profileCompleted: true,
             } as UserProfileData;
           }
-          return null;
         }
       }
     } catch (error) {

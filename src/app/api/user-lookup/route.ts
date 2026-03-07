@@ -38,6 +38,7 @@ const FETCH_TIMEOUT_MS = parseTimeoutMs(process.env.USER_LOOKUP_TIMEOUT_MS);
 const BACKOFF_MS = parseTimeoutMs(process.env.USER_LOOKUP_BACKOFF_MS || String(DEFAULT_BACKOFF_MS));
 let backendBackoffUntil = 0;
 let lastTimeoutLogAt = 0;
+let lastConfigLoopLogAt = 0;
 
 const pruneRateStore = (now: number) => {
   for (const [ip, bucket] of rateStore.entries()) {
@@ -108,6 +109,22 @@ export async function GET(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Lookup unavailable' }, { status: 503 });
   }
+
+  // Misconfiguration guard: avoid proxying this endpoint to itself, which causes
+  // recursive calls, ETIMEOUT bursts, and noisy 502/503 logs.
+  const incoming = req.nextUrl;
+  const isSelfLoop =
+    backend.origin === incoming.origin &&
+    backend.pathname.replace(/\/+$/, '') === incoming.pathname.replace(/\/+$/, '');
+  if (isSelfLoop) {
+    if (Date.now() - lastConfigLoopLogAt > TIMEOUT_LOG_THROTTLE_MS) {
+      lastConfigLoopLogAt = Date.now();
+      console.error('User lookup backend misconfigured: USER_LOOKUP_URL points to this same endpoint');
+    }
+    backendBackoffUntil = Date.now() + BACKOFF_MS;
+    return NextResponse.json({ error: 'Lookup unavailable', code: 'ECONFIG_LOOP' }, { status: 503 });
+  }
+
   backend.searchParams.set('email', email);
 
   const controller = new AbortController();

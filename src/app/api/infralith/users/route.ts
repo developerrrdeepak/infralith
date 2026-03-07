@@ -75,7 +75,7 @@ const actorFromSession = (session: any) => ({
 
 const toUserProfile = (doc: UserDirectoryDoc) => ({
   uid: doc.userId,
-  email: doc.emailNormalized || doc.email,
+  email: decodeGuestExtUpn(doc.emailNormalized || doc.email) || (doc.emailNormalized || doc.email),
   name: doc.name,
   avatar: doc.avatar || null,
   role: doc.role || undefined,
@@ -108,7 +108,7 @@ export async function GET(req: Request) {
         const matches = await queryCollabDocs<UserDirectoryDoc>(
           {
             query:
-              'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (c.emailNormalized = @email OR LOWER(c.email) = @email OR ARRAY_CONTAINS(c.emailAliasesNormalized, @email))',
+              'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (LOWER(c.emailNormalized) = @email OR LOWER(c.email) = @email OR ARRAY_CONTAINS(c.emailAliasesNormalized, @email))',
             parameters: [
               { name: '@pk', value: USERS_PK },
               { name: '@type', value: 'userProfile' },
@@ -129,7 +129,7 @@ export async function GET(req: Request) {
           const matches = await queryCollabDocs<UserDirectoryDoc>(
             {
               query:
-                'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (STARTSWITH(c.emailNormalized, @prefix) OR STARTSWITH(LOWER(c.email), @prefix))',
+                'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (STARTSWITH(LOWER(c.emailNormalized), @prefix) OR STARTSWITH(LOWER(c.email), @prefix))',
               parameters: [
                 { name: '@pk', value: USERS_PK },
                 { name: '@type', value: 'userProfile' },
