@@ -167,10 +167,69 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
   const docInfo = r.documentInfo || null;
   const constructionControlSummary = r.constructionControlSummary || null;
   const constructionGates = Array.isArray(constructionControlSummary?.gates) ? constructionControlSummary.gates : [];
+  const approvalStatus = Array.isArray(r.approvalChain) && r.approvalChain.length > 0
+    ? String(r.approvalChain[0]?.status || 'pending').toUpperCase()
+    : 'PENDING';
+  const standardsApplied = [
+    'IS 456:2000',
+    'National Building Code 2016 (India)',
+    'IS 13920',
+    'ISO 19650 document-control conventions',
+  ];
+  const assumptions = Array.isArray(r.costEstimate?.assumptions) ? r.costEstimate.assumptions : [];
+
+  const handlePrintPdf = () => {
+    if (typeof window === 'undefined') return;
+    const previousTitle = document.title;
+    document.title = `${reportNo}-Final-Report`;
+    window.print();
+    setTimeout(() => {
+      document.title = previousTitle;
+    }, 50);
+  };
+
+  const handleExportReport = () => {
+    if (typeof window === 'undefined') return;
+    const reportElement = document.getElementById('infralith-final-report');
+    if (!reportElement) {
+      toast({ title: 'Export failed', description: 'Report content not found.', variant: 'destructive' });
+      return;
+    }
+
+    const exportHtml = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${reportNo} Final Report</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; }
+      h1,h2,h3 { margin-top: 0; }
+      .report-export * { box-sizing: border-box; }
+      .report-export [data-print-hidden="true"] { display: none !important; }
+      .report-export .shadow-sm, .report-export .shadow-md, .report-export .shadow-lg { box-shadow: none !important; }
+    </style>
+  </head>
+  <body>
+    <div class="report-export">${reportElement.innerHTML}</div>
+  </body>
+</html>`;
+
+    const blob = new Blob([exportHtml], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${reportNo}-final-report.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    toast({ title: 'Report exported', description: 'HTML dossier downloaded successfully.' });
+  };
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-0 pb-24 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-6">
+    <div id="infralith-final-report" className="report-print-root w-full max-w-5xl mx-auto space-y-0 pb-24 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-6">
         <div className="h-1.5 w-full bg-gradient-to-r from-orange-500 via-amber-400 to-orange-500" />
         <div className="p-6 md:p-8">
           <div className="flex flex-col md:flex-row justify-between gap-6">
@@ -208,14 +267,14 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
               </div>
             </div>
 
-            <div className="flex flex-col gap-2 md:items-end justify-start">
+            <div className="flex flex-col gap-2 md:items-end justify-start" data-print-hidden="true">
               <Button variant="outline" size="sm" className="gap-2 w-full md:w-auto">
                 <Share2 className="h-3.5 w-3.5" /> Share
               </Button>
-              <Button variant="outline" size="sm" className="gap-2 w-full md:w-auto">
+              <Button variant="outline" size="sm" className="gap-2 w-full md:w-auto" onClick={handlePrintPdf}>
                 <Printer className="h-3.5 w-3.5" /> Print PDF
               </Button>
-              <Button size="sm" className="gap-2 w-full md:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow shadow-primary/20">
+              <Button size="sm" className="gap-2 w-full md:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow shadow-primary/20" onClick={handleExportReport}>
                 <Download className="h-3.5 w-3.5" /> Export Report
               </Button>
             </div>
@@ -223,7 +282,42 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       </div>
 
-      <div className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
+      <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
+        <SectionHeading
+          icon={FileText}
+          title="Section 0 - Document Control & Standards Basis"
+          subtitle="Formal metadata and standards references for audit-ready review."
+        />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          {[
+            ['Document ID', reportNo],
+            ['Revision', 'R0'],
+            ['Issue Status', approvalStatus],
+            ['Jurisdiction Focus', 'India'],
+            ['Run ID', r.modelVersion?.runId || 'N/A'],
+            ['Parameter Hash', r.modelVersion?.parameterHash || 'N/A'],
+            ['Model Route', r.modelVersion?.llmModel || 'N/A'],
+            ['Generated On', `${formattedDate} ${formattedTime}`],
+          ].map(([k, v]) => (
+            <div key={k} className="flex flex-col gap-0.5 border border-border/60 rounded-lg p-3">
+              <span className="text-muted-foreground font-semibold">{k}</span>
+              <span className="font-bold text-foreground font-mono break-all">{v}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Applicable Standards</p>
+          <div className="flex flex-wrap gap-2">
+            {standardsApplied.map((standard) => (
+              <Badge key={standard} variant="outline" className="text-[10px] font-bold uppercase tracking-wide">
+                {standard}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
         <SectionHeading icon={BarChart3} title="Section 1 - Executive Summary" subtitle="High-level indicators extracted by the AI evaluation pipeline." />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           <KPICard label="Total Issues" value={totalConflicts} sub="Non-compliance items" color={totalConflicts > 0 ? 'text-orange-500' : 'text-emerald-500'} />
@@ -246,7 +340,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       </div>
 
       {constructionGates.length > 0 && (
-        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
+        <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
           <div className="p-6">
             <SectionHeading
               icon={ClipboardList}
@@ -278,7 +372,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       )}
 
       {extractionQuality && (
-        <div className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
+        <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
           <SectionHeading icon={Activity} title="Section 2 - Extraction Quality" subtitle="Structured fields recovered from uploaded document." />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
             <KPICard label="Coverage" value={`${extractionQuality.coverageScore}%`} sub="Metadata extraction score" color={extractionQuality.coverageScore >= 70 ? 'text-emerald-500' : 'text-orange-500'} />
@@ -306,7 +400,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       )}
 
       {(role === 'Engineer' || role === 'Admin') && (
-        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
+        <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
           <div className="p-6">
             <SectionHeading icon={ShieldCheck} title="Section 3 - Compliance and Regulation Analysis" subtitle="Per IS codes, NBC 2016, and project regulation references." />
           </div>
@@ -363,7 +457,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       )}
 
       {materials.length > 0 && (
-        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
+        <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
           <div className="p-6">
             <SectionHeading icon={ClipboardList} title="Section 4 - Bill of Quantities (BOQ)" subtitle="AI-extracted material quantities from uploaded structural drawings." />
           </div>
@@ -383,7 +477,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       )}
 
-      <div className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
+      <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
         <SectionHeading icon={Sparkles} title="Section 5 - AI Recommendations" subtitle="Priority-ranked action items generated by the AI evaluation pipeline." />
         <div className="space-y-3">
           {isCritical && (
@@ -414,7 +508,35 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       </div>
 
-      <div className="bg-muted/30 border border-border rounded-2xl p-6 shadow-sm mb-4">
+      <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
+        <SectionHeading icon={ShieldCheck} title="Section 6 - Assumptions, Limitations, and Sign-off" subtitle="Required governance notes before approvals and submissions." />
+        <div className="space-y-3 text-xs">
+          <p className="font-semibold text-foreground">Core assumptions and limitations:</p>
+          <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+            <li>Report conclusions depend on uploaded document quality and extracted evidence coverage.</li>
+            <li>AI outputs are advisory and require licensed engineer validation before statutory submission.</li>
+            <li>Any missing structural field or low confidence value requires manual verification workflow.</li>
+            {assumptions.map((item: string, idx: number) => (
+              <li key={`assumption_${idx}`}>{item}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+          {[
+            ['Prepared By', `Infralith Orchestrator ${r.modelVersion?.orchestratorVersion || 'N/A'}`],
+            ['Reviewed By', 'Supervisor / Structural Lead'],
+            ['Approved By', 'Authorized Signatory'],
+          ].map(([label, value]) => (
+            <div key={label} className="border border-border rounded-lg p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="text-xs font-semibold text-foreground mt-2">{value}</p>
+              <p className="text-[10px] text-muted-foreground mt-6 border-t border-dashed border-border pt-2">Signature & Date</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="report-section bg-muted/30 border border-border rounded-2xl p-6 shadow-sm mb-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
           {[
             ['Engine', `Infralith ${r.modelVersion?.orchestratorVersion || 'N/A'}`],
@@ -444,7 +566,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-3" data-print-hidden="true">
         {(role === 'Supervisor' || role === 'Engineer') && (
           <Button className="font-bold shadow-md gap-2" variant={redesignRequired ? 'destructive' : 'default'}>
             <CheckCircle className="h-4 w-4" />
@@ -469,7 +591,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       </div>
 
       <Dialog open={isRfiOpen} onOpenChange={setIsRfiOpen}>
-        <DialogContent className="sm:max-w-lg p-0 overflow-hidden rounded-2xl border-border shadow-2xl">
+        <DialogContent data-print-hidden="true" className="sm:max-w-lg p-0 overflow-hidden rounded-2xl border-border shadow-2xl">
           <div className="p-6 bg-muted/30 border-b border-border">
             <DialogTitle className="flex items-center gap-2 text-xl font-bold">
               <Zap className="h-5 w-5 text-primary" /> AI RFI Draft Assistant
@@ -522,6 +644,32 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           </div>
         </DialogContent>
       </Dialog>
+      <style jsx global>{`
+        @page {
+          size: A4 portrait;
+          margin: 12mm;
+        }
+        @media print {
+          body {
+            background: #ffffff !important;
+          }
+          #stars-container,
+          [data-print-hidden='true'] {
+            display: none !important;
+          }
+          .report-print-root {
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          .report-section {
+            break-inside: avoid;
+            page-break-inside: avoid;
+            box-shadow: none !important;
+            border-color: #d1d5db !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
