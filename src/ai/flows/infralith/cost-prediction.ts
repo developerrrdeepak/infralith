@@ -49,7 +49,7 @@ Output schema:
         })),
         duration: z.string(),
         confidenceScore: z.number().min(0).max(1),
-        assumptions: z.array(z.string()).optional(),
+        assumptions: z.array(z.string()),
     });
 
     try {

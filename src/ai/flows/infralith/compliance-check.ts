@@ -60,15 +60,15 @@ Return one strict JSON object:
 
     const violationSchema = z.object({
         ruleId: z.string(),
-        severity: z.enum(['Critical', 'Warning']).optional(),
-        location: z.string().optional(),
-        requiredValue: z.string().optional(),
-        measuredValue: z.string().optional(),
-        evidence: z.string().optional(),
+        severity: z.enum(['Critical', 'Warning']),
+        location: z.string(),
+        requiredValue: z.string(),
+        measuredValue: z.string(),
+        evidence: z.string(),
         description: z.string(),
         comment: z.string(),
-        confidence: z.number().min(0).max(1).optional(),
-        citationIds: z.array(z.string()).optional(),
+        confidence: z.number().min(0).max(1),
+        citationIds: z.array(z.string()),
     });
 
     const schema = z.object({
