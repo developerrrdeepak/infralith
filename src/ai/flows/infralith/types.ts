@@ -75,16 +75,29 @@ export interface WorkflowResult {
     riskReport?: {
         riskIndex: number;
         level: 'Low' | 'Medium' | 'High' | 'Critical';
-        hazards: Array<{ type: string; severity: string; description: string; mitigation: string }>;
+        hazards: Array<{
+            type: string;
+            severity: string;
+            description: string;
+            mitigation: string;
+            citationIds?: string[];
+        }>;
+        citationIds?: string[];
     };
 
     costEstimate?: {
         total: number;
         currency: string;
-        breakdown: Array<{ category: string; amount: number; percentage: number }>;
+        breakdown: Array<{
+            category: string;
+            amount: number;
+            percentage: number;
+            citationIds?: string[];
+        }>;
         duration: string;
         confidenceScore?: number;
         assumptions?: string[];
+        citationIds?: string[];
     };
 
     // DevOps / Pipeline Info

@@ -37,6 +37,17 @@ const ZONE_BY_NUMBER: Record<string, string> = {
     '5': 'V',
 };
 
+const toBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
+    if (typeof value !== 'string') return fallback;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    return fallback;
+};
+
+const isStrictRealDataMode = (): boolean =>
+    toBooleanEnv(process.env.INFRALITH_STRICT_REAL_DATA, process.env.NODE_ENV === 'production');
+
 type ParsedMaterial = {
     item: string;
     quantity: number | string;
@@ -350,7 +361,9 @@ export async function parseBlueprint(file: string | File) {
         };
     } catch (error) {
         console.error('Blueprint Parser Error:', error);
-        // Keep workflow running by returning deterministic extraction when LLM call fails.
+        if (isStrictRealDataMode()) {
+            throw new Error(`Blueprint parser failed in strict real-data mode: ${String((error as any)?.message || error)}`);
+        }
         return {
             ...normalizeResult(null, hints),
             _extractionMeta: {

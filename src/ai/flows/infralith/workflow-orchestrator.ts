@@ -6,7 +6,7 @@ import { checkCompliance } from './compliance-check';
 import { analyzeRisk } from './risk-analysis';
 import { predictCost } from './cost-prediction';
 import { runDevOpsAgent } from './devops-agent';
-import { formatRagPromptContext, retrieveConstructionContext } from './rag-retrieval';
+import { formatRagPromptContext, retrieveConstructionContext, RagRetrievedContext } from './rag-retrieval';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { azureRuntime, getDeploymentOrder } from '@/ai/config/azure-runtime';
@@ -15,6 +15,7 @@ const ORCHESTRATOR_VERSION = '3.0.0'; // Bumped for Native OpenCV.js Migration
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
+const DEFAULT_REQUIRED_STANDARD_HINTS = ['is 456', 'nbc', 'is 13920'];
 const ALLOWED_MIME_BY_EXTENSION: Record<string, string[]> = {
     '.pdf': ['application/pdf'],
     '.docx': [
@@ -31,6 +32,30 @@ type ComplianceAnalysis = Awaited<ReturnType<typeof checkCompliance>>;
 type RiskAnalysis = Awaited<ReturnType<typeof analyzeRisk>>;
 type CostAnalysis = Awaited<ReturnType<typeof predictCost>>;
 
+const toBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
+    if (typeof value !== 'string') return fallback;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    return fallback;
+};
+
+const toNumberEnv = (value: string | undefined, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const isStrictRealDataMode = (): boolean =>
+    toBooleanEnv(process.env.INFRALITH_STRICT_REAL_DATA, process.env.NODE_ENV === 'production');
+
+const getRequiredStandardHints = (): string[] => {
+    const raw = String(process.env.INFRALITH_REQUIRED_STANDARD_TERMS || '')
+        .split(',')
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean);
+    return raw.length > 0 ? raw : DEFAULT_REQUIRED_STANDARD_HINTS;
+};
+
 function paramHash(): string {
     const seed = `blueprint-parser-v3|opencv-js-native|compliance-is456-nbc2016|risk-seismic-v2|cost-capex-india|devops-github-v1|${ORCHESTRATOR_VERSION}`;
     let h = 0;
@@ -45,6 +70,8 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     }
 
     const role = session.user.role || "Guest";
+    const strictRealData = isStrictRealDataMode();
+    const minCoverageScore = clamp(Math.round(toNumberEnv(process.env.INFRALITH_MIN_EXTRACTION_COVERAGE, 70)), 0, 100);
 
     const startTime = Date.now();
     const runId = `RUN-${startTime.toString(36).toUpperCase()}`;
@@ -71,25 +98,75 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     // 1. Context Generation
     const blueprint = await parseBlueprint(input);
-    const derivedProjectScope =
-        normalizeConflictText(blueprint?.projectScope, '') ||
-        normalizeConflictText(originalFileName.replace(/\.[^.]+$/, ''), '');
+    const parsedProjectScope = normalizeConflictText(blueprint?.projectScope, '');
+    if (strictRealData && !parsedProjectScope) {
+        throw new Error('Strict real-data mode: project scope could not be extracted from the uploaded document.');
+    }
+    const derivedProjectScope = parsedProjectScope || normalizeConflictText(originalFileName.replace(/\.[^.]+$/, ''), '');
     const ragQuery = buildRagQuery(blueprint, originalFileName);
+    if (strictRealData && !ragQuery) {
+        throw new Error('Strict real-data mode: unable to build RAG query from extracted blueprint data.');
+    }
     const ragContext = await retrieveConstructionContext(ragQuery, { top: 10 });
+    validateRagContext(ragContext, { strict: strictRealData });
     const ragPromptContext = await formatRagPromptContext(ragContext, 8_500);
+    const allowedCitationIds = ragContext.chunks.map((chunk) => chunk.citationId);
 
     // 2. Parallel Domain Expert Analysis
-    const [complianceSettled, riskSettled, costSettled] = await Promise.allSettled([
-        checkCompliance(JSON.stringify(blueprint), ragPromptContext),
-        analyzeRisk(JSON.stringify(blueprint), ragPromptContext),
-        predictCost(JSON.stringify(blueprint), ragPromptContext),
-    ]);
     const analysisWarnings: string[] = [];
-    const compliance = resolveComplianceAnalysis(complianceSettled, analysisWarnings);
-    const risk = resolveRiskAnalysis(riskSettled, analysisWarnings);
-    const cost = resolveCostAnalysis(costSettled, analysisWarnings);
+    let compliance: ComplianceAnalysis;
+    let risk: RiskAnalysis;
+    let cost: CostAnalysis;
+
+    if (strictRealData) {
+        [compliance, risk, cost] = await Promise.all([
+            checkCompliance(JSON.stringify(blueprint), ragPromptContext, {
+                allowedCitationIds,
+                requireCitations: true,
+            }),
+            analyzeRisk(JSON.stringify(blueprint), ragPromptContext, {
+                allowedCitationIds,
+                requireCitations: true,
+            }),
+            predictCost(JSON.stringify(blueprint), ragPromptContext, {
+                allowedCitationIds,
+                requireCitations: true,
+            }),
+        ]);
+    } else {
+        const [complianceSettled, riskSettled, costSettled] = await Promise.allSettled([
+            checkCompliance(JSON.stringify(blueprint), ragPromptContext, {
+                allowedCitationIds,
+                requireCitations: false,
+            }),
+            analyzeRisk(JSON.stringify(blueprint), ragPromptContext, {
+                allowedCitationIds,
+                requireCitations: false,
+            }),
+            predictCost(JSON.stringify(blueprint), ragPromptContext, {
+                allowedCitationIds,
+                requireCitations: false,
+            }),
+        ]);
+
+        compliance = resolveComplianceAnalysis(complianceSettled, analysisWarnings);
+        risk = resolveRiskAnalysis(riskSettled, analysisWarnings);
+        cost = resolveCostAnalysis(costSettled, analysisWarnings);
+    }
+
+    validateSpecialistOutputs({ compliance, risk, cost, strict: strictRealData, allowedCitationIds });
 
     const extractionQuality = buildExtractionQuality(blueprint);
+    if (strictRealData && extractionQuality.coverageScore < minCoverageScore) {
+        throw new Error(
+            `Strict real-data mode: extraction coverage ${extractionQuality.coverageScore}% is below minimum ${minCoverageScore}%.`
+        );
+    }
+    if (strictRealData && (extractionQuality.criticalMissingFields?.length || 0) > 0) {
+        throw new Error(
+            `Strict real-data mode: critical extracted fields missing (${extractionQuality.criticalMissingFields?.join(', ')}).`
+        );
+    }
     if (ragContext.diagnostics.warning) {
         extractionQuality.warnings.push(`RAG retrieval warning: ${ragContext.diagnostics.warning}`);
     }
@@ -112,8 +189,8 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     const conflicts = (compliance.violations || []).map((v: any) => {
         const description = normalizeConflictText(v?.description, NOT_AVAILABLE_TEXT);
         const comment = normalizeConflictText(v?.comment, NOT_AVAILABLE_TEXT);
-        const measuredValue = normalizeConflictText(v?.measuredValue, description);
-        const requiredValue = normalizeConflictText(v?.requiredValue, comment);
+        const measuredValue = normalizeConflictText(v?.measuredValue, strictRealData ? NOT_AVAILABLE_TEXT : description);
+        const requiredValue = normalizeConflictText(v?.requiredValue, strictRealData ? NOT_AVAILABLE_TEXT : comment);
         const location = normalizeConflictText(v?.location, inferConflictLocation(`${description} ${comment}`));
         const evidence = normalizeConflictText(v?.evidence, '');
         const confidenceCandidate = Number(v?.confidence);
@@ -135,7 +212,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         };
     });
 
-    if (risk.riskIndex > 70) {
+    if (!strictRealData && risk.riskIndex > 70) {
         conflicts.push({
             riskCategory: 'Critical',
             regulationRef: 'SAFETY-OVERRIDE',
@@ -330,6 +407,90 @@ const validateFileSignature = async (file: File, extension: string): Promise<voi
     }
 };
 
+const validateRagContext = (
+    context: RagRetrievedContext,
+    options: { strict: boolean }
+) => {
+    if (!options.strict) return;
+
+    if (!context.diagnostics.configured) {
+        throw new Error('Strict real-data mode: Azure AI Search is not configured.');
+    }
+    if (context.chunks.length === 0) {
+        throw new Error('Strict real-data mode: no RAG chunks were retrieved for this document.');
+    }
+    if (context.diagnostics.errors.length > 0) {
+        throw new Error(`Strict real-data mode: RAG retrieval errors detected (${context.diagnostics.errors.join(' | ')}).`);
+    }
+
+    const corpus = context.chunks
+        .map((chunk) => `${chunk.title}\n${chunk.summary}\n${chunk.content}\n${chunk.source}`)
+        .join('\n')
+        .toLowerCase();
+    for (const hint of getRequiredStandardHints()) {
+        if (!corpus.includes(hint)) {
+            throw new Error(`Strict real-data mode: missing retrieved construction standard evidence for "${hint.toUpperCase()}".`);
+        }
+    }
+};
+
+const validateSpecialistOutputs = ({
+    compliance,
+    risk,
+    cost,
+    strict,
+    allowedCitationIds,
+}: {
+    compliance: ComplianceAnalysis;
+    risk: RiskAnalysis;
+    cost: CostAnalysis;
+    strict: boolean;
+    allowedCitationIds: string[];
+}) => {
+    if (!strict) return;
+
+    const allowed = new Set(allowedCitationIds.map((id) => String(id || '').trim()).filter(Boolean));
+    if (allowed.size === 0) {
+        throw new Error('Strict real-data mode: citation map is empty.');
+    }
+
+    const everyCitationGrounded = (ids: unknown): boolean => {
+        if (!Array.isArray(ids) || ids.length === 0) return false;
+        return ids.every((id) => allowed.has(String(id || '').trim()));
+    };
+
+    for (const violation of compliance.violations || []) {
+        if (!everyCitationGrounded((violation as any).citationIds)) {
+            throw new Error(`Strict real-data mode: compliance finding "${violation.ruleId}" has ungrounded citations.`);
+        }
+    }
+
+    const hazards = Array.isArray((risk as any).hazards) ? (risk as any).hazards : [];
+    if (hazards.length === 0) {
+        throw new Error('Strict real-data mode: risk analysis returned no hazards.');
+    }
+    for (const hazard of hazards) {
+        if (!everyCitationGrounded(hazard?.citationIds)) {
+            throw new Error(`Strict real-data mode: risk hazard "${String(hazard?.type || 'Unknown')}" has ungrounded citations.`);
+        }
+    }
+
+    if (!Number.isFinite(Number((cost as any)?.total)) || Number((cost as any)?.total) <= 0) {
+        throw new Error('Strict real-data mode: cost estimate total is invalid.');
+    }
+    if (!Array.isArray((cost as any)?.breakdown) || (cost as any).breakdown.length === 0) {
+        throw new Error('Strict real-data mode: cost estimate breakdown is missing.');
+    }
+    for (const row of (cost as any).breakdown) {
+        if (!everyCitationGrounded(row?.citationIds)) {
+            throw new Error(`Strict real-data mode: cost breakdown "${String(row?.category || 'Unknown')}" has ungrounded citations.`);
+        }
+    }
+    if (!everyCitationGrounded((cost as any).citationIds)) {
+        throw new Error('Strict real-data mode: cost estimate has ungrounded citations.');
+    }
+};
+
 const toErrorMessage = (reason: unknown): string => {
     if (reason instanceof Error) return reason.message;
     return String(reason || 'Unknown error');
@@ -379,8 +540,10 @@ const resolveRiskAnalysis = (
                 severity: 'Warning',
                 description: `Risk analysis unavailable. ${errorMessage}`,
                 mitigation: 'Run manual safety risk workshop before execution decisions.',
+                citationIds: [],
             },
         ],
+        citationIds: [],
     };
 };
 
@@ -402,6 +565,7 @@ const resolveCostAnalysis = (
             `Cost analysis unavailable: ${errorMessage}`,
             'Manual quantity-surveyor estimate is required before budget approval.',
         ],
+        citationIds: [],
     };
 };
 

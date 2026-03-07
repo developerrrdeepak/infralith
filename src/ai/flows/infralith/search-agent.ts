@@ -17,10 +17,10 @@ const synthSchema = z.object({
     ).optional(),
 });
 
-const normalizePct = (value: unknown, fallback: number): number => {
+const normalizeOptionalPct = (value: unknown): number | undefined => {
     const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return fallback;
-    if (parsed <= 1) return Math.round(parsed * 100);
+    if (!Number.isFinite(parsed)) return undefined;
+    if (parsed <= 1) return Math.max(0, Math.min(100, Math.round(parsed * 100)));
     return Math.max(0, Math.min(100, Math.round(parsed)));
 };
 
@@ -75,11 +75,13 @@ Return strict JSON with:
         const chunkByCitation = new Map(retrieved.chunks.map((chunk) => [chunk.citationId, chunk] as const));
 
         const stitched = (synthesized.results || [])
-            .map((item, index) => {
+            .map((item) => {
                 const chunk = chunkByCitation.get(item.citationId);
                 if (!chunk) return null;
-                const createdAt = isIsoDate(chunk.createdAt) ? chunk.createdAt : new Date().toISOString();
-                const semanticMatch = normalizePct(item.semanticMatchPercentage, normalizePct(chunk.rerankerScore ?? chunk.score ?? (1 - index * 0.07), 78));
+                const createdAt = isIsoDate(chunk.createdAt) ? chunk.createdAt : undefined;
+                const semanticMatch =
+                    normalizeOptionalPct(item.semanticMatchPercentage) ??
+                    normalizeOptionalPct(chunk.rerankerScore ?? chunk.score ?? undefined);
                 return {
                     id: chunk.chunkId,
                     title: item.title || chunk.title,
@@ -102,10 +104,10 @@ Return strict JSON with:
             title: chunk.title,
             summary: chunk.summary,
             collection: chunk.collection || chunk.indexName,
-            createdAt: isIsoDate(chunk.createdAt) ? chunk.createdAt : new Date().toISOString(),
+            createdAt: isIsoDate(chunk.createdAt) ? chunk.createdAt : undefined,
             source: chunk.source,
             citationId: chunk.citationId,
-            semanticMatchPercentage: normalizePct(chunk.rerankerScore ?? chunk.score ?? (1 - index * 0.08), 75),
+            semanticMatchPercentage: normalizeOptionalPct(chunk.rerankerScore ?? chunk.score ?? undefined),
             relevanceReason: 'Retrieved via Azure AI Search hybrid ranking.',
             score: chunk.rerankerScore ?? chunk.score ?? undefined,
         }));

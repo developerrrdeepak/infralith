@@ -11,10 +11,15 @@ const clamp01 = (value: unknown, fallback: number): number => {
     return Math.max(0, Math.min(1, parsed));
 };
 
+type ComplianceOptions = {
+    allowedCitationIds?: string[];
+    requireCitations?: boolean;
+};
+
 /**
  * Compliance Agent - verifies blueprint against Indian building codes.
  */
-export async function checkCompliance(inputData: string, retrievalContext?: string) {
+export async function checkCompliance(inputData: string, retrievalContext?: string, options?: ComplianceOptions) {
     const prompt = `
 You are a Senior Structural Compliance Auditor.
 Evaluate the supplied project data for compliance checks against:
@@ -78,8 +83,21 @@ Return one strict JSON object:
 
     try {
         const result = schema.parse(await generateAzureObject<any>(prompt, schema));
+        const allowedCitationIds = new Set((options?.allowedCitationIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+        const requireCitations = !!options?.requireCitations && allowedCitationIds.size > 0;
+
         const violations = result.violations.map((v) => {
             const severity: 'Critical' | 'Warning' = v.severity === 'Critical' ? 'Critical' : 'Warning';
+            const citationIds = Array.isArray(v.citationIds)
+                ? v.citationIds
+                    .map((id) => String(id || '').trim())
+                    .filter((id) => id.length > 0 && (allowedCitationIds.size === 0 || allowedCitationIds.has(id)))
+                : [];
+
+            if (requireCitations && citationIds.length === 0) {
+                throw new Error(`Compliance finding "${v.ruleId}" is missing grounded citation ids.`);
+            }
+
             return {
                 ruleId: String(v.ruleId || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
                 severity,
@@ -90,9 +108,7 @@ Return one strict JSON object:
                 description: String(v.description || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
                 comment: String(v.comment || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
                 confidence: Number.isFinite(Number(v.confidence)) ? clamp01(v.confidence, 0.5) : undefined,
-                citationIds: Array.isArray(v.citationIds)
-                    ? v.citationIds.map((id) => String(id || '').trim()).filter(Boolean)
-                    : [],
+                citationIds,
             };
         });
 
