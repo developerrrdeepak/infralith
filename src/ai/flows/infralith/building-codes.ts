@@ -1,61 +1,130 @@
 import { GeometricReconstruction, ConstructionConflict } from './reconstruction-types';
 
+export type BuildingCodeProfile = 'india' | 'international';
+
+export interface BuildingCodeThresholds {
+    minDoorWidthM: number;
+    minExteriorWallThicknessM: number;
+    minHabitableRoomAreaSqm: number;
+}
+
+export interface BuildingCodeOptions {
+    profile?: BuildingCodeProfile;
+    thresholds?: Partial<BuildingCodeThresholds>;
+}
+
+const DEFAULT_PROFILE: BuildingCodeProfile = 'india';
+const PROFILE_THRESHOLDS: Record<BuildingCodeProfile, BuildingCodeThresholds> = {
+    // India-first baseline (project configurable; not a legal substitute for local byelaws).
+    india: {
+        minDoorWidthM: 0.9,
+        minExteriorWallThicknessM: 0.23,
+        minHabitableRoomAreaSqm: 9.5,
+    },
+    // Legacy international defaults kept for quick switch.
+    international: {
+        minDoorWidthM: 0.81,
+        minExteriorWallThicknessM: 0.15,
+        minHabitableRoomAreaSqm: 6.5,
+    },
+};
+
+const parsePositiveNumber = (value: string | undefined): number | null => {
+    if (typeof value !== 'string' || value.trim() === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const normalizeProfile = (value: string | undefined): BuildingCodeProfile => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'international') return 'international';
+    return DEFAULT_PROFILE;
+};
+
+const readThresholdOverride = (profile: BuildingCodeProfile, suffix: string): number | null => {
+    const profileSpecificKey = `INFRALITH_${profile.toUpperCase()}_${suffix}`;
+    return parsePositiveNumber(process.env[profileSpecificKey]) ??
+        parsePositiveNumber(process.env[`INFRALITH_${suffix}`]);
+};
+
+export const resolveBuildingCodeConfig = (options?: BuildingCodeOptions) => {
+    const envProfile = normalizeProfile(process.env.INFRALITH_BUILDING_CODE_PROFILE);
+    const profile = options?.profile || envProfile;
+    const baseline = PROFILE_THRESHOLDS[profile];
+
+    const envDoor = readThresholdOverride(profile, 'MIN_DOOR_WIDTH_M');
+    const envWall = readThresholdOverride(profile, 'MIN_EXTERIOR_WALL_THICKNESS_M');
+    const envRoom = readThresholdOverride(profile, 'MIN_HABITABLE_ROOM_AREA_SQM');
+
+    const thresholds: BuildingCodeThresholds = {
+        minDoorWidthM: options?.thresholds?.minDoorWidthM ?? envDoor ?? baseline.minDoorWidthM,
+        minExteriorWallThicknessM: options?.thresholds?.minExteriorWallThicknessM ?? envWall ?? baseline.minExteriorWallThicknessM,
+        minHabitableRoomAreaSqm: options?.thresholds?.minHabitableRoomAreaSqm ?? envRoom ?? baseline.minHabitableRoomAreaSqm,
+    };
+
+    return { profile, thresholds };
+};
+
 /**
- * Architectural Engineering Validation Engine.
- * Runs deterministic geometric checks against International Building Codes (IBC) 
- * and ADA compliance requirements to ensure the AI-generated model is physically viable.
+ * Deterministic geometric validation for generated building models.
+ * Default profile is India and thresholds can be overridden via env vars:
+ * - INFRALITH_BUILDING_CODE_PROFILE=india|international
+ * - INFRALITH_MIN_DOOR_WIDTH_M
+ * - INFRALITH_MIN_EXTERIOR_WALL_THICKNESS_M
+ * - INFRALITH_MIN_HABITABLE_ROOM_AREA_SQM
+ * Profile-specific override keys are also supported:
+ * - INFRALITH_INDIA_MIN_DOOR_WIDTH_M
+ * - INFRALITH_INTERNATIONAL_MIN_DOOR_WIDTH_M
+ * (same suffixes for wall thickness and room area)
  */
-export function applyBuildingCodes(model: GeometricReconstruction): GeometricReconstruction {
+export function applyBuildingCodes(model: GeometricReconstruction, options?: BuildingCodeOptions): GeometricReconstruction {
+    const { profile, thresholds } = resolveBuildingCodeConfig(options);
     const newConflicts: ConstructionConflict[] = [];
 
-    // 1. ADA Minimum Door Width (32 inches / 0.81m clear width)
     model.doors?.forEach((door) => {
-        if (door.width < 0.81) {
+        if (!Number.isFinite(door.width)) return;
+        if (door.width < thresholds.minDoorWidthM) {
             newConflicts.push({
                 type: 'code',
                 severity: 'high',
-                description: `ADA Violation: Door width (${door.width.toFixed(2)}m) is less than the minimum 0.81m egress requirement.`,
-                location: door.position as [number, number]
+                description: `[${profile}] Door width (${door.width.toFixed(2)}m) is below configured minimum ${thresholds.minDoorWidthM.toFixed(2)}m.`,
+                location: door.position as [number, number],
             });
         }
     });
 
-    // 2. Minimum Exterior Wall Thickness (150mm / 0.15m for structural integrity & insulation)
     model.walls?.forEach((wall) => {
-        if (wall.is_exterior && wall.thickness < 0.15) {
+        if (!wall.is_exterior || !Number.isFinite(wall.thickness)) return;
+        if (wall.thickness < thresholds.minExteriorWallThicknessM) {
             newConflicts.push({
                 type: 'structural',
                 severity: 'medium',
-                description: `Structural Warning: Exterior wall thickness (${wall.thickness.toFixed(2)}m) may be insufficient for standard insulation requirements (min 0.15m).`,
-                location: wall.start as [number, number]
+                description: `[${profile}] Exterior wall thickness (${wall.thickness.toFixed(2)}m) is below configured minimum ${thresholds.minExteriorWallThicknessM.toFixed(2)}m.`,
+                location: wall.start as [number, number],
             });
         }
     });
 
-    // 3. Minimum Habitable Room Area (70 sq ft / 6.5 sqm by IRC)
     model.rooms?.forEach((room) => {
-        // Exclude bathrooms or closets by simple name heuristics
         const isHabitable = !/bath|toilet|wc|closet|powder|store|utility/i.test(room.name);
+        if (!isHabitable || !Number.isFinite(room.area)) return;
 
-        if (isHabitable && room.area && room.area < 6.5) {
+        if (room.area < thresholds.minHabitableRoomAreaSqm) {
             newConflicts.push({
                 type: 'code',
                 severity: 'low',
-                description: `IRC Violation: Habitable room '${room.name}' area (${room.area.toFixed(1)}m²) is below the minimum 6.5m² threshold.`,
-                location: room.polygon[0] as [number, number]
+                description: `[${profile}] Habitable room '${room.name}' area (${room.area.toFixed(1)}m^2) is below configured minimum ${thresholds.minHabitableRoomAreaSqm.toFixed(1)}m^2.`,
+                location: room.polygon[0] as [number, number],
             });
         }
     });
 
-    // Safely append the deterministic conflicts to any existing AI-generated ones
     const existingConflicts = model.conflicts || [];
-
-    // De-duplicate by description to prevent AI hallucinating the exact same string we generated
     const allConflicts = [...existingConflicts, ...newConflicts];
-    const uniqueConflicts = Array.from(new Map(allConflicts.map(item => [item.description, item])).values());
+    const uniqueConflicts = Array.from(new Map(allConflicts.map((item) => [item.description, item])).values());
 
     return {
         ...model,
-        conflicts: uniqueConflicts
+        conflicts: uniqueConflicts,
     };
 }
