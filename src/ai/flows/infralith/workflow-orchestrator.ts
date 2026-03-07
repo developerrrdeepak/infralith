@@ -12,7 +12,7 @@ import { authOptions } from '@/lib/auth';
 
 const ORCHESTRATOR_VERSION = '3.0.0'; // Bumped for Native OpenCV.js Migration
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
 
 function paramHash(): string {
@@ -44,8 +44,11 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     const fileName = originalFileName.toLowerCase();
     const dotIndex = fileName.lastIndexOf('.');
     const extension = dotIndex >= 0 ? fileName.slice(dotIndex) : '';
+    if (extension === '.doc') {
+        throw new Error('Legacy .doc files are not supported. Convert to .docx or PDF and try again.');
+    }
     if (!ALLOWED_UPLOAD_EXTENSIONS.has(extension)) {
-        throw new Error("Unsupported file type. Please upload PDF, DOC, DOCX, PNG, JPG, JPEG, or WEBP.");
+        throw new Error("Unsupported file type. Please upload PDF, DOCX, PNG, JPG, JPEG, or WEBP.");
     }
 
     // 1. Context Generation

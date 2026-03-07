@@ -9,7 +9,7 @@ import { useAppContext } from '@/contexts/app-context';
 import { pipelineStageToProgress } from '@/ai/flows/infralith/pipeline';
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 
 export default function BlueprintUpload() {
     const { handleNavigate, user, runInfralithEvaluation, pipelineStage } = useAppContext();
@@ -37,7 +37,7 @@ export default function BlueprintUpload() {
         if (!ALLOWED_EXTENSIONS.has(extension)) {
             toast({
                 title: "Unsupported format",
-                description: "Upload PDF, DOC, DOCX, PNG, JPG, JPEG, or WEBP files only.",
+                description: "Upload PDF, DOCX, PNG, JPG, JPEG, or WEBP files only.",
                 variant: "destructive"
             });
             e.target.value = '';
@@ -92,7 +92,7 @@ export default function BlueprintUpload() {
                         type="file"
                         className="hidden"
                         ref={fileInputRef}
-                        accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp"
+                        accept=".pdf,.docx,.png,.jpg,.jpeg,.webp"
                         onChange={handleFileChange}
                     />
 
@@ -114,7 +114,7 @@ export default function BlueprintUpload() {
                                         <Upload className="h-14 w-14 text-[#f97316]" strokeWidth={2.5} />
                                     </div>
                                     <h3 className="text-[28px] font-black text-slate-900 dark:text-white mb-2 tracking-tight">Select Project Document</h3>
-                                    <p className="text-[15px] text-slate-400 mb-10">Supported: PDF, DOC, DOCX, PNG, JPG, JPEG, WEBP (Max 100MB)</p>
+                                    <p className="text-[15px] text-slate-400 mb-10">Supported: PDF, DOCX, PNG, JPG, JPEG, WEBP (Max 100MB)</p>
                                     <Button
                                         onClick={triggerFileSelect}
                                         className="bg-[#f97316] hover:bg-[#ea580c] text-white font-bold h-14 px-10 rounded-[14px] text-[16px] shadow-lg shadow-orange-500/20 transition-all flex items-center gap-3"
