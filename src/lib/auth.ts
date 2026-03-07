@@ -36,12 +36,56 @@ const allowedDevEmails = new Set(
 const azureClientId = (process.env.AZURE_AD_CLIENT_ID || '').trim();
 const azureClientSecret = (process.env.AZURE_AD_CLIENT_SECRET || '').trim();
 const azureTenantId = (process.env.AZURE_AD_TENANT_ID || '').trim();
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function roleFromEmail(email: string): string {
   if (email.startsWith('admin@') || email.includes('.admin@')) return 'Admin';
   if (email.startsWith('supervisor@') || email.includes('.supervisor@')) return 'Supervisor';
   return 'Engineer';
 }
+
+const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCase();
+const isLikelyEmail = (value: string) => EMAIL_REGEX.test(value);
+
+const decodeGuestExtUpn = (value: string): string | null => {
+  const normalized = normalizeEmail(value);
+  const marker = '#ext#@';
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex <= 0) return null;
+
+  const guestAliasPrefix = normalized.slice(0, markerIndex);
+  const splitIndex = guestAliasPrefix.lastIndexOf('_');
+  if (splitIndex <= 0 || splitIndex >= guestAliasPrefix.length - 1) return null;
+
+  const localPart = guestAliasPrefix.slice(0, splitIndex);
+  const domainPart = guestAliasPrefix.slice(splitIndex + 1);
+  const candidate = `${localPart}@${domainPart}`;
+  return isLikelyEmail(candidate) ? candidate : null;
+};
+
+const resolveAzureProfileEmail = (profile: Record<string, unknown>): string => {
+  const candidates = [
+    profile.email,
+    profile.mail,
+    profile.userPrincipalName,
+    profile.upn,
+    profile.preferred_username,
+    profile.unique_name,
+  ]
+    .map(normalizeEmail)
+    .filter(Boolean);
+
+  const direct = candidates.find((value) => isLikelyEmail(value) && !value.includes('#ext#@'));
+  if (direct) return direct;
+
+  for (const value of candidates) {
+    const decoded = decodeGuestExtUpn(value);
+    if (decoded) return decoded;
+  }
+
+  const fallback = candidates.find(isLikelyEmail);
+  return fallback || '';
+};
 
 const authProviders: NextAuthOptions['providers'] = [];
 
@@ -57,7 +101,8 @@ if (azureClientId && azureClientSecret && azureTenantId) {
         },
       },
       profile(profile) {
-        const roles = Array.isArray(profile.roles) ? profile.roles : [];
+        const rawProfile = profile as Record<string, unknown>;
+        const roles = Array.isArray(rawProfile.roles) ? rawProfile.roles.map(String) : [];
         let role = 'Guest';
 
         const adminRole = process.env.AZURE_AD_APP_ROLE_ADMIN || 'Admin';
@@ -72,10 +117,10 @@ if (azureClientId && azureClientSecret && azureTenantId) {
         else if (roles.includes(supervisorRole) || roles.includes(supervisorId)) role = 'Supervisor';
         else if (roles.includes(engineerRole) || roles.includes(engineerId)) role = 'Engineer';
 
-        const email = (profile.email || profile.preferred_username || '').trim().toLowerCase();
+        const email = resolveAzureProfileEmail(rawProfile);
         return {
-          id: String(profile.sub || profile.oid || email || `user-${Date.now()}`),
-          name: profile.name || email || 'User',
+          id: String(rawProfile.sub || rawProfile.oid || email || `user-${Date.now()}`),
+          name: String(rawProfile.name || email || 'User'),
           email,
           image: null,
           role,

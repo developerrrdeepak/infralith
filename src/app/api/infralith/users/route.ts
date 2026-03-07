@@ -12,6 +12,7 @@ type UserDirectoryDoc = {
   userId: string;
   email: string;
   emailNormalized: string;
+  emailAliasesNormalized?: string[];
   name: string;
   avatar: string | null;
   role: string | null;
@@ -20,6 +21,49 @@ type UserDirectoryDoc = {
 };
 
 const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCase();
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isLikelyEmail = (value: string) => EMAIL_REGEX.test(value);
+
+const decodeGuestExtUpn = (value: string): string | null => {
+  const normalized = normalizeEmail(value);
+  const marker = '#ext#@';
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex <= 0) return null;
+
+  const prefix = normalized.slice(0, markerIndex);
+  const splitIndex = prefix.lastIndexOf('_');
+  if (splitIndex <= 0 || splitIndex >= prefix.length - 1) return null;
+
+  const localPart = prefix.slice(0, splitIndex);
+  const domainPart = prefix.slice(splitIndex + 1);
+  const decoded = `${localPart}@${domainPart}`;
+  return isLikelyEmail(decoded) ? decoded : null;
+};
+
+const buildGuestExtPrefix = (value: string): string | null => {
+  const normalized = normalizeEmail(value);
+  if (!isLikelyEmail(normalized) || normalized.includes('#ext#@')) return null;
+  const splitIndex = normalized.lastIndexOf('@');
+  if (splitIndex <= 0 || splitIndex >= normalized.length - 1) return null;
+  const localPart = normalized.slice(0, splitIndex);
+  const domainPart = normalized.slice(splitIndex + 1);
+  return `${localPart}_${domainPart}#ext#@`;
+};
+
+const uniqueNonEmpty = (values: Array<string | null | undefined>) =>
+  Array.from(new Set(values.map((v) => normalizeEmail(v || '')).filter(Boolean)));
+
+const buildEmailAliases = (...values: Array<unknown>) => {
+  const aliases = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeEmail(value);
+    if (!normalized) continue;
+    aliases.add(normalized);
+    const decoded = decodeGuestExtUpn(normalized);
+    if (decoded) aliases.add(decoded);
+  }
+  return Array.from(aliases);
+};
 
 const actorFromSession = (session: any) => ({
   id: String(session?.user?.id || session?.user?.email || '').trim(),
@@ -57,20 +101,50 @@ export async function GET(req: Request) {
 
   try {
     if (email) {
-      const matches = await queryCollabDocs<UserDirectoryDoc>(
-        {
-          query:
-            'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (c.emailNormalized = @email OR LOWER(c.email) = @email)',
-          parameters: [
-            { name: '@pk', value: USERS_PK },
-            { name: '@type', value: 'userProfile' },
-            { name: '@email', value: email },
-          ],
-        },
-        { partitionKey: USERS_PK, maxItemCount: 1 }
-      );
+      const exactCandidates = uniqueNonEmpty([email, decodeGuestExtUpn(email)]);
+      let match: UserDirectoryDoc | undefined;
 
-      const match = matches[0];
+      for (const candidate of exactCandidates) {
+        const matches = await queryCollabDocs<UserDirectoryDoc>(
+          {
+            query:
+              'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (c.emailNormalized = @email OR LOWER(c.email) = @email OR ARRAY_CONTAINS(c.emailAliasesNormalized, @email))',
+            parameters: [
+              { name: '@pk', value: USERS_PK },
+              { name: '@type', value: 'userProfile' },
+              { name: '@email', value: candidate },
+            ],
+          },
+          { partitionKey: USERS_PK, maxItemCount: 1 }
+        );
+        if (matches[0]) {
+          match = matches[0];
+          break;
+        }
+      }
+
+      if (!match) {
+        const guestPrefixes = uniqueNonEmpty(exactCandidates.map(buildGuestExtPrefix));
+        for (const prefix of guestPrefixes) {
+          const matches = await queryCollabDocs<UserDirectoryDoc>(
+            {
+              query:
+                'SELECT TOP 1 * FROM c WHERE c.pk = @pk AND c.type = @type AND (STARTSWITH(c.emailNormalized, @prefix) OR STARTSWITH(LOWER(c.email), @prefix))',
+              parameters: [
+                { name: '@pk', value: USERS_PK },
+                { name: '@type', value: 'userProfile' },
+                { name: '@prefix', value: prefix },
+              ],
+            },
+            { partitionKey: USERS_PK, maxItemCount: 1 }
+          );
+          if (matches[0]) {
+            match = matches[0];
+            break;
+          }
+        }
+      }
+
       return NextResponse.json({ user: match ? toUserProfile(match) : null });
     }
 
@@ -134,14 +208,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid session user' }, { status: 400 });
     }
 
+    const aliases = buildEmailAliases(actor.email || String(session.user.email || ''));
+    const preferredEmail =
+      aliases.find((value) => isLikelyEmail(value) && !value.includes('#ext#@')) ||
+      aliases[0] ||
+      '';
+
     const now = new Date().toISOString();
     const doc: UserDirectoryDoc = {
       id: `user:${actor.id}`,
       pk: USERS_PK,
       type: 'userProfile',
       userId: actor.id,
-      email: actor.email || String(session.user.email || ''),
-      emailNormalized: actor.email,
+      email: preferredEmail,
+      emailNormalized: preferredEmail,
+      emailAliasesNormalized: aliases,
       name: actor.name,
       avatar: actor.avatar,
       role: actor.role,
