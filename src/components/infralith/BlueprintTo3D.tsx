@@ -290,44 +290,18 @@ const computeRoomCenter = (polygon: [number, number][] | null | undefined): [num
     return [sumX / count, sumZ / count];
 };
 
-const convexHull2D = (points: [number, number][]): [number, number][] => {
-    const dedup = new Map<string, [number, number]>();
-    for (const point of points) {
-        const x = Number(point?.[0]);
-        const z = Number(point?.[1]);
-        if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-        const key = `${x.toFixed(4)}:${z.toFixed(4)}`;
-        if (!dedup.has(key)) dedup.set(key, [x, z]);
+const polygonArea2D = (polygon: [number, number][]): number => {
+    if (!Array.isArray(polygon) || polygon.length < 3) return 0;
+    let area = 0;
+    for (let idx = 0; idx < polygon.length; idx += 1) {
+        const [x1, y1] = polygon[idx];
+        const [x2, y2] = polygon[(idx + 1) % polygon.length];
+        area += (x1 * y2) - (x2 * y1);
     }
-    const sorted = [...dedup.values()].sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
-    if (sorted.length < 3) return sorted;
-    const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
-        ((a[0] - o[0]) * (b[1] - o[1])) - ((a[1] - o[1]) * (b[0] - o[0]));
-
-    const lower: [number, number][] = [];
-    for (const point of sorted) {
-        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
-            lower.pop();
-        }
-        lower.push(point);
-    }
-
-    const upper: [number, number][] = [];
-    for (let idx = sorted.length - 1; idx >= 0; idx -= 1) {
-        const point = sorted[idx];
-        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
-            upper.pop();
-        }
-        upper.push(point);
-    }
-
-    lower.pop();
-    upper.pop();
-    const hull = [...lower, ...upper];
-    return hull.length >= 3 ? hull : sorted;
+    return area / 2;
 };
 
-const buildShapeFromPolygon = (polygon: [number, number][]): THREE.Shape | null => {
+const buildShapeFromPolygonPoints = (polygon: [number, number][]): THREE.Shape | null => {
     if (!Array.isArray(polygon) || polygon.length < 3) return null;
     const shape = new THREE.Shape();
     polygon.forEach((point, idx) => {
@@ -336,6 +310,108 @@ const buildShapeFromPolygon = (polygon: [number, number][]): THREE.Shape | null 
     });
     shape.closePath();
     return shape;
+};
+
+const buildFloorFootprintPolygonsFromWalls = (walls: GeometricReconstruction['walls']): [number, number][][] => {
+    const sourceWalls = (walls || []).filter((wall) => wall?.is_exterior === true);
+    const candidates = sourceWalls.length >= 3 ? sourceWalls : (walls || []);
+    if (!Array.isArray(candidates) || candidates.length < 3) return [];
+
+    const snap = (value: number) => Number(value.toFixed(3));
+    const nodeIndexByKey = new Map<string, number>();
+    const nodes: [number, number][] = [];
+    const getNodeIndex = (point: [number, number]): number => {
+        const x = snap(Number(point?.[0]));
+        const y = snap(Number(point?.[1]));
+        const key = `${x}:${y}`;
+        const existing = nodeIndexByKey.get(key);
+        if (existing != null) return existing;
+        const next = nodes.length;
+        nodes.push([x, y]);
+        nodeIndexByKey.set(key, next);
+        return next;
+    };
+
+    const edges: Array<{ a: number; b: number }> = [];
+    for (const wall of candidates) {
+        const start = wall?.start;
+        const end = wall?.end;
+        if (!Array.isArray(start) || !Array.isArray(end)) continue;
+        const sx = Number(start[0]);
+        const sz = Number(start[1]);
+        const ex = Number(end[0]);
+        const ez = Number(end[1]);
+        if (![sx, sz, ex, ez].every((value) => Number.isFinite(value))) continue;
+        const a = getNodeIndex([sx, sz]);
+        const b = getNodeIndex([ex, ez]);
+        if (a === b) continue;
+        edges.push({ a, b });
+    }
+    if (edges.length < 3) return [];
+
+    const adjacency = new Map<number, number[]>();
+    edges.forEach((edge, edgeIdx) => {
+        const aList = adjacency.get(edge.a) || [];
+        aList.push(edgeIdx);
+        adjacency.set(edge.a, aList);
+        const bList = adjacency.get(edge.b) || [];
+        bList.push(edgeIdx);
+        adjacency.set(edge.b, bList);
+    });
+
+    const edgeUsed = new Set<number>();
+    const polygons: [number, number][][] = [];
+
+    for (let edgeStart = 0; edgeStart < edges.length; edgeStart += 1) {
+        if (edgeUsed.has(edgeStart)) continue;
+        const seed = edges[edgeStart];
+        let prevNode = seed.a;
+        let currentNode = seed.b;
+        const pathNodes = [seed.a, seed.b];
+        edgeUsed.add(edgeStart);
+
+        let safety = 0;
+        while (safety < edges.length * 4) {
+            safety += 1;
+            const connected = adjacency.get(currentNode) || [];
+            const nextEdgeIdx = connected.find((idx) => {
+                if (edgeUsed.has(idx)) return false;
+                const edge = edges[idx];
+                const nextNode = edge.a === currentNode ? edge.b : edge.a;
+                return nextNode !== prevNode;
+            });
+            if (nextEdgeIdx == null) break;
+
+            edgeUsed.add(nextEdgeIdx);
+            const nextEdge = edges[nextEdgeIdx];
+            const nextNode = nextEdge.a === currentNode ? nextEdge.b : nextEdge.a;
+            pathNodes.push(nextNode);
+            prevNode = currentNode;
+            currentNode = nextNode;
+
+            if (nextNode === pathNodes[0]) {
+                const raw = pathNodes.slice(0, -1).map((nodeIdx) => nodes[nodeIdx]);
+                if (raw.length >= 3) {
+                    const area = Math.abs(polygonArea2D(raw));
+                    if (area >= 0.8) polygons.push(raw);
+                }
+                break;
+            }
+        }
+    }
+
+    if (polygons.length === 0) return [];
+    polygons.sort((a, b) => Math.abs(polygonArea2D(b)) - Math.abs(polygonArea2D(a)));
+    return polygons;
+};
+
+const computeFloorInsetFromWalls = (walls: GeometricReconstruction['walls']): number => {
+    const thicknessValues = (walls || [])
+        .map((wall) => Number(wall?.thickness))
+        .filter((value) => Number.isFinite(value) && value > 0) as number[];
+    if (thicknessValues.length === 0) return 0.04;
+    const avgThickness = thicknessValues.reduce((sum, value) => sum + value, 0) / thicknessValues.length;
+    return clampScalar(avgThickness * 0.5, 0.02, 0.22);
 };
 
 const insetPolygonToCentroid = (polygon: [number, number][], inset = 0.04): [number, number][] => {
@@ -1018,38 +1094,52 @@ function GeneratedStructure({
         maxZ: Math.max(...allZ),
     };
     const floorMetrics = useMemo(() => computeFloorMetrics(data), [data]);
-    const floorLevels = floorMetrics.levels;
-    const resolveFloorHeight = (floorLevel: number) => resolveFloorHeightFromMetrics(floorMetrics, floorLevel);
-    const resolveFloorBaseY = (floorLevel: number) => resolveFloorBaseYFromMetrics(floorMetrics, floorLevel);
-    const groundPbr = { roughness: 0.88, metalness: 0.01, clearcoat: 0.03, clearcoatRoughness: 0.88, reflectivity: 0.08 };
-    const slabPbr = { roughness: 0.82, metalness: 0.02, clearcoat: 0.05, clearcoatRoughness: 0.8, reflectivity: 0.08 };
-    const ceilingPbr = { roughness: 0.9, metalness: 0, clearcoat: 0.02, clearcoatRoughness: 0.9, reflectivity: 0.04 };
-    const roomsByFloor = useMemo(() => {
-        const grouped = new Map<number, GeometricReconstruction['rooms']>();
+    const wallsByFloor = useMemo(() => {
+        const grouped = new Map<number, GeometricReconstruction['walls']>();
+        for (const wall of data.walls || []) {
+            const floorLevel = normalizeFloorLevel(wall.floor_level);
+            const bucket = grouped.get(floorLevel) || [];
+            bucket.push(wall);
+            grouped.set(floorLevel, bucket);
+        }
+        return grouped;
+    }, [data.walls]);
+    const roomPolygonsByFloor = useMemo(() => {
+        const grouped = new Map<number, [number, number][][]>();
         for (const room of data.rooms || []) {
+            if (!Array.isArray(room?.polygon) || room.polygon.length < 3) continue;
             const floorLevel = normalizeFloorLevel(room.floor_level);
             const bucket = grouped.get(floorLevel) || [];
-            bucket.push(room);
+            bucket.push(room.polygon);
             grouped.set(floorLevel, bucket);
         }
         return grouped;
     }, [data.rooms]);
-    const fallbackFloorShapeByLevel = useMemo(() => {
-        const map = new Map<number, THREE.Shape>();
-        for (const lvl of floorLevels) {
-            const floorWalls = (data.walls || []).filter((wall) => normalizeFloorLevel(wall.floor_level) === lvl);
-            const footprintWalls = floorWalls.length > 0 ? floorWalls : (data.walls || []);
-            const points: [number, number][] = [];
-            for (const wall of footprintWalls) {
-                points.push([Number(wall.start?.[0]), Number(wall.start?.[1])]);
-                points.push([Number(wall.end?.[0]), Number(wall.end?.[1])]);
+    const floorSlabPolygonsByLevel = useMemo(() => {
+        const grouped = new Map<number, [number, number][][]>();
+        for (const level of floorMetrics.levels) {
+            const levelWalls = wallsByFloor.get(level) || [];
+            const wallInset = computeFloorInsetFromWalls(levelWalls);
+            const wallPolygons = buildFloorFootprintPolygonsFromWalls(levelWalls)
+                .map((polygon) => insetPolygonToCentroid(polygon, wallInset))
+                .filter((polygon) => polygon.length >= 3 && Math.abs(polygonArea2D(polygon)) >= 0.4);
+            if (wallPolygons.length > 0) {
+                grouped.set(level, wallPolygons);
+                continue;
             }
-            const hull = convexHull2D(points);
-            const shape = buildShapeFromPolygon(hull);
-            if (shape) map.set(lvl, shape);
+
+            // If walls are incomplete for a floor, use only same-floor room polygons from source data.
+            const roomPolygons = (roomPolygonsByFloor.get(level) || [])
+                .map((polygon) => insetPolygonToCentroid(polygon, 0.02))
+                .filter((polygon) => polygon.length >= 3 && Math.abs(polygonArea2D(polygon)) >= 0.1);
+            if (roomPolygons.length > 0) grouped.set(level, roomPolygons);
         }
-        return map;
-    }, [data.walls, floorLevels]);
+        return grouped;
+    }, [floorMetrics.levels, roomPolygonsByFloor, wallsByFloor]);
+    const resolveFloorHeight = (floorLevel: number) => resolveFloorHeightFromMetrics(floorMetrics, floorLevel);
+    const resolveFloorBaseY = (floorLevel: number) => resolveFloorBaseYFromMetrics(floorMetrics, floorLevel);
+    const groundPbr = { roughness: 0.88, metalness: 0.01, clearcoat: 0.03, clearcoatRoughness: 0.88, reflectivity: 0.08 };
+    const ceilingPbr = { roughness: 0.9, metalness: 0, clearcoat: 0.02, clearcoatRoughness: 0.9, reflectivity: 0.04 };
 
     return (
         <group ref={groupRef}>
@@ -1069,44 +1159,44 @@ function GeneratedStructure({
 
             {p > 0 && (
                 <group scale={[1, p, 1]}>
-                    {/* Floor Slabs for each level */}
-                    {floorLevels.map((lvl) => {
-                        const floorRooms = roomsByFloor.get(lvl) || [];
-                        // Prefer room-based floor/ceiling geometry whenever available to avoid exterior white slab artifacts.
-                        if (floorRooms.length > 0) return null;
-                        const slabY = resolveFloorBaseY(lvl);
-                        const ceilingY = slabY + resolveFloorHeight(lvl) - 0.02;
-                        const hasLevelAbove = floorLevels.some((nextLevel) => nextLevel > lvl);
-                        const shouldRenderCeilingPlate = hasLevelAbove || !data.roof;
-                        const fallbackShape = fallbackFloorShapeByLevel.get(lvl) || null;
-
+                    {/* Floor slabs from blueprint footprints (no hardcoded slab extents). */}
+                    {floorMetrics.levels.map((floorLevel) => {
+                        const polygons = floorSlabPolygonsByLevel.get(floorLevel) || [];
+                        if (polygons.length === 0) return null;
+                        const zPos = resolveFloorBaseY(floorLevel);
+                        const ceilingY = zPos + resolveFloorHeight(floorLevel) - 0.02;
                         return (
-                            <React.Fragment key={`slab-${lvl}`}>
-                                {fallbackShape && (
-                                    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, slabY, 0]} receiveShadow>
-                                        <shapeGeometry args={[fallbackShape]} />
-                                        <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.12} side={THREE.FrontSide} {...slabPbr} />
-                                    </mesh>
-                                )}
-                                {!fallbackShape && (
-                                    <mesh position={[(bounds.minX + bounds.maxX) / 2, slabY, (bounds.minZ + bounds.maxZ) / 2]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-                                        <planeGeometry args={[Math.max(0.1, bounds.maxX - bounds.minX), Math.max(0.1, bounds.maxZ - bounds.minZ)]} />
-                                        <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.1} side={THREE.FrontSide} {...slabPbr} />
-                                    </mesh>
-                                )}
-                                {shouldRenderCeilingPlate && fallbackShape && (
-                                    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
-                                        <shapeGeometry args={[fallbackShape]} />
-                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.42 : 0.16} side={THREE.BackSide} {...ceilingPbr} />
-                                    </mesh>
-                                )}
-                                {shouldRenderCeilingPlate && !fallbackShape && (
-                                    <mesh position={[(bounds.minX + bounds.maxX) / 2, ceilingY, (bounds.minZ + bounds.maxZ) / 2]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow={false}>
-                                        <planeGeometry args={[Math.max(0.1, bounds.maxX - bounds.minX), Math.max(0.1, bounds.maxZ - bounds.minZ)]} />
-                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.42 : 0.16} side={THREE.BackSide} {...ceilingPbr} />
-                                    </mesh>
-                                )}
-                            </React.Fragment>
+                            <group key={`floor-shell-${floorLevel}`}>
+                                {polygons.map((polygon, polygonIdx) => {
+                                    const shape = buildShapeFromPolygonPoints(polygon);
+                                    if (!shape) return null;
+                                    return (
+                                        <group key={`floor-shell-${floorLevel}-${polygonIdx}`}>
+                                            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, zPos + 0.01, 0]} receiveShadow>
+                                                <shapeGeometry args={[shape]} />
+                                                <meshPhysicalMaterial
+                                                    color={defaultFloor}
+                                                    roughness={0.74}
+                                                    metalness={0.02}
+                                                    clearcoat={0.1}
+                                                    clearcoatRoughness={0.5}
+                                                    reflectivity={0.14}
+                                                />
+                                            </mesh>
+                                            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
+                                                <shapeGeometry args={[shape]} />
+                                                <meshPhysicalMaterial
+                                                    color="#f4f1eb"
+                                                    {...ceilingPbr}
+                                                    side={THREE.BackSide}
+                                                    transparent
+                                                    opacity={isWalkthrough ? 0.52 : 0.2}
+                                                />
+                                            </mesh>
+                                        </group>
+                                    );
+                                })}
+                            </group>
                         );
                     })}
 
@@ -1122,7 +1212,6 @@ function GeneratedStructure({
                         shape.closePath();
                         const floorLevel = normalizeFloorLevel(room.floor_level);
                         const zPos = resolveFloorBaseY(floorLevel);
-                        const ceilingY = zPos + resolveFloorHeight(floorLevel) - 0.02;
 
                         return (
                             <group key={`room - ${i} `}>
@@ -1135,16 +1224,6 @@ function GeneratedStructure({
                                     <meshPhysicalMaterial
                                         color={room.floor_color || defaultFloor}
                                         {...getAdaptiveFloorPbr(room)}
-                                    />
-                                </mesh>
-                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
-                                    <shapeGeometry args={[shape]} />
-                                    <meshPhysicalMaterial
-                                        color="#f4f1eb"
-                                        {...ceilingPbr}
-                                        side={THREE.BackSide}
-                                        transparent
-                                        opacity={isWalkthrough ? 0.52 : 0.2}
                                     />
                                 </mesh>
                             </group>
