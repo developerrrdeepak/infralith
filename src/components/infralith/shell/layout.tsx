@@ -38,7 +38,7 @@ import AuditLogPanel from '@/components/infralith/AuditLogPanel';
 import BlueprintLineDbAdminPanel from '@/components/infralith/BlueprintLineDbAdminPanel';
 import { NotificationProvider } from '@/components/infralith/NotificationBell';
 
-export default function CareerCompassLayout() {
+export default function InfralithShellLayout() {
   const { activeRoute, authed, showLogin, user } = useAppContext();
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(true);
   const isGuest = authed && user?.role === 'Guest';

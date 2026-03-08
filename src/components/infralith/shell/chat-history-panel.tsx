@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { History, PlusCircle, Search } from "lucide-react";
 import { useAppContext } from "@/contexts/app-context";
-import { ScrollArea } from "../ui/scroll-area";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 interface ChatHistoryPanelProps {

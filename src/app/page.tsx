@@ -1,6 +1,6 @@
 'use client';
-import InfralithLayout from "@/components/career-compass/career-compass-layout";
-import PageLoader from "@/components/career-compass/page-loader";
+import InfralithShellLayout from "@/components/infralith/shell/layout";
+import PageLoader from "@/components/infralith/shell/page-loader";
 import { useAppContext } from "@/contexts/app-context";
 
 export default function Home() {
@@ -12,5 +12,5 @@ export default function Home() {
   }
 
   // Once authentication is resolved, show the full Infralith platform
-  return <InfralithLayout />;
+  return <InfralithShellLayout />;
 }

@@ -5,10 +5,10 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { useAppContext } from '@/contexts/app-context';
 import { ShieldCheck, Zap, BarChart3, ArrowRight, Newspaper, LineChart, FileText, Bot, CheckCircle2 } from 'lucide-react';
-import Typewriter from '../career-compass/typewriter';
-import QuickTile from '../career-compass/quick-tile';
+import Typewriter from './landing/typewriter';
+import QuickTile from './landing/quick-tile';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import TrendingNewsWidget from '../career-compass/trending-news-widget';
+import TrendingNewsWidget from './landing/trending-news-widget';
 
 const mockNews = [
     {

@@ -1,6 +1,6 @@
 
 'use client';
-import { authService, resumeService, SignUpData, chatHistoryService, ChatSession, Message, UserProfileData, evaluationService, infralithService } from '@/lib/services';
+import { authService, SignUpData, ChatSession, UserProfileData, infralithService } from '@/lib/services';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { useToast } from '@/hooks/use-toast';
@@ -10,49 +10,7 @@ import { PIPELINE_STAGE_COUNT, PIPELINE_STAGE_ERROR } from '@/ai/flows/infralith
 import { auditLog } from '@/lib/audit-log';
 import { runLocalStorageMigrations } from '@/lib/local-storage-migrations';
 
-export interface EvaluationContext {
-  type: 'Mock Interview' | 'Resume Ranking' | 'Resume Roast' | 'Skill Assessment';
-  inputs: Record<string, any>;
-  result: any;
-  resumeText?: string;
-}
-
 type User = UserProfileData & { role?: string };
-
-type UserEvaluations = {
-  skillAssessments: any[];
-  resumeReviews: any[];
-  mockInterviews: any[];
-};
-
-export interface ResumeRankerState {
-  uploadedFile: File | null;
-  pdfBase64: string;
-  pdfPreviewUrl: string;
-  jobRole: string;
-  field: string;
-  rankingResult: any | null;
-  roastResult: any | null;
-}
-export interface MockInterviewState {
-  uploadedFile: File | null;
-  pdfPreviewUrl: string;
-  jobRole: string;
-  field: string;
-  difficulty: 'easy' | 'intermediate' | 'hard' | '';
-  candidateName: string;
-  resumeText: string;
-  resumeAnalysis: any | null;
-  evaluation: any | null;
-}
-export interface SkillAssessmentState {
-  answers: { [key: string]: any };
-  analysis: any | null;
-  selectedRole: string | null;
-  roadmap: any | null;
-  isFinished: boolean;
-  currentQuestionIndex: number;
-}
 
 type Theme = 'light' | 'dark' | 'system';
 type LoginView = 'login' | 'signup' | 'completeGoogleProfile';
@@ -77,11 +35,8 @@ interface AppContextType {
   activeRoute: string;
   authed: boolean;
   user: User | null;
-  resumeText: string;
   showLogin: boolean;
-  showProfileCompletion: boolean;
   isMobileMenuOpen: boolean;
-  isInterviewActive: boolean;
   theme: Theme;
   loginView: LoginView;
   signupFormState: SignupFormState;
@@ -89,78 +44,28 @@ interface AppContextType {
   isLoadingAuth: boolean;
   isAuthLoading: boolean;
   isProfileChecked: boolean;
-  evaluations: UserEvaluations;
-  resumeRankerState: ResumeRankerState;
-  setResumeRankerState: (newState: Partial<ResumeRankerState>) => void;
-  mockInterviewState: MockInterviewState;
-  setMockInterviewState: (newState: Partial<MockInterviewState>) => void;
-  skillAssessmentState: SkillAssessmentState;
-  setSkillAssessmentState: (newState: Partial<SkillAssessmentState>) => void;
-  handleClearAssessmentState: () => void;
-  handleClearResumeRankerState: () => void;
-  handleClearMockInterviewState: () => void;
   setActiveRoute: Dispatch<SetStateAction<string>>;
-  setResumeText: (text: string) => void;
   setShowLogin: Dispatch<SetStateAction<boolean>>;
   setIsMobileMenuOpen: Dispatch<SetStateAction<boolean>>;
-  setIsInterviewActive: Dispatch<SetStateAction<boolean>>;
   setLoginView: Dispatch<SetStateAction<LoginView>>;
   setSignupFormState: Dispatch<SetStateAction<SignupFormState>>;
   clearSignupForm: () => void;
   handleNavigate: (key: string) => void;
   handleLogin: (email: string, pass: string) => Promise<void>;
   handleSignUp: (data: SignUpData) => Promise<void>;
-  handleSignInOrSignUpWithGoogle: () => Promise<void>;
-  handleLoginWithGoogle: () => Promise<void>;
   handleLogout: () => void;
-  handleCancelSignUp: () => Promise<void>;
   toggleTheme: () => void;
   handleDeleteAccount: () => Promise<void>;
   handleProfileUpdate: (data: Partial<User>) => Promise<void>;
   handleSelectRole: (role: string) => void;
   showRoleSelection: boolean;
   setShowRoleSelection: Dispatch<SetStateAction<boolean>>;
-  saveCurrentChat: (messages: Message[], currentSessionId: string | null) => Promise<string | null>;
-  startChatWithEvaluationContext: (ctx: EvaluationContext) => void;
-  refreshEvaluations: () => Promise<void>;
-  generateUserProfileJsonForChat: () => string | null;
   infralithResult: any | null;
   pipelineStage: number;
   runInfralithEvaluation: (input: File) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
-
-const initialResumeRankerState: ResumeRankerState = {
-  uploadedFile: null,
-  pdfBase64: '',
-  pdfPreviewUrl: '',
-  jobRole: '',
-  field: '',
-  rankingResult: null,
-  roastResult: null,
-};
-
-const initialMockInterviewState: MockInterviewState = {
-  uploadedFile: null,
-  pdfPreviewUrl: '',
-  jobRole: '',
-  field: '',
-  difficulty: '',
-  candidateName: '',
-  resumeText: '',
-  resumeAnalysis: null,
-  evaluation: null,
-};
-
-const initialSkillAssessmentState: SkillAssessmentState = {
-  answers: {},
-  analysis: null,
-  selectedRole: null,
-  roadmap: null,
-  isFinished: false,
-  currentQuestionIndex: 0,
-};
 
 const initialSignupFormState: SignupFormState = {
   firstName: '',
@@ -186,87 +91,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isProfileChecked, setIsProfileChecked] = useState(false);
-  const [resumeTextState, setResumeTextState] = useState('');
   const [showLogin, setShowLogin] = useState(false);
   const [showRoleSelection, setShowRoleSelection] = useState(false);
-  const [showProfileCompletion, setShowProfileCompletion] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isInterviewActive, setIsInterviewActive] = useState(false);
   const [theme, setTheme] = useState<Theme>('dark');
   const [loginView, setLoginView] = useState<LoginView>('login');
   const [signupFormState, setSignupFormState] = useState<SignupFormState>(initialSignupFormState);
   const [chatHistory, setChatHistory] = useState<ChatSession[]>([]);
-  const [evaluations, setEvaluations] = useState<UserEvaluations>({
-    skillAssessments: [],
-    resumeReviews: [],
-    mockInterviews: [],
-  });
   const { toast } = useToast();
-  const [resumeRankerState, setResumeRankerStateInternal] = useState<ResumeRankerState>(initialResumeRankerState);
-  const [mockInterviewState, setMockInterviewStateInternal] = useState<MockInterviewState>(initialMockInterviewState);
   const [infralithResult, setInfralithResult] = useState<any | null>(null);
   const [pipelineStage, setPipelineStage] = useState(0);
   const [directoryRegisteredUserId, setDirectoryRegisteredUserId] = useState<string | null>(null);
 
-  const [skillAssessmentState, setSkillAssessmentStateInternal] = useState<SkillAssessmentState>(() => {
-    if (typeof window === 'undefined') {
-      return initialSkillAssessmentState;
-    }
-    try {
-      const savedState = sessionStorage.getItem('skillAssessmentState');
-      if (savedState) {
-        return JSON.parse(savedState);
-      }
-      return initialSkillAssessmentState;
-    } catch (error) {
-      console.error('Failed to parse skill assessment state from session storage', error);
-      return initialSkillAssessmentState;
-    }
-  });
-
   const clearSignupForm = () => setSignupFormState(initialSignupFormState);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem('skillAssessmentState', JSON.stringify(skillAssessmentState));
-    } catch (error) {
-      console.error('Failed to save skill assessment state to session storage', error);
-    }
-  }, [skillAssessmentState]);
-
-  const setResumeRankerState = (newState: Partial<ResumeRankerState>) =>
-    setResumeRankerStateInternal(p => ({ ...p, ...newState }));
-  const setMockInterviewState = (newState: Partial<MockInterviewState>) =>
-    setMockInterviewStateInternal(p => ({ ...p, ...newState }));
-  const setSkillAssessmentState = (newState: Partial<SkillAssessmentState>) =>
-    setSkillAssessmentStateInternal(p => ({ ...p, ...newState }));
-
-  const handleClearAssessmentState = () => setSkillAssessmentStateInternal(initialSkillAssessmentState);
-  const handleClearResumeRankerState = () => setResumeRankerStateInternal(initialResumeRankerState);
-  const handleClearMockInterviewState = () => {
-    setMockInterviewStateInternal(prev => ({ ...initialMockInterviewState, candidateName: prev.candidateName }));
-    setIsInterviewActive(false);
-  };
-
-  useEffect(() => {
-    const url = resumeRankerState.pdfPreviewUrl;
-    return () => { if (url) URL.revokeObjectURL(url); };
-  }, [resumeRankerState.pdfPreviewUrl]);
-  useEffect(() => {
-    const url = mockInterviewState.pdfPreviewUrl;
-    return () => { if (url) URL.revokeObjectURL(url); };
-  }, [mockInterviewState.pdfPreviewUrl]);
-
-  const refreshEvaluations = useCallback(async () => {
-    if (user?.uid) {
-      try {
-        const userEvals = await evaluationService.getEvaluations(user.uid);
-        setEvaluations(userEvals);
-      } catch (error) {
-        console.error("Failed to refresh evaluations:", error);
-      }
-    }
-  }, [user?.uid]);
 
   const refreshInfralithData = useCallback(async () => {
     if (user?.uid) {
@@ -315,9 +152,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } else if (status === 'unauthenticated' && user !== null) {
       setUser(null);
       setChatHistory([]);
-      setEvaluations({ skillAssessments: [], resumeReviews: [], mockInterviews: [] });
       setInfralithResult(null);
-      setShowProfileCompletion(false);
       setShowRoleSelection(false);
     }
 
@@ -327,10 +162,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (user?.uid) {
-      refreshEvaluations();
       refreshInfralithData();
     }
-  }, [user?.uid, refreshEvaluations, refreshInfralithData]);
+  }, [user?.uid, refreshInfralithData]);
 
   useEffect(() => {
     if (!user?.uid) {
@@ -398,7 +232,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener('hashchange', onHash);
     onHash();
-    setResumeTextState(resumeService.getText());
     const storedTheme = localStorage.getItem('theme') as Theme | null;
     if (storedTheme) {
       setTheme(storedTheme);
@@ -454,17 +287,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toast({ title: 'Logged Out' });
   };
 
-  const handleCancelSignUp = async () => {
-    await authService.cancelSignUpAndDeleteAuthUser();
-    handleNavigate('home');
-    toast({ title: 'Sign-up Canceled' });
-  };
-
-  const setResumeText = (text: string) => {
-    setResumeTextState(text);
-    resumeService.saveText(text);
-  };
-
   const handleSignUp = async (data: SignUpData) => {
     setIsAuthLoading(true);
     try {
@@ -488,14 +310,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       throw error;
     }
-  };
-
-  const handleSignInOrSignUpWithGoogle = async () => {
-    signIn('azure-ad', { callbackUrl: '/' });
-  };
-
-  const handleLoginWithGoogle = async () => {
-    signIn('azure-ad', { callbackUrl: '/' });
   };
 
   const handleDeleteAccount = async () => {
@@ -532,50 +346,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       throw error;
     }
   };
-
-  const saveCurrentChat = async (messages: Message[], currentSessionId: string | null) => {
-    if (!user) return null;
-    const { sessionId } = await chatHistoryService.saveChatSession(user.uid, messages, currentSessionId);
-    return sessionId || null;
-  };
-
-  const generateUserProfileJsonForChat = useCallback(() => {
-    if (!user) return null;
-    const profile: Record<string, any> = {
-      name: user.name,
-      email: user.email,
-      age: user.age,
-      gender: user.gender,
-      country: user.country,
-      fieldOfInterest: user.fieldOfInterest,
-      skills: user.skills,
-      experience: user.experience,
-      education: {
-        college: user.college,
-        degree: user.degree,
-        gradYear: user.gradYear,
-      },
-      resumeSummary: resumeTextState,
-    };
-    return JSON.stringify(Object.fromEntries(Object.entries(profile).filter(([, v]) => v != null && v !== '')));
-  }, [user, resumeTextState]);
-
-  const startChatWithEvaluationContext = useCallback((ctx: EvaluationContext) => {
-    if (!ctx || !ctx.type || !ctx.result) {
-      console.error("Invalid evaluation context provided.");
-      return;
-    }
-
-    try {
-      const serializableContext = JSON.stringify(ctx);
-      sessionStorage.setItem('newChatWithContext', serializableContext);
-      sessionStorage.removeItem('chatBotWidget_activeSessionId');
-      sessionStorage.removeItem('chatBotWidget_input');
-      handleNavigate('chat');
-    } catch (error) {
-      console.error("Failed to serialize evaluation context:", error);
-    }
-  }, [handleNavigate]);
 
   const runInfralithEvaluation = async (input: File) => {
     setIsAuthLoading(true);
@@ -660,11 +430,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeRoute,
     authed: !!user,
     user,
-    resumeText: resumeTextState,
     showLogin,
-    showProfileCompletion,
     isMobileMenuOpen,
-    isInterviewActive,
     theme,
     loginView,
     signupFormState,
@@ -672,23 +439,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     isLoadingAuth,
     isAuthLoading,
     isProfileChecked,
-    evaluations,
-    resumeRankerState,
-    setResumeRankerState,
-    mockInterviewState,
-    setMockInterviewState,
-    skillAssessmentState,
-    setSkillAssessmentState,
-    handleClearAssessmentState,
-    handleClearResumeRankerState,
-    handleClearMockInterviewState,
     setActiveRoute,
-    setResumeText,
     setShowLogin,
     showRoleSelection,
     setShowRoleSelection,
     setIsMobileMenuOpen,
-    setIsInterviewActive,
     setLoginView,
     setSignupFormState,
     clearSignupForm,
@@ -696,17 +451,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     handleLogin,
     handleSignUp,
     handleSelectRole,
-    handleSignInOrSignUpWithGoogle,
-    handleLoginWithGoogle,
     handleLogout,
-    handleCancelSignUp,
     toggleTheme,
     handleProfileUpdate,
     handleDeleteAccount,
-    saveCurrentChat,
-    startChatWithEvaluationContext,
-    refreshEvaluations,
-    generateUserProfileJsonForChat,
     infralithResult,
     pipelineStage,
     runInfralithEvaluation,

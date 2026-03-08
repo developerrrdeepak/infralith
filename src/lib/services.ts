@@ -1,4 +1,3 @@
-import { LS_KEYS } from './constants';
 import { WorkflowResult } from '@/ai/flows/infralith/types';
 
 export const normalizeEmail = (email: string) => (email || '').trim().toLowerCase();
@@ -238,19 +237,6 @@ export const userDbService = {
     }
   },
 
-  createUser: async (user: any) => {
-    const users = getStorageItem('infralith_users') || {};
-    users[user.id] = {
-      uid: user.id,
-      email: normalizeEmail(user.email),
-      name: user.name,
-      avatar: user.image,
-      createdAt: new Date().toISOString(),
-      profileCompleted: false,
-    };
-    setStorageItem('infralith_users', users);
-  },
-
   getUser: async (uid: string): Promise<UserProfileData | null> => {
     const users = getStorageItem('infralith_users') || {};
     return users[uid] || null;
@@ -375,11 +361,6 @@ export const inviteService = {
     return id;
   },
 
-  getInvitesSentBy: (senderUid: string): InviteRecord[] => {
-    const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
-    return Object.values(invites).filter((i) => i.senderUid === senderUid);
-  },
-
   hasInvited: (senderUid: string, recipientEmail: string): boolean => {
     const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
     const normalizedEmail = normalizeEmail(recipientEmail);
@@ -387,33 +368,13 @@ export const inviteService = {
       (i) => i.senderUid === senderUid && normalizeEmail(i.recipientEmail) === normalizedEmail
     );
   },
-
-  deleteInvite: (id: string) => {
-    const invites: Record<string, InviteRecord> = getStorageItem('infralith_invites') || {};
-    delete invites[id];
-    setStorageItem('infralith_invites', invites);
-  },
 };
 
 // --- AUTH SERVICE (Mocked for Enterprise context) ---
 export const authService = {
-  login: async (email: string, _password: string) => {
-    // Enterprise Auth now handled by Azure AD / NextAuth
-    console.log("Mock login for:", email);
-    return { uid: 'mock-uid', email };
-  },
-
   signUp: async (data: Partial<SignUpData>) => {
     console.log("Mock signup for:", data.email);
     return { uid: 'mock-uid', email: data.email };
-  },
-
-  signInOrSignUpWithGoogle: async () => {
-    return { user: { uid: 'mock-google-uid' }, isNewUser: false };
-  },
-
-  loginWithGoogle: async () => {
-    return { user: { uid: 'mock-google-uid' }, isNewUser: false };
   },
 
   updateProfile: async (uid: string, data: Partial<UserProfileData>) => {
@@ -425,49 +386,13 @@ export const authService = {
     const users = getStorageItem('infralith_users') || {};
     delete users[uid];
     setStorageItem('infralith_users', users);
-  },
-
-  logout: async () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(LS_KEYS.resume);
-    }
-  },
-
-  cancelSignUpAndDeleteAuthUser: async () => {
-    // Placeholder
   }
-};
-
-// --- CHAT HISTORY ---
-export type Message = {
-  role: 'user' | 'bot';
-  text: string;
 };
 
 export type ChatSession = {
   id: string;
   title: string;
   timestamp: number;
-  messages: Message[];
-};
-
-export const chatHistoryService = {
-  saveChatSession: async (userId: string, messages: Message[], existingId: string | null) => {
-    const chats = getStorageItem(`chats_${userId}`) || {};
-    let sessionId = existingId || `chat_${Date.now()}`;
-
-    const generateTitle = (msgs: Message[]) => msgs.find(m => m.role === 'user')?.text.split(' ').slice(0, 5).join(' ') + '...' || 'New Chat';
-
-    chats[sessionId] = {
-      id: sessionId,
-      title: existingId ? chats[sessionId]?.title : generateTitle(messages),
-      timestamp: Date.now(),
-      messages
-    };
-
-    setStorageItem(`chats_${userId}`, chats);
-    return { sessionId };
-  }
 };
 
 
@@ -1037,14 +962,3 @@ export const dmService = {
   }
 };
 
-// --- ADDITIONAL SERVICE MOCKS ---
-export const resumeService = {
-  saveText: (text: string) => localStorage.setItem('resume_text', text),
-  getText: () => localStorage.getItem('resume_text') || '',
-};
-
-export const evaluationService = {
-  getEvaluations: async (userId: string) => {
-    return getStorageItem(`evaluations_${userId}`) || { skillAssessments: [], resumeReviews: [], mockInterviews: [] };
-  }
-};

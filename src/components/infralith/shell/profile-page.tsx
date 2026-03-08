@@ -26,7 +26,7 @@ import {
 import { useAppContext } from "@/contexts/app-context";
 import { cn } from "@/lib/utils";
 import { Edit, X, Loader2, User as UserIcon, GraduationCap, Briefcase, Link as LinkIcon, Camera } from "lucide-react";
-import { Skeleton } from "../ui/skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
 
 import { useToast } from "@/hooks/use-toast";
 
