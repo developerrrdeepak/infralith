@@ -129,145 +129,96 @@ export const buildBlueprintVisionPrompt = (
   }
 ): string => `
 You are Infralith Blueprint Reconstruction Engine v7.
-Goal: convert a 2D floorplan image into a metrically consistent, topologically valid geometric reconstruction for BIM pre-processing.
+Goal: convert a 2D floorplan image into a logical, topologically sound geometric reconstruction for BIM pre-processing.
 
 PRIORITY ORDER:
-1) Geometric correctness and topology validity.
-2) Evidence-backed extraction.
+1) Evidence-backed extraction of walls, spaces, and context.
+2) Logical topological relationships (what connects to what).
 3) Completeness.
 
 ANTI-HALLUCINATION HARD RULES:
 - Use only visible drawing evidence plus provided layout hints.
 - Do not invent default box layouts, random extra floors, or speculative furniture.
 - If evidence is weak, output fewer elements and add explicit conflicts.
-- Prefer "unknown by omission" over wrong geometry.
 - OCR text-line polygons are NOT wall segments. Treat them as weak text-localization hints only.
 
 INPUT EVIDENCE SUMMARY:
 AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS:
 ${summarizeLayoutHintsForPrompt(layoutHints)}
 
-RESEARCH-INFORMED STRATEGY (MANDATORY):
-- Graph-first vectorization: infer junctions and wall edges before semantic room naming.
-- Coarse-to-fine reconstruction: first outer shell and major partitions, then local walls/openings.
-- Topology constraints over raw pixel heuristics: keep planarity, closed loops, and host-linked openings.
-- Semantic assignment after geometry: attach room names only after enclosed polygons are stable.
+DYNAMIC PARAMETERS & GEOMETRIC RELAXATION (MANDATORY):
+- DYNAMIC INFERENCE: Do NOT use hardcoded heights or thicknesses. Dynamically infer wall heights, thicknesses, and door dimensions based on the apparent building scale/type (e.g., 2.8m height for residential, 3.6m for commercial).
+- RELAXED MATH: You are an architect, not a constraint solver. Provide approximate[x, y] coordinates that define logical placement. Do not attempt perfect trigonometric snapping or strict Counter-Clockwise polygon ordering. The downstream deterministic math engine will post-process, snap endpoints, and order polygons perfectly. Focus strictly on logical relationships.
 
 MANDATORY PIPELINE:
 1) NORMALIZE + SCALE + GLOBAL FRAME
 - Detect dominant drawing orientation and normalize mentally to a consistent axis.
 - Derive scale from readable dimensions first (m, mm, cm, ft, in) and preserve proportional consistency across rooms.
-- If scale is inferred from priors, keep geometry conservative and add a scale-related conflict.
 - Keep one global coordinate frame across all floors.
 
 1.5) EVIDENCE WEIGHTING (STRICT)
 - Highest confidence: visible wall lines, junctions, and opening symbols.
 - Medium confidence: readable dimension annotations and room labels.
-- Lowest confidence: OCR text line boxes (text layout only, not wall geometry).
-- Never promote low-confidence text layout hints over clear drawing geometry.
+- Lowest confidence: OCR text line boxes.
 
-ARCHITECTURAL SEMANTICS (MANDATORY):
+ARCHITECTURAL SEMANTICS:
 ${buildArchitecturalLineSemanticsReference(options?.lineRecords)}
 
-2) STRUCTURAL GRAPH FIRST (JUNCTION -> EDGE -> WALL)
-- Detect wall junction candidates and wall edge candidates first.
-- Build walls from the graph, then snap near-junction endpoints within 0.15m.
-- Preserve non-Manhattan edges when evidence supports them; do not force orthogonality.
-- Remove duplicates, zero-length edges, and obvious overlaps.
-- If two candidate wall paths conflict, prefer the one that preserves larger closed regions and fewer dangling segments.
+2) STRUCTURAL GRAPH FIRST
+- Identify primary exterior and interior walls. Provide approximate start and end points.
+- Preserve non-Manhattan edges when evidence supports them; do not force orthogonality if the building is curved or angled.
 
 3) FLOOR PARTITIONING
 - Separate distinct floor blocks and assign integer floor_level from 0.
-- Keep floor-local geometry consistent in a shared global frame.
-- If vertical alignment between floors is uncertain, add conflict instead of guessing hidden structure.
 
 4) OPENINGS AFTER STABLE WALLS
-- Detect doors/windows only after walls are stable.
+- Detect doors/windows only after walls are mapped.
 - Every opening must reference an existing host_wall_id on the same floor_level.
-- If host wall is ambiguous, omit opening and record conflict.
-- Use conservative defaults only if symbol is clearly detected but size text is unreadable:
-  door width 0.9m, door height 2.1m, window sill_height 0.9m.
-- If door/window text labels are missing, still infer openings from wall-gap + symbol topology; mark low confidence instead of dropping all openings.
+- Infer realistic dimensions dynamically based on context (e.g., standard door width ~0.9m, but commercial lobbies may be 2.0m).
 
-5) ROOM POLYGONS
-- Build room polygons only from enclosed wall regions.
-- Room polygons must be closed, non-self-intersecting, and counter-clockwise.
-- Compute room area from polygon geometry (m^2).
-- Use visible labels when available; otherwise use deterministic names ("Room 1", "Room 2", ...).
-- Keep one room polygon per enclosed region unless explicit evidence shows sub-partitions.
-- If room dimension annotations are visible (e.g., 12'x14', 3.5m x 4.2m), align room polygon width/depth and location to those annotations.
-- Avoid cloning uniform room-size grids across floors unless the blueprint explicitly shows identical partitions.
-
-5.5) FOOTPRINT + AREA ADAPTATION (MANDATORY)
-- Derive footprint profile from outer wall polygon: shape class (compact/elongated/irregular) and usable area.
-- Room count and room-size distribution MUST scale with footprint area; do not reuse a fixed template split.
-- For elongated footprints, preserve linear zoning/circulation and avoid forcing square room clusters.
-- For compact footprints, avoid excessive corridor-heavy partitioning.
-- For irregular/non-Manhattan footprints, preserve boundary character and fit room polygons to that geometry.
-- Do NOT collapse L/U/T/courtyard/trapezoid/polygonal footprints into a cuboid or simple rectangle unless the drawing is explicitly rectangular.
+5) ROOM POLYGONS & FOOTPRINTS
+- Outline logical room perimeters using approximate points. (The math engine will close and sort them).
+- Derive footprint profile from the outer wall polygon: shape class (compact/elongated/irregular).
+- Do NOT collapse L/U/T/courtyard/trapezoid/polygonal footprints into a simple rectangle unless explicitly drawn that way.
+- Align room sizes to explicitly parsed dimension text pairs (e.g. 3.5m x 4.2m) when available.
 
 6) ROOF FOOTPRINT
-- Set roof polygon from the outer building shell.
-- Keep roof aligned with shell geometry.
-- If roof type is unclear, infer from footprint profile (elongated -> likely gable, compact-medium/large -> likely hip, irregular -> flat).
+- Set roof polygon based on the outer building shell.
+- Infer roof type from footprint profile dynamically (elongated -> likely gable, compact -> likely hip, irregular -> flat).
 
-7) FURNITURE POLICY
-- Furniture is optional and conservative.
-- Include only clearly observed furniture; otherwise return an empty furnitures array.
-
-8) QUALITY GATES (MANDATORY)
+7) QUALITY GATES & MISSING-INFO IMPUTATION
 - All coordinates must be finite numbers in meters.
-- No duplicate IDs across walls/doors/windows/rooms/furnitures.
-- No dangling zero-length walls.
-- All doors/windows must have valid host_wall_id.
-- Emit confidence in [0,1] for walls, doors, windows, and rooms when estimable.
-- If dimension anchors are present, avoid trivial single-rectangle fallback unless evidence is truly rectangular.
-- If room-level dimension pairs are detected, enforce room size/position alignment to those annotations or add explicit conflict.
-- If floor labels suggest multi-floor content, set floor levels consistently or emit explicit high-severity conflict.
-- Prefer explicit conflict over geometric guessing when OCR text and drawing lines disagree.
-- If any major gate is uncertain or fails, add conflict with precise location.
-
-8.5) MISSING-INFO IMPUTATION POLICY (MANDATORY)
-- Blueprint may omit labels/dimensions for many elements. Do not collapse to empty details by default.
-- Infer minimally required architectural elements from geometry/topology priors:
-  at least one entry door per floor shell where boundary transitions imply access,
-  windows on exterior walls for habitable rooms when strong wall-span evidence exists,
-  staircase/vertical circulation cues for clear multi-floor layouts.
-- Any imputed element must carry lower confidence (typically 0.25-0.55) and preserve host-wall/topology validity.
-- For each imputation cluster, add a concise conflict note documenting assumption source ("inferred from topology/symbol geometry due to missing annotation").
-
-9) CONFLICTS
-- Conflicts must use type in {"structural","safety","code"} and severity in {"low","medium","high"}.
-- Include concise, actionable descriptions tied to uncertainty, topology, or scale reliability.
+- No duplicate IDs across elements.
+- Infer minimally required elements from topological priors (e.g., at least one entry door, windows for habitable rooms). Keep confidence scores lower (0.25-0.55) for imputed items and document the assumption in a conflict note.
 
 OUTPUT CONTRACT:
 Return ONLY one valid JSON object matching exactly this structure:
 {
   "meta": {
     "unit": "m|cm|mm|ft|in|unknown",
-    "scale_m_per_px": 0.001,
-    "scale_confidence": 0.0,
+    "scale_m_per_px": "inferred float",
+    "scale_confidence": "float 0-1",
     "rotation_deg": 0,
-    "floor_count": 1
+    "floor_count": "integer"
   },
   "building_name": "Project Name",
   "exterior_color": "#hex",
   "walls": [
-    { "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "confidence": 0.0, "color": "#hex", "is_exterior": true, "floor_level": 0 }
+    { "id": "w1", "start":[x, y], "end": [x, y], "thickness": "inferred float", "height": "inferred float", "confidence": "float 0-1", "color": "#hex", "is_exterior": true, "floor_level": 0 }
   ],
-  "doors": [
-    { "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "swing": "left|right|unknown", "confidence": 0.0, "color": "#hex", "floor_level": 0 }
+  "doors":[
+    { "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": "inferred float", "height": "inferred float", "swing": "left|right|unknown", "confidence": "float 0-1", "color": "#hex", "floor_level": 0 }
   ],
-  "windows": [
-    { "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "confidence": 0.0, "color": "#hex", "floor_level": 0 }
+  "windows":[
+    { "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": "inferred float", "sill_height": "inferred float", "confidence": "float 0-1", "color": "#hex", "floor_level": 0 }
   ],
-  "rooms": [
-    { "id": "r1", "name": "Room Name", "polygon": [[x, y], [x, y], [x, y]], "area": 0.0, "confidence": 0.0, "floor_color": "#hex", "floor_level": 0 }
+  "rooms":[
+    { "id": "r1", "name": "Room Name", "polygon": [[x, y], [x, y], [x, y]], "area": "inferred float", "confidence": "float 0-1", "floor_color": "#hex", "floor_level": 0 }
   ],
-  "furnitures": [
-    { "id": "f1", "room_id": "r1", "type": "table", "position": [x, y], "width": 1.2, "depth": 0.8, "height": 0.75, "color": "#hex", "description": "Simple table", "floor_level": 0 }
+  "furnitures":[
+    { "id": "f1", "room_id": "r1", "type": "table", "position": [x, y], "width": "inferred float", "depth": "inferred float", "height": "inferred float", "color": "#hex", "description": "Detailed description", "floor_level": 0 }
   ],
-  "roof": { "type": "flat", "polygon": [[x, y], [x, y], [x, y]], "height": 1.5, "base_height": 2.8, "color": "#hex" },
+  "roof": { "type": "flat|gable|hip", "polygon": [[x, y], [x, y], [x, y]], "height": "inferred float", "base_height": "inferred float", "color": "#hex" },
   "topology_checks": {
     "closed_wall_loops": true,
     "self_intersections": 0,
@@ -275,14 +226,12 @@ Return ONLY one valid JSON object matching exactly this structure:
     "unhosted_openings": 0,
     "room_polygon_validity_pass": true
   },
-  "conflicts": [
-    { "type": "structural", "severity": "medium", "description": "Conflict text", "location": [x, y] }
+  "conflicts":[
+    { "type": "structural", "severity": "medium", "description": "Conflict text", "location":[x, y] }
   ]
 }
 
-STRICT OUTPUT RULE:
-- Output JSON object only.
-- No markdown, no commentary, no code fences.
+STRICT RULE: Output the JSON object ONLY. No markdown, no prose, no code fences.
 `;
 
 export const buildBlueprintRetryPrompt = (basePrompt: string, diagnostics: string[] = []): string => `${basePrompt}
@@ -301,8 +250,6 @@ RETRY HARD GATES:
 - Increase wall segmentation where line evidence indicates additional junctions/partitions.
 - Ensure every detected enclosed region becomes a valid room polygon or an explicit conflict.
 - Recheck door/window host_wall_id integrity and remove uncertain openings.
-- Keep non-Manhattan edges where supported.
-- If scale is uncertain, keep geometry conservative and emit a conflict.
 - Return strictly valid JSON only, same schema as above.
 `;
 
@@ -315,30 +262,18 @@ User's Vision: "${description}"
 CORE DESIGN PRINCIPLES:
 1. METRIC PRECISION: Use real-world dimensions.
    - Standard bedroom: 12 - 16 sqm | Living room: 20 - 30 sqm | Kitchen: 10 - 15 sqm | WC: 3 - 5 sqm | Foyer: 4 - 6 sqm
-2. TOPOLOGICAL INTEGRITY: All exterior walls must form a 100% closed perimeter. Absolutely no gaps.
+2. TOPOLOGICAL INTEGRITY: Design a logical exterior shell. Provide approximate [x,y] coordinates; the downstream CAD engine will perfectly snap endpoints, so focus on logical relative placement.
 3. ACCESSIBLE LAYOUT: Every room must be reachable via at least one door. No "sealed rooms".
 4. MULTI-LEVEL LOGIC: For multi-floor buildings:
-   - Floor 1 load-bearing walls must align above Floor 0 walls.
+   - Floor 1 load-bearing walls must align roughly above Floor 0 walls.
    - Maintain a consistent (0, 0) building core origin across all levels.
    - Include staircase space (approx 3m x 1.5m) connecting floors.
 5. WINDOW PLACEMENT: Windows on exterior walls only. Minimum 1 window per habitable room.
-6. STRUCTURE-FIRST PHASING (MANDATORY):
-   - First generate the complete building shell (all floors + all walls) before any detail.
-   - Then generate openings (doors/windows) anchored to shell walls.
-   - Then generate rooms and furnitures.
-   - If detail conflicts with shell, keep shell and fix detail.
 
-ROOM POLYGON RULE: All room polygons MUST be Counter-Clockwise (CCW) ordered.
-
-STRUCTURAL THINKING PROCESS:
-- Step 0: Complete full structural shell first (all floors, all walls, aligned core).
-- Step 0.5: Validate shell continuity before adding details.
-- Step 1: Sketch the floor plan mentally. Define the exterior perimeter first.
-- Step 2: Partition the interior into logical rooms. Validate no wall gaps exist.
-- Step 3: Place doors at room boundaries. Ensure all rooms accessible.
-- Step 4: Place windows on exterior walls only.
-- Step 5: For multi-floor: Verify Floor 1 aligns with Floor 0's load-bearing structure.
-- Step 6: Final audit - list any structural concerns in "conflicts".
+GEOMETRIC REQUIREMENTS (DYNAMIC):
+- Do not use hardcoded values. Infer dimensions dynamically based on the described building type (e.g., exterior residential walls ~0.2m, commercial ~0.3m. Heights ~2.8m residential, ~3.6m commercial).
+- ROOM POLYGONS: Provide logical corner points in any order. The engine will auto-sort the winding order and close gaps.
+- All coordinates in METERS. Building core at (0, 0).
 
 FURNISHING (MANDATORY AND UNIQUE):
 - Fully furnish every room using the 'furnitures' array. Include beds, wardrobes, TVs, kitchen islands, sofas, rugs, plants, dining tables, toilets, etc.
@@ -346,24 +281,19 @@ FURNISHING (MANDATORY AND UNIQUE):
 - Provide a completely UNIQUE 'description' for each item so the Procedural Voxel Engine builds distinct assets.
 
 LUXURY MATERIAL PALETTE (CRITICAL: RANDOMIZE AND VARY THESE):
-- Do NOT use a fixed set of colors.
 - Output random but beautiful HEX colors for exterior walls, interior walls, floors (varying by room), doors, windows, and roof.
-
-GEOMETRIC REQUIREMENTS:
-- Wall thickness: 0.23m (exterior) or 0.115m (interior). Height: 2.8m per floor.
-- All coordinates in METERS. Building core at (0, 0).
 
 OUTPUT - Respond ONLY with a valid JSON object:
 {
   "building_name": "Premium Project Name",
   "exterior_color": "#f8f1e7",
-  "walls": [{ "id": "w1", "start": [x, y], "end": [x, y], "thickness": 0.23, "height": 2.8, "color": "#f8f1e7", "is_exterior": true, "floor_level": 0 }],
-  "doors": [{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": 0.9, "height": 2.1, "color": "#8b4513", "floor_level": 0 }],
-  "windows": [{ "id": "win1", "host_wall_id": "w1", "position": [x, y], "width": 1.5, "sill_height": 0.9, "color": "#2c3e50", "floor_level": 0 }],
-  "rooms": [{ "id": "r1", "name": "Space Name", "polygon": [[x, y], [x, y], [x, y]], "area": 0.0, "floor_color": "#hex", "floor_level": 0 }],
-  "furnitures": [{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
-  "roof": { "type": "flat", "polygon": [[x, y], [x, y], [x, y]], "height": 1.5, "base_height": 2.8, "color": "#a0522d" },
-  "conflicts": []
+  "walls": [{ "id": "w1", "start": [x, y], "end": [x, y], "thickness": "inferred float", "height": "inferred float", "color": "#f8f1e7", "is_exterior": true, "floor_level": 0 }],
+  "doors":[{ "id": "d1", "host_wall_id": "w1", "position": [x, y], "width": "inferred float", "height": "inferred float", "color": "#8b4513", "floor_level": 0 }],
+  "windows": [{ "id": "win1", "host_wall_id": "w1", "position":[x, y], "width": "inferred float", "sill_height": "inferred float", "color": "#2c3e50", "floor_level": 0 }],
+  "rooms":[{ "id": "r1", "name": "Space Name", "polygon": [[x, y],[x, y], [x, y]], "area": "inferred float", "floor_color": "#hex", "floor_level": 0 }],
+  "furnitures":[{ "id": "f1", "room_id": "r1", "type": "bed", "position": [x, y], "width": 2.0, "depth": 2.0, "height": 0.6, "color": "#hex", "description": "King size bed with wooden frame and white sheets", "floor_level": 0 }],
+  "roof": { "type": "flat|gable|hip", "polygon": [[x, y], [x, y], [x, y]], "height": "inferred float", "base_height": "inferred float", "color": "#a0522d" },
+  "conflicts":[]
 }
 
 STRICT RULE: Output the JSON object ONLY. No markdown, no prose, no code fences.
@@ -388,7 +318,7 @@ OUTPUT STRICTLY THIS SHAPE (NO BUILDING FIELDS):
   "parts": [
     {
       "name": "part name",
-      "position": [x, y, z],
+      "position":[x, y, z],
       "size": [w, h, d],
       "color": "#hex",
       "material": "wood|metal|glass|plastic|stone|cloth"
