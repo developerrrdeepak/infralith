@@ -137,6 +137,8 @@ const ENABLE_EXPENSIVE_VISION_RECOVERY = asBool(
   process.env.INFRALITH_ENABLE_EXPENSIVE_VISION_RECOVERY,
   process.env.NODE_ENV !== 'production'
 );
+const SOURCE_DATA_ONLY_3D = asBool(process.env.INFRALITH_3D_SOURCE_ONLY, true);
+const NOT_AVAILABLE_3D_TEXT = 'Not available in provided project document';
 
 type SemanticMentionKey =
   | 'kitchen'
@@ -4612,6 +4614,25 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
   };
 
+  const resolveObservedPositiveMetric = (values: unknown[], minValue: number): number | null => {
+    const filtered = values
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value >= minValue)
+      .sort((a, b) => a - b);
+    if (filtered.length === 0) return null;
+    const mid = Math.floor(filtered.length / 2);
+    return filtered.length % 2 === 0
+      ? Number(((filtered[mid - 1] + filtered[mid]) / 2).toFixed(3))
+      : Number(filtered[mid].toFixed(3));
+  };
+
+  const observedWallThickness = resolveObservedPositiveMetric(payload.walls.map((wall) => wall?.thickness), 0.08);
+  const observedWallHeight = resolveObservedPositiveMetric(payload.walls.map((wall) => wall?.height), 2.0);
+  const observedDoorWidth = resolveObservedPositiveMetric((payload.doors || []).map((door) => door?.width), 0.55);
+  const observedDoorHeight = resolveObservedPositiveMetric((payload.doors || []).map((door) => door?.height), 1.75);
+  const observedWindowWidth = resolveObservedPositiveMetric((payload.windows || []).map((win) => win?.width), 0.35);
+  const observedWindowSill = resolveObservedPositiveMetric((payload.windows || []).map((win) => win?.sill_height), 0.35);
+
   const floorLevels = Array.from(new Set(payload.walls.map((wall) => toFloorLevel(wall.floor_level))));
   if (floorLevels.length > 1) {
     const orderedLevels = [...floorLevels].sort((a, b) => a - b);
@@ -4694,6 +4715,7 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   };
 
   const normalizedWalls: GeometricReconstruction['walls'] = [];
+  let droppedWallsForMissingGeometry = 0;
   for (const wall of payload.walls) {
     let start = resolvePoint(wall.start);
     let end = resolvePoint(wall.end);
@@ -4714,12 +4736,33 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     dz = end[1] - start[1];
     if (Math.hypot(dx, dz) < 0.25) continue;
 
+    const parsedThickness = Number(wall.thickness);
+    const parsedHeight = Number(wall.height);
+    const evidenceThickness = Number.isFinite(parsedThickness) && parsedThickness >= 0.08
+      ? parsedThickness
+      : observedWallThickness;
+    const evidenceHeight = Number.isFinite(parsedHeight) && parsedHeight >= 2.0
+      ? parsedHeight
+      : observedWallHeight;
+
+    if (SOURCE_DATA_ONLY_3D && (!Number.isFinite(Number(evidenceThickness)) || !Number.isFinite(Number(evidenceHeight)))) {
+      droppedWallsForMissingGeometry += 1;
+      continue;
+    }
+
+    const finalThickness = Number.isFinite(Number(evidenceThickness))
+      ? Number(evidenceThickness)
+      : Math.max(0.08, Number(wall.thickness || (wall.is_exterior ? 0.23 : 0.115)));
+    const finalHeight = Number.isFinite(Number(evidenceHeight))
+      ? Number(evidenceHeight)
+      : Math.max(2.2, Number(wall.height || 2.8));
+
     normalizedWalls.push({
       ...wall,
       start,
       end,
-      thickness: Math.max(0.08, Number(wall.thickness || (wall.is_exterior ? 0.23 : 0.115))),
-      height: Math.max(2.2, Number(wall.height || 2.8)),
+      thickness: Number(finalThickness.toFixed(3)),
+      height: Number(finalHeight.toFixed(3)),
     });
   }
 
@@ -4825,8 +4868,24 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
       continue;
     }
     const position: [number, number] = [Number(x.toFixed(3)), Number(y.toFixed(3))];
-    const width = Math.max(0.75, Number(door.width || 0.9));
-    const height = Math.max(2.0, Number(door.height || 2.1));
+    const parsedWidth = Number(door.width);
+    const parsedHeight = Number(door.height);
+    const evidenceWidth = Number.isFinite(parsedWidth) && parsedWidth >= 0.55
+      ? parsedWidth
+      : observedDoorWidth;
+    const evidenceHeight = Number.isFinite(parsedHeight) && parsedHeight >= 1.75
+      ? parsedHeight
+      : observedDoorHeight;
+    if (SOURCE_DATA_ONLY_3D && (!Number.isFinite(Number(evidenceWidth)) || !Number.isFinite(Number(evidenceHeight)))) {
+      droppedDoors += 1;
+      continue;
+    }
+    const width = Number.isFinite(Number(evidenceWidth))
+      ? Number(evidenceWidth)
+      : Math.max(0.75, Number(door.width || 0.9));
+    const height = Number.isFinite(Number(evidenceHeight))
+      ? Number(evidenceHeight)
+      : Math.max(2.0, Number(door.height || 2.1));
     const floorLevel = toFloorLevel(door.floor_level);
     const preferred = wallIdSet.has(String(door.host_wall_id)) ? door.host_wall_id : null;
     const selectedHost = selectHostWall(position, floorLevel, width, preferred);
@@ -4859,8 +4918,24 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
       continue;
     }
     const position: [number, number] = [Number(x.toFixed(3)), Number(y.toFixed(3))];
-    const width = Math.max(0.5, Number(win.width || 1));
-    const sillHeight = Math.max(0.6, Number(win.sill_height || 0.9));
+    const parsedWidth = Number(win.width);
+    const parsedSill = Number(win.sill_height);
+    const evidenceWidth = Number.isFinite(parsedWidth) && parsedWidth >= 0.35
+      ? parsedWidth
+      : observedWindowWidth;
+    const evidenceSill = Number.isFinite(parsedSill) && parsedSill >= 0.35
+      ? parsedSill
+      : observedWindowSill;
+    if (SOURCE_DATA_ONLY_3D && (!Number.isFinite(Number(evidenceWidth)) || !Number.isFinite(Number(evidenceSill)))) {
+      droppedWindows += 1;
+      continue;
+    }
+    const width = Number.isFinite(Number(evidenceWidth))
+      ? Number(evidenceWidth)
+      : Math.max(0.5, Number(win.width || 1));
+    const sillHeight = Number.isFinite(Number(evidenceSill))
+      ? Number(evidenceSill)
+      : Math.max(0.6, Number(win.sill_height || 0.9));
     const floorLevel = toFloorLevel(win.floor_level);
     const preferred = wallIdSet.has(String(win.host_wall_id)) ? win.host_wall_id : null;
     const selectedHost = selectHostWall(position, floorLevel, width, preferred);
@@ -4952,63 +5027,65 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   const useDeterministicRooms = preserveComplexFootprint
     ? (baseDeterministicDecision && deterministicRooms.length >= (normalizedRooms.length + 2))
     : baseDeterministicDecision;
-  const resolvedRooms = useDeterministicRooms ? deterministicRooms : normalizedRooms;
-  const inferredDoorRecovery = inferDoorsFromRoomTopology(finalizedWalls, resolvedRooms, normalizedDoors);
-  normalizedDoors = inferredDoorRecovery.doors;
-  if (inferredDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
-    normalizationConflicts.push({
-      type: 'structural',
-      severity: 'low',
-      description: `Inferred ${inferredDoorRecovery.inferredCount} low-confidence door(s) from room-boundary topology on floor(s) ${inferredDoorRecovery.floors.join(', ')} because explicit door labels/symbols were sparse.`,
-      location: finalizedWalls[0].start,
-    });
-  }
-  const inferredEntryDoorRecovery = inferEntryDoorsFromExteriorWalls(finalizedWalls, resolvedRooms, normalizedDoors);
-  normalizedDoors = inferredEntryDoorRecovery.doors;
-  if (inferredEntryDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
-    normalizationConflicts.push({
-      type: 'structural',
-      severity: 'low',
-      description: `Imputed ${inferredEntryDoorRecovery.inferredCount} entry door(s) on floor(s) ${inferredEntryDoorRecovery.floors.join(', ')} from exterior-wall topology due to missing explicit door annotation.`,
-      location: finalizedWalls[0].start,
-    });
-  }
-  const inferredConnectivityDoorRecovery = inferInteriorConnectivityDoors(finalizedWalls, resolvedRooms, normalizedDoors);
-  normalizedDoors = inferredConnectivityDoorRecovery.doors;
-  if (inferredConnectivityDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
-    normalizationConflicts.push({
-      type: 'structural',
-      severity: 'low',
-      description: `Added ${inferredConnectivityDoorRecovery.inferredCount} interior connectivity door(s) on floor(s) ${inferredConnectivityDoorRecovery.floors.join(', ')} to reduce sealed-room circulation gaps.`,
-      location: finalizedWalls[0].start,
-    });
-  }
-  if (inferredConnectivityDoorRecovery.unresolvedRooms.length > 0 && finalizedWalls.length > 0) {
-    const unresolvedSamples = inferredConnectivityDoorRecovery.unresolvedRooms
-      .slice(0, 3)
-      .map((entry) => `[F${entry.floor}] ${entry.roomName}`)
-      .join(', ');
-    normalizationConflicts.push({
-      type: 'structural',
-      severity: 'medium',
-      description: `Detected ${inferredConnectivityDoorRecovery.unresolvedRooms.length} room(s) still lacking clear doorway access after topology imputation${unresolvedSamples ? ` (examples: ${unresolvedSamples})` : ''}.`,
-      location: finalizedWalls[0].start,
-    });
-  }
-  const inferredWindowRecovery = inferWindowsFromHabitableRoomTopology(
-    finalizedWalls,
-    resolvedRooms,
-    normalizedDoors,
-    normalizedWindows
-  );
-  normalizedWindows = inferredWindowRecovery.windows;
-  if (inferredWindowRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
-    normalizationConflicts.push({
-      type: 'structural',
-      severity: 'low',
-      description: `Imputed ${inferredWindowRecovery.inferredCount} habitable-room window(s) on floor(s) ${inferredWindowRecovery.floors.join(', ')} from exterior-wall evidence due to missing explicit window markers.`,
-      location: finalizedWalls[0].start,
-    });
+  const resolvedRooms = SOURCE_DATA_ONLY_3D ? normalizedRooms : (useDeterministicRooms ? deterministicRooms : normalizedRooms);
+  if (!SOURCE_DATA_ONLY_3D) {
+    const inferredDoorRecovery = inferDoorsFromRoomTopology(finalizedWalls, resolvedRooms, normalizedDoors);
+    normalizedDoors = inferredDoorRecovery.doors;
+    if (inferredDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+      normalizationConflicts.push({
+        type: 'structural',
+        severity: 'low',
+        description: `Inferred ${inferredDoorRecovery.inferredCount} low-confidence door(s) from room-boundary topology on floor(s) ${inferredDoorRecovery.floors.join(', ')} because explicit door labels/symbols were sparse.`,
+        location: finalizedWalls[0].start,
+      });
+    }
+    const inferredEntryDoorRecovery = inferEntryDoorsFromExteriorWalls(finalizedWalls, resolvedRooms, normalizedDoors);
+    normalizedDoors = inferredEntryDoorRecovery.doors;
+    if (inferredEntryDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+      normalizationConflicts.push({
+        type: 'structural',
+        severity: 'low',
+        description: `Imputed ${inferredEntryDoorRecovery.inferredCount} entry door(s) on floor(s) ${inferredEntryDoorRecovery.floors.join(', ')} from exterior-wall topology due to missing explicit door annotation.`,
+        location: finalizedWalls[0].start,
+      });
+    }
+    const inferredConnectivityDoorRecovery = inferInteriorConnectivityDoors(finalizedWalls, resolvedRooms, normalizedDoors);
+    normalizedDoors = inferredConnectivityDoorRecovery.doors;
+    if (inferredConnectivityDoorRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+      normalizationConflicts.push({
+        type: 'structural',
+        severity: 'low',
+        description: `Added ${inferredConnectivityDoorRecovery.inferredCount} interior connectivity door(s) on floor(s) ${inferredConnectivityDoorRecovery.floors.join(', ')} to reduce sealed-room circulation gaps.`,
+        location: finalizedWalls[0].start,
+      });
+    }
+    if (inferredConnectivityDoorRecovery.unresolvedRooms.length > 0 && finalizedWalls.length > 0) {
+      const unresolvedSamples = inferredConnectivityDoorRecovery.unresolvedRooms
+        .slice(0, 3)
+        .map((entry) => `[F${entry.floor}] ${entry.roomName}`)
+        .join(', ');
+      normalizationConflicts.push({
+        type: 'structural',
+        severity: 'medium',
+        description: `Detected ${inferredConnectivityDoorRecovery.unresolvedRooms.length} room(s) still lacking clear doorway access after topology imputation${unresolvedSamples ? ` (examples: ${unresolvedSamples})` : ''}.`,
+        location: finalizedWalls[0].start,
+      });
+    }
+    const inferredWindowRecovery = inferWindowsFromHabitableRoomTopology(
+      finalizedWalls,
+      resolvedRooms,
+      normalizedDoors,
+      normalizedWindows
+    );
+    normalizedWindows = inferredWindowRecovery.windows;
+    if (inferredWindowRecovery.inferredCount > 0 && finalizedWalls.length > 0) {
+      normalizationConflicts.push({
+        type: 'structural',
+        severity: 'low',
+        description: `Imputed ${inferredWindowRecovery.inferredCount} habitable-room window(s) on floor(s) ${inferredWindowRecovery.floors.join(', ')} from exterior-wall evidence due to missing explicit window markers.`,
+        location: finalizedWalls[0].start,
+      });
+    }
   }
 
   const normalizedFurnitures = normalizeFurniturePlacement(
@@ -5036,13 +5113,25 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
   };
 
   const droppedWalls = payload.walls.length - normalizedWalls.length;
-  if (droppedWalls > 0) {
+  const droppedDegenerateWalls = Math.max(0, droppedWalls - droppedWallsForMissingGeometry);
+  if (droppedWallsForMissingGeometry > 0) {
+    normalized.conflicts = [
+      ...(normalized.conflicts || []),
+      {
+        type: 'structural',
+        severity: 'medium',
+        description: `Dropped ${droppedWallsForMissingGeometry} wall segment(s) because thickness/height evidence was unavailable in source-only mode.`,
+        location: normalized.walls[0]?.start || payload.walls[0]?.start || [0, 0],
+      },
+    ];
+  }
+  if (droppedDegenerateWalls > 0) {
     normalized.conflicts = [
       ...(normalized.conflicts || []),
       {
         type: 'code',
         severity: 'low',
-        description: `Dropped ${droppedWalls} degenerate wall segment(s) during geometric normalization.`,
+        description: `Dropped ${droppedDegenerateWalls} degenerate wall segment(s) during geometric normalization.`,
         location: normalizedWalls[0].start,
       },
     ];
@@ -5072,7 +5161,7 @@ const normalizeReconstructionGeometry = (payload: GeometricReconstruction): Geom
     ];
   }
 
-  if (useDeterministicRooms && deterministicRooms.length > 0) {
+  if (!SOURCE_DATA_ONLY_3D && useDeterministicRooms && deterministicRooms.length > 0) {
     const location =
       deterministicRooms[0]?.polygon?.[0] ||
       normalized.rooms?.[0]?.polygon?.[0] ||
@@ -5495,9 +5584,10 @@ const decomposeReconstructionIntoSiteBuildings = (
     const onlyProfile = deriveFootprintProfileFromWalls(only.walls);
     const onlyBounds = getModelBoundsFromWalls(only.walls);
     if (!onlyBounds) return [];
+    const resolvedSingleName = (only.building_name || '').trim() || NOT_AVAILABLE_3D_TEXT;
     return [{
       id: 'bld-1',
-      name: only.building_name || 'Building 1',
+      name: resolvedSingleName,
       footprint_area: Number((onlyProfile?.area || 0).toFixed(2)),
       floor_count: Math.max(1, estimateResultFloorCount(only)),
       bounds: {
@@ -5541,9 +5631,10 @@ const decomposeReconstructionIntoSiteBuildings = (
       return pos ? isPointInsideBounds(pos, bounds, padding) : false;
     });
 
+    const baseName = (payload.building_name || '').trim();
     const subModel: GeometricReconstruction = {
       ...payload,
-      building_name: `${payload.building_name || 'Building'} ${componentIndex + 1}`,
+      building_name: baseName ? `${baseName} ${componentIndex + 1}` : NOT_AVAILABLE_3D_TEXT,
       walls: componentWalls,
       wallSolids: undefined,
       doors,
@@ -5560,7 +5651,7 @@ const decomposeReconstructionIntoSiteBuildings = (
     const footprintProfile = deriveFootprintProfileFromWalls(normalized.walls);
     entries.push({
       id: `bld-${componentIndex + 1}`,
-      name: normalized.building_name || `Building ${componentIndex + 1}`,
+      name: (normalized.building_name || '').trim() || NOT_AVAILABLE_3D_TEXT,
       footprint_area: Number((footprintProfile?.area || 0).toFixed(2)),
       floor_count: Math.max(1, estimateResultFloorCount(normalized)),
       bounds: {
@@ -6802,7 +6893,7 @@ export async function processDxfTo3D(dxfContent: string): Promise<GeometricRecon
   const dxfDebugImage = await renderDxfPreviewCanvas(walls, traceId);
 
   const reconstruction: GeometricReconstruction = {
-    building_name: 'DXF Reconstruction',
+    building_name: NOT_AVAILABLE_3D_TEXT,
     exterior_color: '#f5e6d3',
     walls,
     doors: [],
@@ -7234,10 +7325,17 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       schemaVersion: lineDbSnapshot.schemaVersion,
     });
   } catch (error) {
-    traceLog('Infralith Vision Engine', traceId, '1/9', 'failed to resolve persisted line semantics DB, using bundled defaults', {
-      reason: error instanceof Error ? error.message : String(error),
-      fallbackRecords: lineRecords.length,
-    }, 'warn');
+    if (SOURCE_DATA_ONLY_3D) {
+      lineRecords = [];
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'failed to resolve persisted line semantics DB; continuing with empty semantics in source-only mode', {
+        reason: error instanceof Error ? error.message : String(error),
+      }, 'warn');
+    } else {
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'failed to resolve persisted line semantics DB, using bundled defaults', {
+        reason: error instanceof Error ? error.message : String(error),
+        fallbackRecords: lineRecords.length,
+      }, 'warn');
+    }
   }
   const prompt = buildBlueprintVisionPrompt(layoutHints, {
     lineRecords,
@@ -8199,7 +8297,7 @@ export async function processBlueprintToSite3D(imageUrl: string): Promise<SiteRe
   }
 
   const siteResult: SiteReconstruction = {
-    site_name: sourceModel.building_name ? `${sourceModel.building_name} Site` : 'Society Site',
+    site_name: sourceModel.building_name ? `${sourceModel.building_name} Site` : NOT_AVAILABLE_3D_TEXT,
     buildings,
     conflicts: siteConflicts,
     source_model: sourceModel,
