@@ -1824,6 +1824,7 @@ function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { mo
     const leftArmRef = useRef<THREE.Mesh>(null);
     const rightArmRef = useRef<THREE.Mesh>(null);
     const headRef = useRef<THREE.Mesh>(null);
+    const skinColor = '#e8b792';
 
     useFrame((state) => {
         const phaseSpeed = moving ? (sprinting ? 12 : 8.5) : 2.2;
@@ -1870,6 +1871,10 @@ function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { mo
                 <capsuleGeometry args={[0.24, 0.56, 8, 16]} />
                 <meshStandardMaterial color="#f59e0b" roughness={0.55} metalness={0.08} />
             </mesh>
+            <mesh position={[0, 0.84, 0.02]} castShadow>
+                <boxGeometry args={[0.4, 0.12, 0.18]} />
+                <meshStandardMaterial color="#f59e0b" roughness={0.56} metalness={0.06} />
+            </mesh>
 
             {/* Reflective vest stripes */}
             <mesh position={[0, 1.0, 0.23]} castShadow>
@@ -1894,17 +1899,65 @@ function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { mo
             {/* Hands */}
             <mesh position={[-0.45, 0.82, 0.04]} castShadow>
                 <sphereGeometry args={[0.06, 16, 16]} />
-                <meshStandardMaterial color="#f2c09d" roughness={0.72} />
+                <meshStandardMaterial color={skinColor} roughness={0.72} />
             </mesh>
             <mesh position={[0.45, 0.82, 0.04]} castShadow>
                 <sphereGeometry args={[0.06, 16, 16]} />
-                <meshStandardMaterial color="#f2c09d" roughness={0.72} />
+                <meshStandardMaterial color={skinColor} roughness={0.72} />
+            </mesh>
+
+            {/* Neck */}
+            <mesh position={[0, 1.38, 0]} castShadow>
+                <capsuleGeometry args={[0.07, 0.08, 8, 14]} />
+                <meshStandardMaterial color={skinColor} roughness={0.68} />
             </mesh>
 
             {/* Head */}
-            <mesh ref={headRef} position={[0, 1.58, 0]} castShadow>
-                <sphereGeometry args={[0.16, 24, 24]} />
-                <meshStandardMaterial color="#f2c09d" roughness={0.7} />
+            <mesh ref={headRef} position={[0, 1.58, 0.005]} scale={[0.98, 1.08, 0.96]} castShadow>
+                <sphereGeometry args={[0.16, 28, 28]} />
+                <meshStandardMaterial color={skinColor} roughness={0.7} />
+            </mesh>
+            <mesh position={[-0.16, 1.58, 0.005]} castShadow>
+                <sphereGeometry args={[0.026, 14, 14]} />
+                <meshStandardMaterial color={skinColor} roughness={0.72} />
+            </mesh>
+            <mesh position={[0.16, 1.58, 0.005]} castShadow>
+                <sphereGeometry args={[0.026, 14, 14]} />
+                <meshStandardMaterial color={skinColor} roughness={0.72} />
+            </mesh>
+
+            {/* Face details */}
+            <mesh position={[-0.06, 1.61, 0.145]} castShadow>
+                <sphereGeometry args={[0.022, 18, 18]} />
+                <meshStandardMaterial color="#ffffff" roughness={0.24} metalness={0.03} />
+            </mesh>
+            <mesh position={[0.06, 1.61, 0.145]} castShadow>
+                <sphereGeometry args={[0.022, 18, 18]} />
+                <meshStandardMaterial color="#ffffff" roughness={0.24} metalness={0.03} />
+            </mesh>
+            <mesh position={[-0.06, 1.61, 0.161]} castShadow>
+                <sphereGeometry args={[0.009, 16, 16]} />
+                <meshStandardMaterial color="#1f2937" roughness={0.25} metalness={0.02} />
+            </mesh>
+            <mesh position={[0.06, 1.61, 0.161]} castShadow>
+                <sphereGeometry args={[0.009, 16, 16]} />
+                <meshStandardMaterial color="#1f2937" roughness={0.25} metalness={0.02} />
+            </mesh>
+            <mesh position={[0, 1.565, 0.166]} castShadow>
+                <coneGeometry args={[0.018, 0.045, 14]} />
+                <meshStandardMaterial color="#d39b78" roughness={0.6} />
+            </mesh>
+            <mesh position={[0, 1.515, 0.153]} castShadow>
+                <boxGeometry args={[0.08, 0.008, 0.015]} />
+                <meshStandardMaterial color="#7c2d12" roughness={0.5} metalness={0.02} />
+            </mesh>
+            <mesh position={[0, 1.485, 0.145]} castShadow>
+                <boxGeometry args={[0.11, 0.03, 0.02]} />
+                <meshStandardMaterial color="#8b5e3c" roughness={0.65} metalness={0.03} />
+            </mesh>
+            <mesh position={[0, 1.655, 0.158]} castShadow>
+                <boxGeometry args={[0.18, 0.012, 0.012]} />
+                <meshStandardMaterial color="#5b3a2b" roughness={0.6} />
             </mesh>
 
             {/* Safety helmet */}
@@ -1915,6 +1968,18 @@ function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { mo
             <mesh position={[0, 1.645, 0.08]} castShadow>
                 <boxGeometry args={[0.26, 0.02, 0.16]} />
                 <meshStandardMaterial color="#facc15" roughness={0.38} metalness={0.2} />
+            </mesh>
+            <mesh position={[-0.12, 1.56, 0.11]} castShadow>
+                <boxGeometry args={[0.02, 0.11, 0.01]} />
+                <meshStandardMaterial color="#facc15" roughness={0.4} metalness={0.18} />
+            </mesh>
+            <mesh position={[0.12, 1.56, 0.11]} castShadow>
+                <boxGeometry args={[0.02, 0.11, 0.01]} />
+                <meshStandardMaterial color="#facc15" roughness={0.4} metalness={0.18} />
+            </mesh>
+            <mesh position={[0, 1.505, 0.11]} castShadow>
+                <boxGeometry args={[0.2, 0.01, 0.01]} />
+                <meshStandardMaterial color="#64748b" roughness={0.34} metalness={0.16} />
             </mesh>
 
             {/* Clipboard */}
@@ -1997,11 +2062,32 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
     const controlsRef = useRef<any>(null);
     const playerRef = useRef<THREE.Group>(null);
     const playerPosition = useRef(new THREE.Vector3(0, 0, 0));
-    const [moveForward, setMoveForward] = useState(false);
-    const [moveBackward, setMoveBackward] = useState(false);
-    const [moveLeft, setMoveLeft] = useState(false);
-    const [moveRight, setMoveRight] = useState(false);
-    const [isSprinting, setIsSprinting] = useState(false);
+    const movementRef = useRef({
+        forward: false,
+        backward: false,
+        left: false,
+        right: false,
+        sprint: false,
+    });
+    const [animationState, setAnimationState] = useState({ moving: false, sprinting: false });
+    const moveDirRef = useRef(new THREE.Vector3());
+    const cameraForwardRef = useRef(new THREE.Vector3());
+    const cameraRightRef = useRef(new THREE.Vector3());
+    const upAxisRef = useRef(new THREE.Vector3(0, 1, 0));
+    const followTargetRef = useRef(new THREE.Vector3());
+
+    const syncAnimationState = useCallback(() => {
+        const moving =
+            movementRef.current.forward ||
+            movementRef.current.backward ||
+            movementRef.current.left ||
+            movementRef.current.right;
+        const sprinting = moving && movementRef.current.sprint;
+        setAnimationState((prev) => {
+            if (prev.moving === moving && prev.sprinting === sprinting) return prev;
+            return { moving, sprinting };
+        });
+    }, []);
 
     React.useEffect(() => {
         if (bounds) {
@@ -2013,23 +2099,40 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
     }, [bounds, camera]);
 
     React.useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            switch (e.code) {
-                case 'KeyW': case 'ArrowUp': setMoveForward(true); break;
-                case 'KeyA': case 'ArrowLeft': setMoveLeft(true); break;
-                case 'KeyS': case 'ArrowDown': setMoveBackward(true); break;
-                case 'KeyD': case 'ArrowRight': setMoveRight(true); break;
-                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(true); break;
+        const setMovement = (code: string, isDown: boolean) => {
+            switch (code) {
+                case 'KeyW':
+                case 'ArrowUp':
+                    movementRef.current.forward = isDown;
+                    break;
+                case 'KeyA':
+                case 'ArrowLeft':
+                    movementRef.current.left = isDown;
+                    break;
+                case 'KeyS':
+                case 'ArrowDown':
+                    movementRef.current.backward = isDown;
+                    break;
+                case 'KeyD':
+                case 'ArrowRight':
+                    movementRef.current.right = isDown;
+                    break;
+                case 'ShiftLeft':
+                case 'ShiftRight':
+                    movementRef.current.sprint = isDown;
+                    break;
+                default:
+                    return;
             }
+            syncAnimationState();
+        };
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.repeat) return;
+            setMovement(e.code, true);
         };
         const handleKeyUp = (e: KeyboardEvent) => {
-            switch (e.code) {
-                case 'KeyW': case 'ArrowUp': setMoveForward(false); break;
-                case 'KeyA': case 'ArrowLeft': setMoveLeft(false); break;
-                case 'KeyS': case 'ArrowDown': setMoveBackward(false); break;
-                case 'KeyD': case 'ArrowRight': setMoveRight(false); break;
-                case 'ShiftLeft': case 'ShiftRight': setIsSprinting(false); break;
-            }
+            setMovement(e.code, false);
         };
         document.addEventListener('keydown', handleKeyDown);
         document.addEventListener('keyup', handleKeyUp);
@@ -2037,28 +2140,35 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
             document.removeEventListener('keydown', handleKeyDown);
             document.removeEventListener('keyup', handleKeyUp);
         };
-    }, []);
+    }, [syncAnimationState]);
 
     useFrame((state, delta) => {
         const controls = controlsRef.current;
         const player = playerRef.current;
         if (!controls || !player) return;
 
-        const moveDir = new THREE.Vector3();
-        const cameraForward = new THREE.Vector3();
+        const dt = clampScalar(delta, 0.0001, 0.04);
+        const moveDir = moveDirRef.current;
+        moveDir.set(0, 0, 0);
+        const cameraForward = cameraForwardRef.current;
         camera.getWorldDirection(cameraForward);
         cameraForward.y = 0;
-        cameraForward.normalize();
-        const cameraRight = new THREE.Vector3().crossVectors(cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
+        if (cameraForward.lengthSq() < 1e-6) {
+            cameraForward.set(0, 0, -1);
+        } else {
+            cameraForward.normalize();
+        }
+        const cameraRight = cameraRightRef.current;
+        cameraRight.crossVectors(cameraForward, upAxisRef.current).normalize();
 
-        if (moveForward) moveDir.add(cameraForward);
-        if (moveBackward) moveDir.sub(cameraForward);
-        if (moveRight) moveDir.add(cameraRight);
-        if (moveLeft) moveDir.sub(cameraRight);
+        if (movementRef.current.forward) moveDir.add(cameraForward);
+        if (movementRef.current.backward) moveDir.sub(cameraForward);
+        if (movementRef.current.right) moveDir.add(cameraRight);
+        if (movementRef.current.left) moveDir.sub(cameraRight);
 
         if (moveDir.lengthSq() > 0) {
             moveDir.normalize();
-            const speed = (isSprinting ? 6.2 : 3.9) * delta;
+            const speed = (movementRef.current.sprint ? 7.6 : 4.9) * dt;
             playerPosition.current.addScaledVector(moveDir, speed);
 
             if (bounds) {
@@ -2067,14 +2177,14 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
             }
 
             const targetYaw = Math.atan2(moveDir.x, moveDir.z);
-            player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, Math.min(1, delta * 10));
+            player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, Math.min(1, dt * 12));
         }
 
-        const runningBob = moveDir.lengthSq() > 0 ? Math.sin(state.clock.elapsedTime * (isSprinting ? 14 : 9)) * 0.04 : 0;
+        const runningBob = moveDir.lengthSq() > 0 ? Math.sin(state.clock.elapsedTime * (movementRef.current.sprint ? 14 : 9)) * 0.04 : 0;
         player.position.set(playerPosition.current.x, runningBob, playerPosition.current.z);
 
-        const target = new THREE.Vector3(playerPosition.current.x, 1.15, playerPosition.current.z);
-        controls.target.lerp(target, Math.min(1, delta * 8));
+        const target = followTargetRef.current.set(playerPosition.current.x, 1.15, playerPosition.current.z);
+        controls.target.lerp(target, Math.min(1, dt * 11));
         controls.update();
     });
 
@@ -2086,7 +2196,7 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
                 enablePan={false}
                 enableZoom={false}
                 enableDamping
-                dampingFactor={0.08}
+                dampingFactor={0.06}
                 minDistance={3.6}
                 maxDistance={6.8}
                 minPolarAngle={0.25}
@@ -2096,8 +2206,8 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
             <group ref={playerRef}>
                 <HumanCharacter
                     humanModelUrl={humanModelUrl}
-                    moving={moveForward || moveBackward || moveLeft || moveRight}
-                    sprinting={isSprinting}
+                    moving={animationState.moving}
+                    sprinting={animationState.sprinting}
                 />
             </group>
         </>
@@ -2145,6 +2255,7 @@ function BlueprintWorkspace() {
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
     const pendingAutoWalkRef = useRef(false);
+    const hasAutoEnteredFullscreenRef = useRef(false);
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
     const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
     const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
@@ -2152,7 +2263,8 @@ function BlueprintWorkspace() {
         () => siteResult?.buildings.find((building) => building.id === activeSiteBuildingId) || null,
         [siteResult, activeSiteBuildingId]
     );
-    const useImmersiveLayout = status === 'complete' && !!elements;
+    const useImmersiveLayout = status === 'complete' && !!elements && isFullscreen;
+    const isPerformanceSensitiveMode = isWalkthrough || showWalkthroughHuman;
 
     const summarizeReconstruction = (result: GeometricReconstruction | null | undefined) => ({
         walls: result?.walls?.length || 0,
@@ -2335,7 +2447,10 @@ function BlueprintWorkspace() {
 
     React.useEffect(() => {
         if (status === 'complete' && elements) {
-            setIsFullscreen(true);
+            if (!hasAutoEnteredFullscreenRef.current) {
+                setIsFullscreen(true);
+                hasAutoEnteredFullscreenRef.current = true;
+            }
             if (pendingAutoWalkRef.current) {
                 pendingAutoWalkRef.current = false;
                 setIsTopView(false);
@@ -2346,7 +2461,9 @@ function BlueprintWorkspace() {
                     description: 'WASD move, Shift sprint. Press H to switch first-person controls.',
                 });
             }
+            return;
         }
+        hasAutoEnteredFullscreenRef.current = false;
     }, [status, elements, toast]);
 
     const handleDeleteElement = useCallback(() => {
@@ -2466,10 +2583,12 @@ function BlueprintWorkspace() {
 
     const resetState = useCallback(() => {
         pendingAutoWalkRef.current = false;
+        hasAutoEnteredFullscreenRef.current = false;
         setPreview(null); setDescription('');
         setStatus('idle'); setProgress(0); setElements(null);
         setSiteResult(null);
         setActiveSiteBuildingId(null);
+        setIsFullscreen(false);
     }, [setElements]);
 
     const animateProgress = (result: GeometricReconstruction) => {
@@ -3103,9 +3222,9 @@ function BlueprintWorkspace() {
                     }}>
                         <Canvas
                             key={`${useImmersiveLayout ? 'canvas-fullscreen' : 'canvas-standard'}-${isWalkthrough ? 'walk' : (isTopView ? 'top' : 'orbit')}`}
-                            dpr={[1, 2]}
+                            dpr={isPerformanceSensitiveMode ? [1, 1.35] : [1, 2]}
                             camera={{ position: [18, 14, 18], fov: useImmersiveLayout ? 28 : 32 }}
-                            gl={{ antialias: true, alpha: true }}
+                            gl={{ antialias: !isPerformanceSensitiveMode, alpha: true, powerPreference: isPerformanceSensitiveMode ? 'high-performance' : 'default' }}
                             style={{ background: 'transparent', width: '100%', height: '100%', display: 'block' }}
                         >
                             {isWalkthrough ? (
@@ -3130,7 +3249,7 @@ function BlueprintWorkspace() {
                                 <OrbitViewController
                                     data={elements}
                                     isTopView={isTopView}
-                                    isFullscreen={useImmersiveLayout}
+                                    isFullscreen={isFullscreen}
                                 />
                             )}
 
@@ -3146,8 +3265,8 @@ function BlueprintWorkspace() {
                                 return (
                                     <>
                                         <ambientLight intensity={isNight ? 0.2 : 0.6} color={isNight ? "#4a5a70" : "#ffffff"} />
-                                        <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={[2048, 2048]} />
-                                        <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={[2048, 2048]}
+                                        <pointLight position={[15, 25, 15]} intensity={isNight ? 0.5 : 1.2} color={isNight ? "#607d8b" : "#ffffff"} castShadow shadow-mapSize={isPerformanceSensitiveMode ? [1024, 1024] : [2048, 2048]} />
+                                        <directionalLight position={[sunX, sunY, sunZ]} intensity={intensity} color="#fff8e7" castShadow shadow-mapSize={isPerformanceSensitiveMode ? [1024, 1024] : [2048, 2048]}
                                             shadow-camera-left={-20} shadow-camera-right={20} shadow-camera-top={20} shadow-camera-bottom={-20} />
                                         <directionalLight position={[8, -5, 8]} intensity={0.4} color="#a0b0d0" />
                                         {!isNight && (
@@ -3183,33 +3302,37 @@ function BlueprintWorkspace() {
                                     return (
                                         <>
                                             <Environment preset={envPreset as any} />
-                                            <ContactShadows
-                                                position={[0, -0.01, 0]}
-                                                opacity={isNight ? 0.34 : 0.46}
-                                                scale={isNight ? 34 : 42}
-                                                blur={isNight ? 3.2 : 2.2}
-                                                far={isNight ? 14 : 18}
-                                            />
+                                            {!isPerformanceSensitiveMode && (
+                                                <ContactShadows
+                                                    position={[0, -0.01, 0]}
+                                                    opacity={isNight ? 0.34 : 0.46}
+                                                    scale={isNight ? 34 : 42}
+                                                    blur={isNight ? 3.2 : 2.2}
+                                                    far={isNight ? 14 : 18}
+                                                />
+                                            )}
                                         </>
                                     );
                                 })()}
 
-                                <EffectComposer>
-                                    <SSAO
-                                        intensity={20}
-                                        radius={0.4}
-                                        luminanceInfluence={0.5}
-                                        color={new THREE.Color("black")}
-                                    />
-                                    <Bloom
-                                        luminanceThreshold={1.2}
-                                        mipmapBlur
-                                        intensity={0.4}
-                                        radius={0.4}
-                                    />
-                                    <Noise opacity={0.03} />
-                                    <Vignette eskil={false} offset={0.1} darkness={1.1} />
-                                </EffectComposer>
+                                {!isPerformanceSensitiveMode && (
+                                    <EffectComposer>
+                                        <SSAO
+                                            intensity={20}
+                                            radius={0.4}
+                                            luminanceInfluence={0.5}
+                                            color={new THREE.Color("black")}
+                                        />
+                                        <Bloom
+                                            luminanceThreshold={1.2}
+                                            mipmapBlur
+                                            intensity={0.4}
+                                            radius={0.4}
+                                        />
+                                        <Noise opacity={0.03} />
+                                        <Vignette eskil={false} offset={0.1} darkness={1.1} />
+                                    </EffectComposer>
+                                )}
                             </Suspense>
                         </Canvas>
 
