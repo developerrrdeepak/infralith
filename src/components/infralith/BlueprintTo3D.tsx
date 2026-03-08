@@ -161,14 +161,22 @@ const normalizeFloorLevel = (value: unknown): number => {
     return Math.max(0, Math.round(n));
 };
 
-const DEFAULT_FLOOR_HEIGHT = 2.8;
-const MIN_FLOOR_HEIGHT = 2.2;
-
 type FloorMetrics = {
     levels: number[];
     floorHeightByLevel: Map<number, number>;
     floorBaseByLevel: Map<number, number>;
     fallbackHeight: number;
+};
+
+const computeRepresentativeHeight = (heights: number[]): number => {
+    if (!Array.isArray(heights) || heights.length === 0) return 0;
+    const sorted = [...heights].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median =
+        sorted.length % 2 === 0
+            ? (sorted[mid - 1] + sorted[mid]) / 2
+            : sorted[mid];
+    return Number(median.toFixed(3));
 };
 
 const computeFloorMetrics = (model: GeometricReconstruction | null | undefined): FloorMetrics => {
@@ -196,20 +204,14 @@ const computeFloorMetrics = (model: GeometricReconstruction | null | undefined):
     const floorHeightByLevel = new Map<number, number>();
     for (const wall of model?.walls || []) {
         const floorLevel = normalizeFloorLevel(wall.floor_level);
-        const wallHeight = Math.max(
-            MIN_FLOOR_HEIGHT,
-            Number.isFinite(Number(wall.height)) ? Number(wall.height) : DEFAULT_FLOOR_HEIGHT
-        );
+        const wallHeight = Number(wall.height);
+        if (!Number.isFinite(wallHeight) || wallHeight <= 0) continue;
         const current = floorHeightByLevel.get(floorLevel) || 0;
         floorHeightByLevel.set(floorLevel, Math.max(current, wallHeight));
     }
 
     const sampledHeights = [...floorHeightByLevel.values()].filter((height) => Number.isFinite(height) && height > 0);
-    const averageHeight =
-        sampledHeights.length > 0
-            ? sampledHeights.reduce((sum, height) => sum + height, 0) / sampledHeights.length
-            : DEFAULT_FLOOR_HEIGHT;
-    const fallbackHeight = Math.max(MIN_FLOOR_HEIGHT, Number(averageHeight.toFixed(3)));
+    const fallbackHeight = computeRepresentativeHeight(sampledHeights);
 
     const floorBaseByLevel = new Map<number, number>();
     let runningY = 0;
@@ -234,13 +236,16 @@ const resolveFloorBaseYFromMetrics = (metrics: FloorMetrics, floorLevel: unknown
     const maxKnownLevel = metrics.levels[metrics.levels.length - 1];
     const maxKnownBase = metrics.floorBaseByLevel.get(maxKnownLevel) || 0;
     const extensionHeight = metrics.floorHeightByLevel.get(maxKnownLevel) || metrics.fallbackHeight;
-    if (level <= maxKnownLevel) return level * metrics.fallbackHeight;
+    if (!Number.isFinite(extensionHeight) || extensionHeight <= 0) return maxKnownBase;
+    if (level <= maxKnownLevel) return maxKnownBase;
     return maxKnownBase + ((level - maxKnownLevel) * extensionHeight);
 };
 
 const resolveFloorHeightFromMetrics = (metrics: FloorMetrics, floorLevel: unknown): number => {
     const level = normalizeFloorLevel(floorLevel);
-    return metrics.floorHeightByLevel.get(level) || metrics.fallbackHeight;
+    const explicit = metrics.floorHeightByLevel.get(level);
+    if (Number.isFinite(explicit) && Number(explicit) > 0) return Number(explicit);
+    return Number.isFinite(metrics.fallbackHeight) && metrics.fallbackHeight > 0 ? metrics.fallbackHeight : 0;
 };
 
 const inferClientFloorCount = (model: GeometricReconstruction | null | undefined): number => {
@@ -932,7 +937,7 @@ const WallSegment = React.memo(function WallSegment({
     const floorLevel = normalizeFloorLevel(wall.floor_level);
     const floorBaseY = typeof resolveFloorBaseY === 'function'
         ? resolveFloorBaseY(floorLevel)
-        : floorLevel * DEFAULT_FLOOR_HEIGHT;
+        : 0;
     const baseY = floorBaseY + Number(wall.base_offset || 0);
 
     return (
@@ -1164,7 +1169,9 @@ function GeneratedStructure({
                         const polygons = floorSlabPolygonsByLevel.get(floorLevel) || [];
                         if (polygons.length === 0) return null;
                         const zPos = resolveFloorBaseY(floorLevel);
-                        const ceilingY = zPos + resolveFloorHeight(floorLevel) - 0.02;
+                        const floorHeight = resolveFloorHeight(floorLevel);
+                        const hasSourceCeilingHeight = floorHeight > 0.1;
+                        const ceilingY = zPos + floorHeight - 0.02;
                         return (
                             <group key={`floor-shell-${floorLevel}`}>
                                 {polygons.map((polygon, polygonIdx) => {
@@ -1183,16 +1190,18 @@ function GeneratedStructure({
                                                     reflectivity={0.14}
                                                 />
                                             </mesh>
-                                            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
-                                                <shapeGeometry args={[shape]} />
-                                                <meshPhysicalMaterial
-                                                    color="#f4f1eb"
-                                                    {...ceilingPbr}
-                                                    side={THREE.BackSide}
-                                                    transparent
-                                                    opacity={isWalkthrough ? 0.52 : 0.2}
-                                                />
-                                            </mesh>
+                                            {hasSourceCeilingHeight && (
+                                                <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
+                                                    <shapeGeometry args={[shape]} />
+                                                    <meshPhysicalMaterial
+                                                        color="#f4f1eb"
+                                                        {...ceilingPbr}
+                                                        side={THREE.BackSide}
+                                                        transparent
+                                                        opacity={isWalkthrough ? 0.52 : 0.2}
+                                                    />
+                                                </mesh>
+                                            )}
                                         </group>
                                     );
                                 })}
@@ -1373,6 +1382,7 @@ function WalkthroughController({
     interactables,
     disabledInteractableIds,
     floorCount = 1,
+    resolveFloorBaseY,
     onHudChange,
     onUseInteractable,
 }: {
@@ -1382,6 +1392,7 @@ function WalkthroughController({
     interactables?: WalkthroughInteractable[];
     disabledInteractableIds?: Set<string>;
     floorCount?: number;
+    resolveFloorBaseY?: (floorLevel: number) => number;
     onHudChange?: (next: WalkthroughHudState) => void;
     onUseInteractable?: (event: WalkthroughInteractionEvent) => void;
 }) {
@@ -1612,7 +1623,6 @@ function WalkthroughController({
 
     useFrame((_, delta) => {
         const dt = clampScalar(delta, 0.0001, 0.04);
-        const FLOOR_HEIGHT = 2.8;
         const STAND_HEIGHT = 1.72;
         const CROUCH_HEIGHT = 1.18;
         const PLAYER_RADIUS = 0.28;
@@ -1711,7 +1721,7 @@ function WalkthroughController({
             headBob = Math.sin(bobPhaseRef.current) * (isSprinting ? 0.045 : (isCrouching ? 0.015 : 0.028));
         }
 
-        const baseFloorY = activeFloor * FLOOR_HEIGHT;
+        const baseFloorY = typeof resolveFloorBaseY === 'function' ? resolveFloorBaseY(activeFloor) : 0;
         camera.position.y = baseFloorY + eyeHeightRef.current + jumpOffsetRef.current + headBob;
 
         let bestTarget: WalkthroughInteractable | null = null;
@@ -2259,6 +2269,11 @@ function BlueprintWorkspace() {
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
     const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
     const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
+    const walkthroughFloorMetrics = useMemo(() => computeFloorMetrics(elements), [elements]);
+    const resolveWalkthroughFloorBaseY = useCallback(
+        (floorLevel: number) => resolveFloorBaseYFromMetrics(walkthroughFloorMetrics, floorLevel),
+        [walkthroughFloorMetrics]
+    );
     const activeSiteBuilding = useMemo(
         () => siteResult?.buildings.find((building) => building.id === activeSiteBuildingId) || null,
         [siteResult, activeSiteBuildingId]
@@ -3241,6 +3256,7 @@ function BlueprintWorkspace() {
                                         interactables={walkthroughInteractables}
                                         disabledInteractableIds={walkCollectedItemIds}
                                         floorCount={walkthroughFloorCount}
+                                        resolveFloorBaseY={resolveWalkthroughFloorBaseY}
                                         onHudChange={handleWalkHudChange}
                                         onUseInteractable={handleWalkUseInteractable}
                                     />
