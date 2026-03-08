@@ -179,21 +179,17 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
   const docInfo = r.documentInfo || null;
   const constructionControlSummary = r.constructionControlSummary || null;
   const constructionGates = Array.isArray(constructionControlSummary?.gates) ? constructionControlSummary.gates : [];
-  const referenceLibrary = r.referenceLibrary || {};
-  const standardsApplied = Array.isArray(referenceLibrary?.standards) ? referenceLibrary.standards : [];
-  const researchPapers = Array.isArray(referenceLibrary?.researchPapers) ? referenceLibrary.researchPapers : [];
-  const retrievedCitations = Array.isArray(referenceLibrary?.retrievedCitations) ? referenceLibrary.retrievedCitations : [];
+  const ruleReferences: string[] = Array.from(
+    new Set(
+      conflicts
+        .map((item: any) => String(item?.regulationRef || '').trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 6) as string[];
   const approvalStatus = Array.isArray(r.approvalChain) && r.approvalChain.length > 0
     ? String(r.approvalChain[0]?.status || 'pending').toUpperCase()
     : 'PENDING';
   const assumptions = Array.isArray(r.costEstimate?.assumptions) ? r.costEstimate.assumptions : [];
-  const dataAvailability = [
-    { field: 'Project Scope', status: projectScope !== NOT_AVAILABLE_TEXT, source: 'OCR + Parser' },
-    { field: 'Compliance Analysis', status: !complianceUnavailable, source: 'Compliance Agent + RAG' },
-    { field: 'Risk Analysis', status: !riskUnavailable, source: 'Risk Agent + RAG' },
-    { field: 'Cost Estimate', status: !costUnavailable, source: 'Cost Agent + RAG' },
-    { field: 'Material BOQ', status: materials.length > 0, source: 'Document Extraction' },
-  ];
 
   const handlePrintPdf = () => {
     if (typeof window === 'undefined') return;
@@ -271,7 +267,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
                 {[
                   ['Report Date', formattedDate],
                   ['Report Time', formattedTime],
-                  ['Prepared By', `Infralith Orchestrator ${valueOrNotAvailable(r.modelVersion?.orchestratorVersion)}`],
+                  ['Prepared By', 'Infralith AI Engine'],
                   ['Reviewed For', role],
                   ['AI Confidence', aiConfidencePct > 0 ? `${aiConfidencePct}%` : NOT_AVAILABLE_TEXT],
                   ['Doc Status', isCritical || extractionNeedsReview ? 'REVIEW REQUIRED' : 'READY'],
@@ -302,19 +298,19 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
         <SectionHeading
           icon={FileText}
-          title="Section 0 - Document Control & Standards Basis"
-          subtitle="Formal metadata and standards references for audit-ready review."
+          title="Section 0 - Project Document Summary"
+          subtitle="User-facing metadata from uploaded project document."
         />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           {[
             ['Document ID', reportNo],
-            ['Revision', 'R0'],
             ['Issue Status', approvalStatus],
             ['Jurisdiction Focus', 'India'],
-            ['Run ID', valueOrNotAvailable(r.modelVersion?.runId)],
-            ['Parameter Hash', valueOrNotAvailable(r.modelVersion?.parameterHash)],
-            ['Model Route', valueOrNotAvailable(r.modelVersion?.llmModel)],
             ['Generated On', `${formattedDate} ${formattedTime}`],
+            ['File Name', docInfo ? valueOrNotAvailable(docInfo.fileName) : NOT_AVAILABLE_TEXT],
+            ['File Type', docInfo ? valueOrNotAvailable(docInfo.extension) : NOT_AVAILABLE_TEXT],
+            ['File Size', docInfo ? `${Math.max(0, Number(docInfo.sizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB` : NOT_AVAILABLE_TEXT],
+            ['Extraction Coverage', extractionQuality ? `${extractionQuality.coverageScore}%` : NOT_AVAILABLE_TEXT],
           ].map(([k, v]) => (
             <div key={k} className="flex flex-col gap-0.5 border border-border/60 rounded-lg p-3">
               <span className="text-muted-foreground font-semibold">{k}</span>
@@ -323,31 +319,13 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           ))}
         </div>
         <div className="mt-4">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Applicable Standards</p>
-          {standardsApplied.length > 0 ? (
-            <div className="space-y-2">
-              {standardsApplied.map((standard: any) => (
-                <div key={standard.id} className="border border-border/60 rounded-lg p-3">
-                  <p className="text-xs font-semibold text-foreground">{valueOrNotAvailable(standard.title)}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">{valueOrNotAvailable(standard.scope)}</p>
-                  <p className="text-[11px] text-primary mt-1 break-all">{valueOrNotAvailable(standard.sourceUrl)}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">{NOT_AVAILABLE_TEXT}</p>
-          )}
-        </div>
-        <div className="mt-4">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Research Basis</p>
-          {researchPapers.length > 0 ? (
-            <div className="space-y-2">
-              {researchPapers.map((paper: any) => (
-                <div key={paper.id} className="border border-border/60 rounded-lg p-3">
-                  <p className="text-xs font-semibold text-foreground">{valueOrNotAvailable(paper.title)}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">{valueOrNotAvailable(paper.relevance)}</p>
-                  <p className="text-[11px] text-primary mt-1 break-all">{valueOrNotAvailable(paper.sourceUrl)}</p>
-                </div>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Code References Detected</p>
+          {ruleReferences.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {ruleReferences.map((ref) => (
+                <Badge key={ref} variant="outline" className="text-[10px] font-bold uppercase tracking-wide">
+                  {ref}
+                </Badge>
               ))}
             </div>
           ) : (
@@ -442,24 +420,6 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           )}
         </div>
       )}
-
-      <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
-        <div className="p-6">
-          <SectionHeading icon={Activity} title="Section 2A - Data Availability Register" subtitle="Mandatory declaration of what was available vs not available in uploaded evidence." />
-        </div>
-        <TableRow header cells={['Field', 'Status', 'Source Basis']} />
-        {dataAvailability.map((entry) => (
-          <div key={entry.field} className="grid px-4 py-3 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-center" style={{ gridTemplateColumns: '1.2fr 8rem 1fr' }}>
-            <span className="font-semibold text-foreground text-xs">{entry.field}</span>
-            <span>
-              <Badge className={entry.status ? 'bg-emerald-500/10 text-emerald-600 border-0 text-[10px] font-bold uppercase' : 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-0 text-[10px] font-bold uppercase'}>
-                {entry.status ? 'Available' : 'Not Available'}
-              </Badge>
-            </span>
-            <span className="text-xs text-muted-foreground">{valueOrNotAvailable(entry.source)}</span>
-          </div>
-        ))}
-      </div>
 
       {(role === 'Engineer' || role === 'Admin') && (
         <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
@@ -570,30 +530,6 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       </div>
 
-      <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
-        <div className="p-6">
-          <SectionHeading icon={FileText} title="Section 5A - Evidence and Citation Register" subtitle="Retrieved evidence library used for grounded compliance, risk, and cost reasoning." />
-        </div>
-        {retrievedCitations.length > 0 ? (
-          <>
-            <TableRow header cells={['Citation', 'Title', 'Source', 'Collection', 'Score']} />
-            {retrievedCitations.map((row: any) => (
-              <div key={row.citationId} className="grid px-4 py-3 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-start" style={{ gridTemplateColumns: '5rem 1.2fr 1.2fr 8rem 5rem' }}>
-                <span className="font-mono text-xs text-foreground">{valueOrNotAvailable(row.citationId)}</span>
-                <span className="text-xs text-foreground">{valueOrNotAvailable(row.title)}</span>
-                <span className="text-xs text-muted-foreground break-all">{valueOrNotAvailable(row.source)}</span>
-                <span className="text-xs text-muted-foreground">{valueOrNotAvailable(row.collection)}</span>
-                <span className="text-xs text-foreground font-mono">{typeof row.score === 'number' ? row.score.toFixed(3) : NOT_AVAILABLE_TEXT}</span>
-              </div>
-            ))}
-          </>
-        ) : (
-          <div className="px-6 pb-6">
-            <p className="text-xs text-muted-foreground">{NOT_AVAILABLE_TEXT}</p>
-          </div>
-        )}
-      </div>
-
       <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
         <SectionHeading icon={ShieldCheck} title="Section 6 - Assumptions, Limitations, and Sign-off" subtitle="Required governance notes before approvals and submissions." />
         <div className="space-y-3 text-xs">
@@ -609,7 +545,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
           {[
-            ['Prepared By', `Infralith Orchestrator ${valueOrNotAvailable(r.modelVersion?.orchestratorVersion)}`],
+            ['Prepared By', 'Infralith AI Engine'],
             ['Reviewed By', 'Supervisor / Structural Lead'],
             ['Approved By', 'Authorized Signatory'],
           ].map(([label, value]) => (
@@ -625,14 +561,11 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       <div className="report-section bg-muted/30 border border-border rounded-2xl p-6 shadow-sm mb-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
           {[
-            ['Engine', `Infralith ${valueOrNotAvailable(r.modelVersion?.orchestratorVersion)}`],
-            ['Pipeline Nodes', `${(r.devOpsInsights?.length || 0) + 3}`],
             ['Processing Time', pipelineSeconds],
-            ['Security', 'End-to-End Encrypted'],
-            ['Model', valueOrNotAvailable(r.modelVersion?.llmModel)],
             ['Timestamp', formattedDate],
-            ['Report Format', 'ISO 19650 / ISO 31000 / IS-NBC Grounded'],
-            ['Classification', 'CONFIDENTIAL'],
+            ['Issue Status', approvalStatus],
+            ['Total Issues', String(totalConflicts)],
+            ['Critical Issues', String(criticalCount)],
             ...(docInfo ? [
               ['File Name', valueOrNotAvailable(docInfo.fileName)],
               ['File Type', valueOrNotAvailable(docInfo.extension)],

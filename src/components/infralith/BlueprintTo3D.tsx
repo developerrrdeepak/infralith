@@ -955,6 +955,16 @@ function GeneratedStructure({
     const groundPbr = { roughness: 0.88, metalness: 0.01, clearcoat: 0.03, clearcoatRoughness: 0.88, reflectivity: 0.08 };
     const slabPbr = { roughness: 0.82, metalness: 0.02, clearcoat: 0.05, clearcoatRoughness: 0.8, reflectivity: 0.08 };
     const ceilingPbr = { roughness: 0.9, metalness: 0, clearcoat: 0.02, clearcoatRoughness: 0.9, reflectivity: 0.04 };
+    const roomsByFloor = useMemo(() => {
+        const grouped = new Map<number, GeometricReconstruction['rooms']>();
+        for (const room of data.rooms || []) {
+            const floorLevel = normalizeFloorLevel(room.floor_level);
+            const bucket = grouped.get(floorLevel) || [];
+            bucket.push(room);
+            grouped.set(floorLevel, bucket);
+        }
+        return grouped;
+    }, [data.rooms]);
 
     return (
         <group ref={groupRef}>
@@ -976,6 +986,9 @@ function GeneratedStructure({
                 <group scale={[1, p, 1]}>
                     {/* Floor Slabs for each level */}
                     {floorLevels.map((lvl) => {
+                        const floorRooms = roomsByFloor.get(lvl) || [];
+                        // Prefer room-based floor/ceiling geometry whenever available to avoid exterior white slab artifacts.
+                        if (floorRooms.length > 0) return null;
                         const slabY = resolveFloorBaseY(lvl);
                         const ceilingY = slabY + resolveFloorHeight(lvl) - 0.02;
                         const hasLevelAbove = floorLevels.some((nextLevel) => nextLevel > lvl);
@@ -992,19 +1005,20 @@ function GeneratedStructure({
                         };
                         const centerX = (levelBounds.minX + levelBounds.maxX) / 2;
                         const centerZ = (levelBounds.minZ + levelBounds.maxZ) / 2;
-                        const sizeX = (levelBounds.maxX - levelBounds.minX) + 40;
-                        const sizeZ = (levelBounds.maxZ - levelBounds.minZ) + 40;
+                        // Keep fallback slabs close to building footprint; oversized plates leak outside visually.
+                        const sizeX = (levelBounds.maxX - levelBounds.minX) + 0.2;
+                        const sizeZ = (levelBounds.maxZ - levelBounds.minZ) + 0.2;
 
                         return (
                             <React.Fragment key={`slab-${lvl}`}>
                                 <mesh position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
                                     <planeGeometry args={[sizeX, sizeZ]} />
-                                    <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.2} side={THREE.DoubleSide} {...slabPbr} />
+                                    <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.14} side={THREE.FrontSide} {...slabPbr} />
                                 </mesh>
                                 {shouldRenderCeilingPlate && (
                                     <mesh position={[centerX, ceilingY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow={false}>
                                         <planeGeometry args={[sizeX, sizeZ]} />
-                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.5 : 0.3} side={THREE.DoubleSide} {...ceilingPbr} />
+                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.45 : 0.2} side={THREE.BackSide} {...ceilingPbr} />
                                     </mesh>
                                 )}
                             </React.Fragment>
@@ -1041,7 +1055,7 @@ function GeneratedStructure({
                                     <meshPhysicalMaterial
                                         color="#f4f1eb"
                                         {...ceilingPbr}
-                                        side={THREE.DoubleSide}
+                                        side={THREE.BackSide}
                                         transparent
                                         opacity={isWalkthrough ? 0.52 : 0.2}
                                     />
