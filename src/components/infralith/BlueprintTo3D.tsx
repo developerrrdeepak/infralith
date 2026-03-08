@@ -290,6 +290,71 @@ const computeRoomCenter = (polygon: [number, number][] | null | undefined): [num
     return [sumX / count, sumZ / count];
 };
 
+const convexHull2D = (points: [number, number][]): [number, number][] => {
+    const dedup = new Map<string, [number, number]>();
+    for (const point of points) {
+        const x = Number(point?.[0]);
+        const z = Number(point?.[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+        const key = `${x.toFixed(4)}:${z.toFixed(4)}`;
+        if (!dedup.has(key)) dedup.set(key, [x, z]);
+    }
+    const sorted = [...dedup.values()].sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+    if (sorted.length < 3) return sorted;
+    const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+        ((a[0] - o[0]) * (b[1] - o[1])) - ((a[1] - o[1]) * (b[0] - o[0]));
+
+    const lower: [number, number][] = [];
+    for (const point of sorted) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+            lower.pop();
+        }
+        lower.push(point);
+    }
+
+    const upper: [number, number][] = [];
+    for (let idx = sorted.length - 1; idx >= 0; idx -= 1) {
+        const point = sorted[idx];
+        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+            upper.pop();
+        }
+        upper.push(point);
+    }
+
+    lower.pop();
+    upper.pop();
+    const hull = [...lower, ...upper];
+    return hull.length >= 3 ? hull : sorted;
+};
+
+const buildShapeFromPolygon = (polygon: [number, number][]): THREE.Shape | null => {
+    if (!Array.isArray(polygon) || polygon.length < 3) return null;
+    const shape = new THREE.Shape();
+    polygon.forEach((point, idx) => {
+        if (idx === 0) shape.moveTo(point[0], point[1]);
+        else shape.lineTo(point[0], point[1]);
+    });
+    shape.closePath();
+    return shape;
+};
+
+const insetPolygonToCentroid = (polygon: [number, number][], inset = 0.04): [number, number][] => {
+    if (!Array.isArray(polygon) || polygon.length < 3 || inset <= 0) return polygon;
+    const center = computeRoomCenter(polygon);
+    if (!center) return polygon;
+    return polygon.map(([x, z]) => {
+        const dx = x - center[0];
+        const dz = z - center[1];
+        const len = Math.hypot(dx, dz);
+        if (!Number.isFinite(len) || len <= inset + 1e-4) return [x, z];
+        const scale = (len - inset) / len;
+        return [
+            Number((center[0] + dx * scale).toFixed(4)),
+            Number((center[1] + dz * scale).toFixed(4)),
+        ];
+    });
+};
+
 const stairsSemanticRegex = /\bstair(?:case)?s?\b|\bstairwell\b|\bup\b|\bdn\b|\bdown\b/i;
 
 const clampUnit = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
@@ -969,6 +1034,22 @@ function GeneratedStructure({
         }
         return grouped;
     }, [data.rooms]);
+    const fallbackFloorShapeByLevel = useMemo(() => {
+        const map = new Map<number, THREE.Shape>();
+        for (const lvl of floorLevels) {
+            const floorWalls = (data.walls || []).filter((wall) => normalizeFloorLevel(wall.floor_level) === lvl);
+            const footprintWalls = floorWalls.length > 0 ? floorWalls : (data.walls || []);
+            const points: [number, number][] = [];
+            for (const wall of footprintWalls) {
+                points.push([Number(wall.start?.[0]), Number(wall.start?.[1])]);
+                points.push([Number(wall.end?.[0]), Number(wall.end?.[1])]);
+            }
+            const hull = convexHull2D(points);
+            const shape = buildShapeFromPolygon(hull);
+            if (shape) map.set(lvl, shape);
+        }
+        return map;
+    }, [data.walls, floorLevels]);
 
     return (
         <group ref={groupRef}>
@@ -997,32 +1078,32 @@ function GeneratedStructure({
                         const ceilingY = slabY + resolveFloorHeight(lvl) - 0.02;
                         const hasLevelAbove = floorLevels.some((nextLevel) => nextLevel > lvl);
                         const shouldRenderCeilingPlate = hasLevelAbove || !data.roof;
-                        const floorWalls = (data.walls || []).filter((wall) => normalizeFloorLevel(wall.floor_level) === lvl);
-                        const footprintWalls = floorWalls.length > 0 ? floorWalls : (data.walls || []);
-                        const levelX = footprintWalls.flatMap((wall) => [wall.start[0], wall.end[0]]);
-                        const levelZ = footprintWalls.flatMap((wall) => [wall.start[1], wall.end[1]]);
-                        const levelBounds = {
-                            minX: levelX.length > 0 ? Math.min(...levelX) : bounds.minX,
-                            maxX: levelX.length > 0 ? Math.max(...levelX) : bounds.maxX,
-                            minZ: levelZ.length > 0 ? Math.min(...levelZ) : bounds.minZ,
-                            maxZ: levelZ.length > 0 ? Math.max(...levelZ) : bounds.maxZ,
-                        };
-                        const centerX = (levelBounds.minX + levelBounds.maxX) / 2;
-                        const centerZ = (levelBounds.minZ + levelBounds.maxZ) / 2;
-                        // Keep fallback slabs close to building footprint; oversized plates leak outside visually.
-                        const sizeX = (levelBounds.maxX - levelBounds.minX) + 0.2;
-                        const sizeZ = (levelBounds.maxZ - levelBounds.minZ) + 0.2;
+                        const fallbackShape = fallbackFloorShapeByLevel.get(lvl) || null;
 
                         return (
                             <React.Fragment key={`slab-${lvl}`}>
-                                <mesh position={[centerX, slabY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-                                    <planeGeometry args={[sizeX, sizeZ]} />
-                                    <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.14} side={THREE.FrontSide} {...slabPbr} />
-                                </mesh>
-                                {shouldRenderCeilingPlate && (
-                                    <mesh position={[centerX, ceilingY, centerZ]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow={false}>
-                                        <planeGeometry args={[sizeX, sizeZ]} />
-                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.45 : 0.2} side={THREE.BackSide} {...ceilingPbr} />
+                                {fallbackShape && (
+                                    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, slabY, 0]} receiveShadow>
+                                        <shapeGeometry args={[fallbackShape]} />
+                                        <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.12} side={THREE.FrontSide} {...slabPbr} />
+                                    </mesh>
+                                )}
+                                {!fallbackShape && (
+                                    <mesh position={[(bounds.minX + bounds.maxX) / 2, slabY, (bounds.minZ + bounds.maxZ) / 2]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+                                        <planeGeometry args={[Math.max(0.1, bounds.maxX - bounds.minX), Math.max(0.1, bounds.maxZ - bounds.minZ)]} />
+                                        <meshPhysicalMaterial color="#f0f0f0" transparent opacity={0.1} side={THREE.FrontSide} {...slabPbr} />
+                                    </mesh>
+                                )}
+                                {shouldRenderCeilingPlate && fallbackShape && (
+                                    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, ceilingY, 0]} receiveShadow={false}>
+                                        <shapeGeometry args={[fallbackShape]} />
+                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.42 : 0.16} side={THREE.BackSide} {...ceilingPbr} />
+                                    </mesh>
+                                )}
+                                {shouldRenderCeilingPlate && !fallbackShape && (
+                                    <mesh position={[(bounds.minX + bounds.maxX) / 2, ceilingY, (bounds.minZ + bounds.maxZ) / 2]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow={false}>
+                                        <planeGeometry args={[Math.max(0.1, bounds.maxX - bounds.minX), Math.max(0.1, bounds.maxZ - bounds.minZ)]} />
+                                        <meshPhysicalMaterial color="#f4f1eb" transparent opacity={isWalkthrough ? 0.42 : 0.16} side={THREE.BackSide} {...ceilingPbr} />
                                     </mesh>
                                 )}
                             </React.Fragment>
@@ -1031,8 +1112,10 @@ function GeneratedStructure({
 
                     {/* Room Floors */}
                     {data.rooms.filter(r => !visibleElements || visibleElements.has(getVisibilityKey('room', r.id))).map((room, i) => {
+                        const renderPolygon = insetPolygonToCentroid(room.polygon || [], 0.04);
+                        if (!Array.isArray(renderPolygon) || renderPolygon.length < 3) return null;
                         const shape = new THREE.Shape();
-                        room.polygon.forEach((pt, idx) => {
+                        renderPolygon.forEach((pt, idx) => {
                             if (idx === 0) shape.moveTo(pt[0], pt[1]);
                             else shape.lineTo(pt[0], pt[1]);
                         });
@@ -1655,9 +1738,34 @@ function WalkthroughController({
     );
 }
 
-function FallbackCivilEngineerAvatar() {
+function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { moving?: boolean; sprinting?: boolean }) {
+    const bodyRef = useRef<THREE.Group>(null);
+    const leftLegRef = useRef<THREE.Mesh>(null);
+    const rightLegRef = useRef<THREE.Mesh>(null);
+    const leftArmRef = useRef<THREE.Mesh>(null);
+    const rightArmRef = useRef<THREE.Mesh>(null);
+    const headRef = useRef<THREE.Mesh>(null);
+
+    useFrame((state) => {
+        const phaseSpeed = moving ? (sprinting ? 12 : 8.5) : 2.2;
+        const phase = state.clock.elapsedTime * phaseSpeed;
+        const swing = Math.sin(phase);
+        const armAmp = moving ? (sprinting ? 0.7 : 0.48) : 0.08;
+        const legAmp = moving ? (sprinting ? 0.82 : 0.56) : 0.1;
+
+        if (leftLegRef.current) leftLegRef.current.rotation.x = swing * legAmp;
+        if (rightLegRef.current) rightLegRef.current.rotation.x = -swing * legAmp;
+        if (leftArmRef.current) leftArmRef.current.rotation.x = -swing * armAmp;
+        if (rightArmRef.current) rightArmRef.current.rotation.x = swing * armAmp;
+        if (headRef.current) headRef.current.rotation.y = Math.sin(phase * 0.33) * 0.06;
+        if (bodyRef.current) {
+            bodyRef.current.position.y = moving ? (Math.sin(phase * 2) * 0.02) : (Math.sin(phase * 0.6) * 0.006);
+            bodyRef.current.rotation.z = moving ? (Math.sin(phase) * 0.03) : 0;
+        }
+    });
+
     return (
-        <group>
+        <group ref={bodyRef}>
             {/* Boots */}
             <mesh position={[-0.13, 0.06, 0.04]} castShadow>
                 <boxGeometry args={[0.16, 0.12, 0.28]} />
@@ -1669,11 +1777,11 @@ function FallbackCivilEngineerAvatar() {
             </mesh>
 
             {/* Pants / legs */}
-            <mesh position={[-0.13, 0.38, 0]} castShadow>
+            <mesh ref={leftLegRef} position={[-0.13, 0.38, 0]} castShadow>
                 <capsuleGeometry args={[0.085, 0.54, 8, 14]} />
                 <meshStandardMaterial color="#334155" roughness={0.62} />
             </mesh>
-            <mesh position={[0.13, 0.38, 0]} castShadow>
+            <mesh ref={rightLegRef} position={[0.13, 0.38, 0]} castShadow>
                 <capsuleGeometry args={[0.085, 0.54, 8, 14]} />
                 <meshStandardMaterial color="#334155" roughness={0.62} />
             </mesh>
@@ -1695,11 +1803,11 @@ function FallbackCivilEngineerAvatar() {
             </mesh>
 
             {/* Sleeves / arms */}
-            <mesh position={[-0.33, 1.02, 0]} rotation={[0, 0, 0.12]} castShadow>
+            <mesh ref={leftArmRef} position={[-0.33, 1.02, 0]} rotation={[0, 0, 0.12]} castShadow>
                 <capsuleGeometry args={[0.07, 0.48, 8, 12]} />
                 <meshStandardMaterial color="#1e293b" roughness={0.64} />
             </mesh>
-            <mesh position={[0.33, 1.02, 0]} rotation={[0, 0, -0.12]} castShadow>
+            <mesh ref={rightArmRef} position={[0.33, 1.02, 0]} rotation={[0, 0, -0.12]} castShadow>
                 <capsuleGeometry args={[0.07, 0.48, 8, 12]} />
                 <meshStandardMaterial color="#1e293b" roughness={0.64} />
             </mesh>
@@ -1715,7 +1823,7 @@ function FallbackCivilEngineerAvatar() {
             </mesh>
 
             {/* Head */}
-            <mesh position={[0, 1.58, 0]} castShadow>
+            <mesh ref={headRef} position={[0, 1.58, 0]} castShadow>
                 <sphereGeometry args={[0.16, 24, 24]} />
                 <meshStandardMaterial color="#f2c09d" roughness={0.7} />
             </mesh>
@@ -1775,12 +1883,22 @@ class GLBLoadBoundary extends React.Component<
     }
 }
 
-function HumanCharacter({ humanModelUrl, scale = 1 }: { humanModelUrl?: string | null; scale?: number }) {
+function HumanCharacter({
+    humanModelUrl,
+    scale = 1,
+    moving = false,
+    sprinting = false,
+}: {
+    humanModelUrl?: string | null;
+    scale?: number;
+    moving?: boolean;
+    sprinting?: boolean;
+}) {
     return (
         <group scale={[scale, scale, scale]}>
             {humanModelUrl ? (
-                <GLBLoadBoundary key={humanModelUrl} fallback={<FallbackCivilEngineerAvatar />}>
-                    <Suspense fallback={<FallbackCivilEngineerAvatar />}>
+                <GLBLoadBoundary key={humanModelUrl} fallback={<FallbackCivilEngineerAvatar moving={moving} sprinting={sprinting} />}>
+                    <Suspense fallback={<FallbackCivilEngineerAvatar moving={moving} sprinting={sprinting} />}>
                         <GLBHumanCharacter
                             url={humanModelUrl}
                             scale={CUSTOM_HUMAN_GLB_SCALE}
@@ -1789,7 +1907,7 @@ function HumanCharacter({ humanModelUrl, scale = 1 }: { humanModelUrl?: string |
                     </Suspense>
                 </GLBLoadBoundary>
             ) : (
-                <FallbackCivilEngineerAvatar />
+                <FallbackCivilEngineerAvatar moving={moving} sprinting={sprinting} />
             )}
         </group>
     );
@@ -1897,7 +2015,11 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
             />
 
             <group ref={playerRef}>
-                <HumanCharacter humanModelUrl={humanModelUrl} />
+                <HumanCharacter
+                    humanModelUrl={humanModelUrl}
+                    moving={moveForward || moveBackward || moveLeft || moveRight}
+                    sprinting={isSprinting}
+                />
             </group>
         </>
     );
