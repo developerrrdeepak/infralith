@@ -16,6 +16,59 @@ const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']);
 const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
 const DEFAULT_REQUIRED_STANDARD_HINTS = ['is 456', 'nbc', 'is 13920'];
+const INDUSTRY_STANDARD_REFERENCES = [
+    {
+        id: 'ISO-19650-1',
+        title: 'ISO 19650-1: Organization and digitization of information about buildings and civil engineering works',
+        scope: 'Information management principles and document-control structure.',
+        sourceUrl: 'https://www.iso.org/standard/65694.html',
+    },
+    {
+        id: 'ISO-31000',
+        title: 'ISO 31000: Risk management guidelines',
+        scope: 'Risk identification, analysis, treatment, and monitoring framework.',
+        sourceUrl: 'https://www.iso.org/iso-31000-risk-management.html',
+    },
+    {
+        id: 'GAO-20-195G',
+        title: 'GAO Cost Estimating and Assessment Guide',
+        scope: 'Best-practice basis-of-estimate and traceable cost documentation.',
+        sourceUrl: 'https://www.gao.gov/products/gao-20-195g',
+    },
+    {
+        id: 'GAO-16-89G',
+        title: 'GAO Schedule Assessment Guide',
+        scope: 'Integrated schedule quality criteria and schedule risk practices.',
+        sourceUrl: 'https://www.gao.gov/products/gao-16-89g',
+    },
+    {
+        id: 'OSHA-SAFETY-MGMT',
+        title: 'OSHA Safety and Health Program Management Guidelines',
+        scope: 'Worker safety planning and hazard-control reporting expectations.',
+        sourceUrl: 'https://www.osha.gov/safety-management',
+    },
+];
+
+const INDUSTRY_RESEARCH_REFERENCES = [
+    {
+        id: 'SCI-REP-2023-REGCHECK',
+        title: 'Automated code compliance checking in BIM projects using NLP and machine learning',
+        sourceUrl: 'https://doi.org/10.1038/s41598-023-38205-6',
+        relevance: 'Supports citation-grounded, explainable compliance findings.',
+    },
+    {
+        id: 'SPRINGER-2022-DOCQUALITY',
+        title: 'A quality framework for design documentation in infrastructure projects',
+        sourceUrl: 'https://doi.org/10.1007/s43452-022-00463-w',
+        relevance: 'Supports completeness-driven document quality gates in reporting.',
+    },
+    {
+        id: 'ALPHA-XIV-2025-EVM',
+        title: 'Comparative analysis of EVM implementation in construction projects',
+        sourceUrl: 'https://doi.org/10.1061/JCCEE5.COENG-15932',
+        relevance: 'Supports progress-control and schedule/cost integration in executive summaries.',
+    },
+];
 const ALLOWED_MIME_BY_EXTENSION: Record<string, string[]> = {
     '.pdf': ['application/pdf'],
     '.docx': [
@@ -28,9 +81,18 @@ const ALLOWED_MIME_BY_EXTENSION: Record<string, string[]> = {
     '.webp': ['image/webp'],
 };
 
-type ComplianceAnalysis = Awaited<ReturnType<typeof checkCompliance>>;
-type RiskAnalysis = Awaited<ReturnType<typeof analyzeRisk>>;
-type CostAnalysis = Awaited<ReturnType<typeof predictCost>>;
+type ComplianceAnalysis = Awaited<ReturnType<typeof checkCompliance>> & {
+    analysisStatus?: 'available' | 'not_available';
+    analysisNotes?: string[];
+};
+type RiskAnalysis = Awaited<ReturnType<typeof analyzeRisk>> & {
+    analysisStatus?: 'available' | 'not_available';
+    analysisNotes?: string[];
+};
+type CostAnalysis = Awaited<ReturnType<typeof predictCost>> & {
+    analysisStatus?: 'available' | 'not_available';
+    analysisNotes?: string[];
+};
 
 const toBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
     if (typeof value !== 'string') return fallback;
@@ -205,12 +267,12 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     if (ragContext.chunks.length === 0) {
         extractionQuality.warnings.push('No external reference chunks retrieved. Report is grounded only on extracted project data.');
     } else {
-        extractionQuality.warnings.push(`RAG grounded with ${ragContext.chunks.length} retrieved chunk(s) across index(es): ${ragContext.diagnostics.indexesQueried.join(', ') || 'N/A'}.`);
+        extractionQuality.warnings.push(`RAG grounded with ${ragContext.chunks.length} retrieved chunk(s) across index(es): ${ragContext.diagnostics.indexesQueried.join(', ') || NOT_AVAILABLE_TEXT}.`);
     }
     if (analysisWarnings.length > 0) {
         extractionQuality.reviewRequired = true;
         extractionQuality.warnings.push(...analysisWarnings);
-        extractionQuality.warnings.push('Partial AI analysis mode enabled: one or more specialist agents failed and conservative fallback values were applied.');
+        extractionQuality.warnings.push('Partial AI analysis mode enabled: one or more specialist agents failed; unavailable domains are explicitly marked as not available.');
     }
     const materialRows = Array.isArray(blueprint?.materials) ? blueprint.materials : [];
 
@@ -264,23 +326,34 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     // 4. Trigger DevOps Agent
     const devOpsInsight = await runDevOpsAgent(partialResult as WorkflowResult);
+    const complianceAvailable = compliance.analysisStatus !== 'not_available';
+    const riskAvailable = risk.analysisStatus !== 'not_available';
+    const costAvailable = cost.analysisStatus !== 'not_available';
 
     // 5. Synthesis
     const insights: DevOpsInsight[] = [
         {
             agentId: 'Structural-Auditor-L4',
-            status: compliance.overallStatus === 'Pass' ? 'Optimized' : 'Warning',
-            message: compliance.overallStatus === 'Pass'
+            status: !complianceAvailable
+                ? 'Warning'
+                : (compliance.overallStatus === 'Pass' ? 'Optimized' : 'Warning'),
+            message: !complianceAvailable
+                ? 'Compliance analysis unavailable; manual clause-wise audit required.'
+                : compliance.overallStatus === 'Pass'
                 ? 'Full alignment with NBC 2016 detected.'
                 : `Detected ${compliance.violations.length} discrepancies in code compliance.`,
-            actionRequired: compliance.overallStatus !== 'Pass'
+            actionRequired: !complianceAvailable || compliance.overallStatus !== 'Pass'
         },
         devOpsInsight,
         {
             agentId: 'Risk-Aggregator-Realtime',
-            status: risk.level === 'High' || risk.level === 'Critical' ? 'Warning' : 'Optimized',
-            message: `Structural stress index at ${risk.riskIndex}%. Mitigation strategies mapped.`,
-            actionRequired: risk.riskIndex > 60
+            status: !riskAvailable
+                ? 'Warning'
+                : (risk.level === 'High' || risk.level === 'Critical' ? 'Warning' : 'Optimized'),
+            message: !riskAvailable
+                ? 'Risk analysis unavailable; manual hazard register and mitigation plan required.'
+                : `Structural stress index at ${risk.riskIndex}%. Mitigation strategies mapped.`,
+            actionRequired: !riskAvailable || risk.riskIndex > 60
         }
     ];
 
@@ -308,24 +381,33 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     const complianceFailures = Array.isArray(compliance.violations) ? compliance.violations.length : 0;
     const criticalConflicts = conflicts.filter((item: { riskCategory: string }) => item.riskCategory === 'Critical').length;
-    const approvalReadinessScore = clamp(
-        Math.round(100 - complianceFailures * 11 - risk.riskIndex * 0.55 - criticalConflicts * 3),
-        0,
-        100
-    );
-    const delayImpactDays =
-        complianceFailures === 0 && risk.riskIndex < 45
+    const hasUnavailableDomain = !complianceAvailable || !riskAvailable || !costAvailable;
+    const approvalReadinessScore = hasUnavailableDomain
+        ? undefined
+        : clamp(
+            Math.round(100 - complianceFailures * 11 - risk.riskIndex * 0.55 - criticalConflicts * 3),
+            0,
+            100
+        );
+    const delayImpactDays = hasUnavailableDomain
+        ? undefined
+        : (complianceFailures === 0 && risk.riskIndex < 45
             ? 0
-            : Math.max(1, Math.round(complianceFailures * 2 + criticalConflicts * 3 + risk.riskIndex / 28));
-    const redesignRequired = criticalConflicts > 1 || risk.riskIndex >= 65 || extractionQuality.coverageScore < 55;
-    const complianceScore = clamp(
-        Math.round(((compliance.overallStatus === 'Pass' ? 100 : 70) + (100 - risk.riskIndex)) / 2),
-        0,
-        100
-    );
+            : Math.max(1, Math.round(complianceFailures * 2 + criticalConflicts * 3 + risk.riskIndex / 28)));
+    const redesignRequired = hasUnavailableDomain
+        ? true
+        : (criticalConflicts > 1 || risk.riskIndex >= 65 || extractionQuality.coverageScore < 55);
+    const complianceScore = hasUnavailableDomain
+        ? undefined
+        : clamp(
+            Math.round(((compliance.overallStatus === 'Pass' ? 100 : 70) + (100 - risk.riskIndex)) / 2),
+            0,
+            100
+        );
     const constructionControlSummary = buildConstructionControlSummary({
         conflicts,
         blueprint,
+        compliance,
         risk,
         cost,
         extractionQuality,
@@ -347,8 +429,8 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         approvalBlockerCount: (devOpsInsight.actionRequired ? 1 : 0) + compliance.violations.filter((v: any) => String(v.ruleId || '').includes('CRITICAL')).length,
         conflicts,
 
-        costImpactEstimate: cost.total,
-        currency: cost.currency,
+        costImpactEstimate: costAvailable ? cost.total : undefined,
+        currency: costAvailable ? cost.currency : undefined,
         complianceScore,
         approvalReadinessScore,
         delayImpactDays,
@@ -361,6 +443,7 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
             sizeBytes: input.size,
         },
         constructionControlSummary,
+        referenceLibrary: buildReferenceLibrary(ragContext),
 
         modelVersion,
         approvalChain,
@@ -535,26 +618,23 @@ const resolveComplianceAnalysis = (
     settled: PromiseSettledResult<ComplianceAnalysis>,
     warnings: string[]
 ): ComplianceAnalysis => {
-    if (settled.status === 'fulfilled') return settled.value;
+    if (settled.status === 'fulfilled') {
+        return {
+            ...settled.value,
+            analysisStatus: 'available',
+        };
+    }
     const errorMessage = toErrorMessage(settled.reason);
-    console.error('Compliance analysis failed, applying conservative fallback.', settled.reason);
-    warnings.push(`Compliance fallback applied: ${errorMessage}`);
+    console.error('Compliance analysis failed, marking as not available.', settled.reason);
+    warnings.push(`Compliance analysis unavailable: ${errorMessage}`);
     return {
         overallStatus: 'Warning',
-        violations: [
-            {
-                ruleId: 'ANALYSIS-UNAVAILABLE',
-                severity: 'Warning',
-                location: 'Project-Wide',
-                requiredValue: NOT_AVAILABLE_TEXT,
-                measuredValue: NOT_AVAILABLE_TEXT,
-                evidence: `Compliance analysis failed: ${errorMessage}`,
-                description: 'Compliance analysis was unavailable for this run.',
-                comment: 'Perform manual compliance review before approval.',
-                confidence: 0,
-                citationIds: [],
-            },
+        analysisStatus: 'not_available',
+        analysisNotes: [
+            `Compliance analysis failed: ${errorMessage}`,
+            'Perform manual compliance review before approval.',
         ],
+        violations: [],
     };
 };
 
@@ -562,13 +642,23 @@ const resolveRiskAnalysis = (
     settled: PromiseSettledResult<RiskAnalysis>,
     warnings: string[]
 ): RiskAnalysis => {
-    if (settled.status === 'fulfilled') return settled.value;
+    if (settled.status === 'fulfilled') {
+        return {
+            ...settled.value,
+            analysisStatus: 'available',
+        };
+    }
     const errorMessage = toErrorMessage(settled.reason);
-    console.error('Risk analysis failed, applying conservative fallback.', settled.reason);
-    warnings.push(`Risk fallback applied: ${errorMessage}`);
+    console.error('Risk analysis failed, marking as not available.', settled.reason);
+    warnings.push(`Risk analysis unavailable: ${errorMessage}`);
     return {
-        riskIndex: 60,
-        level: 'High',
+        riskIndex: 0,
+        level: 'Medium',
+        analysisStatus: 'not_available',
+        analysisNotes: [
+            `Risk analysis failed: ${errorMessage}`,
+            'Run manual safety risk workshop before execution decisions.',
+        ],
         hazards: [
             {
                 type: 'Analysis Coverage',
@@ -586,13 +676,23 @@ const resolveCostAnalysis = (
     settled: PromiseSettledResult<CostAnalysis>,
     warnings: string[]
 ): CostAnalysis => {
-    if (settled.status === 'fulfilled') return settled.value;
+    if (settled.status === 'fulfilled') {
+        return {
+            ...settled.value,
+            analysisStatus: 'available',
+        };
+    }
     const errorMessage = toErrorMessage(settled.reason);
-    console.error('Cost analysis failed, applying conservative fallback.', settled.reason);
-    warnings.push(`Cost fallback applied: ${errorMessage}`);
+    console.error('Cost analysis failed, marking as not available.', settled.reason);
+    warnings.push(`Cost analysis unavailable: ${errorMessage}`);
     return {
         total: 0,
         currency: 'INR',
+        analysisStatus: 'not_available',
+        analysisNotes: [
+            `Cost analysis failed: ${errorMessage}`,
+            'Manual quantity-surveyor estimate is required before budget approval.',
+        ],
         breakdown: [],
         duration: NOT_AVAILABLE_TEXT,
         confidenceScore: 0,
@@ -724,18 +824,23 @@ const describeTopConflictRefs = (conflicts: WorkflowResult['conflicts']): string
 const buildConstructionControlSummary = ({
     conflicts,
     blueprint,
+    compliance,
     risk,
     cost,
     extractionQuality,
 }: {
     conflicts: WorkflowResult['conflicts'];
     blueprint: any;
+    compliance: any;
     risk: any;
     cost: any;
     extractionQuality: ReturnType<typeof buildExtractionQuality>;
 }): NonNullable<WorkflowResult['constructionControlSummary']> => {
     const criticalConflicts = conflicts.filter((conflict) => conflict.riskCategory === 'Critical').length;
     const warningConflicts = Math.max(0, conflicts.length - criticalConflicts);
+    const complianceUnavailable = String(compliance?.analysisStatus || '').toLowerCase() === 'not_available';
+    const riskUnavailable = String(risk?.analysisStatus || '').toLowerCase() === 'not_available';
+    const costUnavailable = String(cost?.analysisStatus || '').toLowerCase() === 'not_available';
     const hasCostBreakdown = Array.isArray(cost?.breakdown) && cost.breakdown.length > 0;
     const hasMaterials = Array.isArray(blueprint?.materials) && blueprint.materials.length > 0;
     const hazards = Array.isArray(risk?.hazards) ? risk.hazards.length : 0;
@@ -751,7 +856,7 @@ const buildConstructionControlSummary = ({
                 critical: extractionQuality.coverageScore < 55,
                 warning: extractionQuality.coverageScore < 75,
             }),
-            evidence: `Coverage ${extractionQuality.coverageScore}% | Floors ${blueprint?.totalFloors ?? 'N/A'} | Area ${blueprint?.totalArea ?? 'N/A'} sq.m`,
+            evidence: `Coverage ${extractionQuality.coverageScore}% | Floors ${blueprint?.totalFloors ?? NOT_AVAILABLE_TEXT} | Area ${blueprint?.totalArea ?? NOT_AVAILABLE_TEXT} sq.m`,
             action: extractionQuality.coverageScore < 75
                 ? 'Attach clearer drawings and baseline schedule snapshot for planned vs actual tracking.'
                 : 'Continue periodic progress updates with baseline comparison.',
@@ -761,12 +866,14 @@ const buildConstructionControlSummary = ({
             title: 'Cost Control',
             requirement: 'Report certified total cost, category breakdown, and duration outlook.',
             status: gateStatus({
-                critical: !Number.isFinite(Number(cost?.total)) || Number(cost?.total) <= 0,
+                critical: costUnavailable || !Number.isFinite(Number(cost?.total)) || Number(cost?.total) <= 0,
                 warning: !hasCostBreakdown,
             }),
-            evidence: `CAPEX ${Number(cost?.total || 0).toLocaleString()} ${cost?.currency || 'INR'} | Breakdown rows ${hasCostBreakdown ? cost.breakdown.length : 0} | Duration ${cost?.duration || 'N/A'}`,
-            action: (!Number.isFinite(Number(cost?.total)) || Number(cost?.total) <= 0 || !hasCostBreakdown)
-                ? 'Add signed BOQ rates and package-wise cost split before procurement decisions.'
+            evidence: costUnavailable
+                ? `Cost analysis ${NOT_AVAILABLE_TEXT}.`
+                : `CAPEX ${Number(cost?.total || 0).toLocaleString()} ${cost?.currency || 'INR'} | Breakdown rows ${hasCostBreakdown ? cost.breakdown.length : 0} | Duration ${cost?.duration || NOT_AVAILABLE_TEXT}`,
+            action: (costUnavailable || !Number.isFinite(Number(cost?.total)) || Number(cost?.total) <= 0 || !hasCostBreakdown)
+                ? 'Add signed BOQ rates and package-wise cost split before procurement decisions. Mark unavailable rows explicitly.'
                 : 'Maintain variance tracking against sanctioned estimate.',
         },
         {
@@ -787,11 +894,15 @@ const buildConstructionControlSummary = ({
             title: 'Safety & Risk',
             requirement: 'Monitor risk index, active hazards, and mandatory site safety controls.',
             status: gateStatus({
-                critical: Number(risk?.riskIndex || 0) >= 70 || String(risk?.level || '').toLowerCase() === 'critical',
-                warning: Number(risk?.riskIndex || 0) >= 50 || String(risk?.level || '').toLowerCase() === 'high',
+                critical: !riskUnavailable && (Number(risk?.riskIndex || 0) >= 70 || String(risk?.level || '').toLowerCase() === 'critical'),
+                warning: riskUnavailable || Number(risk?.riskIndex || 0) >= 50 || String(risk?.level || '').toLowerCase() === 'high',
             }),
-            evidence: `Risk index ${risk?.riskIndex ?? 'N/A'} (${risk?.level || 'N/A'}) | Hazards ${hazards}`,
-            action: Number(risk?.riskIndex || 0) >= 50
+            evidence: riskUnavailable
+                ? `Risk analysis ${NOT_AVAILABLE_TEXT}.`
+                : `Risk index ${risk?.riskIndex ?? NOT_AVAILABLE_TEXT} (${risk?.level || NOT_AVAILABLE_TEXT}) | Hazards ${hazards}`,
+            action: riskUnavailable
+                ? 'Run manual risk workshop and upload hazard register evidence.'
+                : Number(risk?.riskIndex || 0) >= 50
                 ? 'Issue mitigation owners with due dates and verify closure in next cycle.'
                 : 'Keep routine toolbox, hazard log, and permit controls active.',
         },
@@ -801,10 +912,14 @@ const buildConstructionControlSummary = ({
             requirement: 'List code references, observed deviations, and closure actions with confidence.',
             status: gateStatus({
                 critical: criticalConflicts > 0,
-                warning: warningConflicts > 0,
+                warning: warningConflicts > 0 || complianceUnavailable,
             }),
-            evidence: `Critical ${criticalConflicts} | Warning ${warningConflicts} | Refs ${describeTopConflictRefs(conflicts)}`,
-            action: criticalConflicts > 0
+            evidence: complianceUnavailable
+                ? `Compliance analysis ${NOT_AVAILABLE_TEXT}.`
+                : `Critical ${criticalConflicts} | Warning ${warningConflicts} | Refs ${describeTopConflictRefs(conflicts)}`,
+            action: complianceUnavailable
+                ? 'Execute manual clause-by-clause compliance audit before approvals.'
+                : criticalConflicts > 0
                 ? 'Close critical code deviations before execution approvals.'
                 : warningConflicts > 0
                     ? 'Track warnings to closure with responsible engineer.'
@@ -818,7 +933,7 @@ const buildConstructionControlSummary = ({
                 critical: extractionQuality.reviewRequired && criticalMissing > 0,
                 warning: extractionQuality.reviewRequired,
             }),
-            evidence: `ReviewRequired ${extractionQuality.reviewRequired ? 'Yes' : 'No'} | OCR chars ${extractionQuality.rawTextLength ?? 'N/A'} | Missing ${missingFields}`,
+            evidence: `ReviewRequired ${extractionQuality.reviewRequired ? 'Yes' : 'No'} | OCR chars ${extractionQuality.rawTextLength ?? NOT_AVAILABLE_TEXT} | Missing ${missingFields}`,
             action: extractionQuality.reviewRequired
                 ? 'Re-upload high-resolution latest revision with explicit labels and stamped tables.'
                 : 'Document package is acceptable for AI-assisted reporting.',
@@ -826,9 +941,30 @@ const buildConstructionControlSummary = ({
     ];
 
     return {
-        reportingStandard: 'Construction control matrix aligned to progress, quality, safety, cost, and code closure.',
+        reportingStandard: 'Control matrix aligned with ISO 19650 information management, ISO 31000 risk method, and auditable cost/schedule assurance practices.',
         generatedAt: new Date().toISOString(),
         gates,
+    };
+};
+
+const buildReferenceLibrary = (
+    context: RagRetrievedContext
+): NonNullable<WorkflowResult['referenceLibrary']> => {
+    const retrievedCitations = (context?.chunks || []).map((chunk) => ({
+        citationId: chunk.citationId,
+        title: chunk.title || NOT_AVAILABLE_TEXT,
+        source: chunk.source || NOT_AVAILABLE_TEXT,
+        collection: chunk.collection || NOT_AVAILABLE_TEXT,
+        score: Number.isFinite(Number(chunk.rerankerScore))
+            ? Number(chunk.rerankerScore)
+            : (Number.isFinite(Number(chunk.score)) ? Number(chunk.score) : undefined),
+        createdAt: chunk.createdAt || undefined,
+    }));
+
+    return {
+        standards: INDUSTRY_STANDARD_REFERENCES,
+        researchPapers: INDUSTRY_RESEARCH_REFERENCES,
+        retrievedCitations,
     };
 };
 

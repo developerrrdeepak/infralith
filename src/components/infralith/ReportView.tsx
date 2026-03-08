@@ -33,6 +33,14 @@ import { useAppContext } from '@/contexts/app-context';
 import { useToast } from '@/hooks/use-toast';
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const NOT_AVAILABLE_TEXT = 'Not available in provided document data';
+
+const valueOrNotAvailable = (value: unknown): string => {
+  if (value == null) return NOT_AVAILABLE_TEXT;
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : NOT_AVAILABLE_TEXT;
+  const text = String(value).trim();
+  return text.length > 0 ? text : NOT_AVAILABLE_TEXT;
+};
 
 function SectionHeading({ icon: Icon, title, subtitle }: { icon: any; title: string; subtitle?: string }) {
   return (
@@ -103,13 +111,13 @@ export default function ReportView() {
     setTimeout(() => {
       setDraftedRfi(`REQUEST FOR INFORMATION - RFI-${new Date().getFullYear()}-001
 Issued: ${new Date().toLocaleDateString()}
-Project: ${(infralithResult as any)?.projectScope || 'N/A'}
+Project: ${valueOrNotAvailable((infralithResult as any)?.projectScope)}
 Subject: Compliance discrepancy follow-up
 
 DESCRIPTION:
-Ref regulation: ${selectedConflict?.regulationRef || 'N/A'}
-Measured: ${selectedConflict?.measuredValue || 'N/A'}
-Required: ${selectedConflict?.requiredValue || 'N/A'}
+Ref regulation: ${valueOrNotAvailable(selectedConflict?.regulationRef)}
+Measured: ${valueOrNotAvailable(selectedConflict?.measuredValue)}
+Required: ${valueOrNotAvailable(selectedConflict?.requiredValue)}
 
 REQUEST:
 Provide revised detail and section drawings to resolve this non-compliance.`);
@@ -134,7 +142,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
   const r = infralithResult as any;
   const role = r.role || 'Engineer';
   const timestamp = r.timestamp;
-  const projectScope = r.projectScope || 'Untitled Project';
+  const projectScope = valueOrNotAvailable(r.projectScope);
   const parsedBlueprint = r.parsedBlueprint || {};
   const materials = Array.isArray(r.materials) && r.materials.length > 0
     ? r.materials
@@ -149,10 +157,14 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
   const totalConflicts = conflicts.length;
   const criticalCount = conflicts.filter((c: any) => c.riskCategory === 'Critical').length;
   const reportNo = `INFRA-${timestamp?.slice(0, 10)?.replace(/-/g, '') || 'NODATE'}`;
-  const formattedDate = timestamp ? new Date(timestamp).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '-';
-  const formattedTime = timestamp ? new Date(timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-';
+  const formattedDate = timestamp ? new Date(timestamp).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : NOT_AVAILABLE_TEXT;
+  const formattedTime = timestamp ? new Date(timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : NOT_AVAILABLE_TEXT;
   const pipelineLatencyMs = typeof r.pipelineLatencyMs === 'number' ? r.pipelineLatencyMs : null;
-  const pipelineSeconds = pipelineLatencyMs != null ? `${(pipelineLatencyMs / 1000).toFixed(2)}s` : 'N/A';
+  const pipelineSeconds = pipelineLatencyMs != null ? `${(pipelineLatencyMs / 1000).toFixed(2)}s` : NOT_AVAILABLE_TEXT;
+  const complianceUnavailable = r.complianceReport?.analysisStatus === 'not_available';
+  const riskUnavailable = r.riskReport?.analysisStatus === 'not_available';
+  const costUnavailable = r.costEstimate?.analysisStatus === 'not_available';
+  const anyDomainUnavailable = complianceUnavailable || riskUnavailable || costUnavailable;
   const confidenceFromCost = typeof r.costEstimate?.confidenceScore === 'number' ? r.costEstimate.confidenceScore : null;
   const aiConfidencePct = confidenceFromCost != null
     ? Math.round(clamp(confidenceFromCost * 100, 0, 100))
@@ -160,23 +172,28 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
   const readinessScore = typeof r.approvalReadinessScore === 'number' ? r.approvalReadinessScore : null;
   const delayImpactDays = typeof r.delayImpactDays === 'number' ? r.delayImpactDays : null;
   const costImpactDisplay =
-    typeof r.costImpactEstimate === 'number'
+    !costUnavailable && typeof r.costImpactEstimate === 'number'
       ? `${r.costImpactEstimate.toLocaleString()} ${typeof r.currency === 'string' ? r.currency : ''}`.trim()
-      : 'N/A';
+      : NOT_AVAILABLE_TEXT;
   const redesignRequired = !!r.redesignRequired;
   const docInfo = r.documentInfo || null;
   const constructionControlSummary = r.constructionControlSummary || null;
   const constructionGates = Array.isArray(constructionControlSummary?.gates) ? constructionControlSummary.gates : [];
+  const referenceLibrary = r.referenceLibrary || {};
+  const standardsApplied = Array.isArray(referenceLibrary?.standards) ? referenceLibrary.standards : [];
+  const researchPapers = Array.isArray(referenceLibrary?.researchPapers) ? referenceLibrary.researchPapers : [];
+  const retrievedCitations = Array.isArray(referenceLibrary?.retrievedCitations) ? referenceLibrary.retrievedCitations : [];
   const approvalStatus = Array.isArray(r.approvalChain) && r.approvalChain.length > 0
     ? String(r.approvalChain[0]?.status || 'pending').toUpperCase()
     : 'PENDING';
-  const standardsApplied = [
-    'IS 456:2000',
-    'National Building Code 2016 (India)',
-    'IS 13920',
-    'ISO 19650 document-control conventions',
-  ];
   const assumptions = Array.isArray(r.costEstimate?.assumptions) ? r.costEstimate.assumptions : [];
+  const dataAvailability = [
+    { field: 'Project Scope', status: projectScope !== NOT_AVAILABLE_TEXT, source: 'OCR + Parser' },
+    { field: 'Compliance Analysis', status: !complianceUnavailable, source: 'Compliance Agent + RAG' },
+    { field: 'Risk Analysis', status: !riskUnavailable, source: 'Risk Agent + RAG' },
+    { field: 'Cost Estimate', status: !costUnavailable, source: 'Cost Agent + RAG' },
+    { field: 'Material BOQ', status: materials.length > 0, source: 'Document Extraction' },
+  ];
 
   const handlePrintPdf = () => {
     if (typeof window === 'undefined') return;
@@ -254,9 +271,9 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
                 {[
                   ['Report Date', formattedDate],
                   ['Report Time', formattedTime],
-                  ['Prepared By', `Infralith Orchestrator ${r.modelVersion?.orchestratorVersion || 'N/A'}`],
+                  ['Prepared By', `Infralith Orchestrator ${valueOrNotAvailable(r.modelVersion?.orchestratorVersion)}`],
                   ['Reviewed For', role],
-                  ['AI Confidence', aiConfidencePct > 0 ? `${aiConfidencePct}%` : 'N/A'],
+                  ['AI Confidence', aiConfidencePct > 0 ? `${aiConfidencePct}%` : NOT_AVAILABLE_TEXT],
                   ['Doc Status', isCritical || extractionNeedsReview ? 'REVIEW REQUIRED' : 'READY'],
                 ].map(([k, v]) => (
                   <div key={k} className="flex flex-col gap-0.5">
@@ -294,9 +311,9 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
             ['Revision', 'R0'],
             ['Issue Status', approvalStatus],
             ['Jurisdiction Focus', 'India'],
-            ['Run ID', r.modelVersion?.runId || 'N/A'],
-            ['Parameter Hash', r.modelVersion?.parameterHash || 'N/A'],
-            ['Model Route', r.modelVersion?.llmModel || 'N/A'],
+            ['Run ID', valueOrNotAvailable(r.modelVersion?.runId)],
+            ['Parameter Hash', valueOrNotAvailable(r.modelVersion?.parameterHash)],
+            ['Model Route', valueOrNotAvailable(r.modelVersion?.llmModel)],
             ['Generated On', `${formattedDate} ${formattedTime}`],
           ].map(([k, v]) => (
             <div key={k} className="flex flex-col gap-0.5 border border-border/60 rounded-lg p-3">
@@ -307,32 +324,59 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
         <div className="mt-4">
           <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Applicable Standards</p>
-          <div className="flex flex-wrap gap-2">
-            {standardsApplied.map((standard) => (
-              <Badge key={standard} variant="outline" className="text-[10px] font-bold uppercase tracking-wide">
-                {standard}
-              </Badge>
-            ))}
-          </div>
+          {standardsApplied.length > 0 ? (
+            <div className="space-y-2">
+              {standardsApplied.map((standard: any) => (
+                <div key={standard.id} className="border border-border/60 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-foreground">{valueOrNotAvailable(standard.title)}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{valueOrNotAvailable(standard.scope)}</p>
+                  <p className="text-[11px] text-primary mt-1 break-all">{valueOrNotAvailable(standard.sourceUrl)}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">{NOT_AVAILABLE_TEXT}</p>
+          )}
+        </div>
+        <div className="mt-4">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Research Basis</p>
+          {researchPapers.length > 0 ? (
+            <div className="space-y-2">
+              {researchPapers.map((paper: any) => (
+                <div key={paper.id} className="border border-border/60 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-foreground">{valueOrNotAvailable(paper.title)}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{valueOrNotAvailable(paper.relevance)}</p>
+                  <p className="text-[11px] text-primary mt-1 break-all">{valueOrNotAvailable(paper.sourceUrl)}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">{NOT_AVAILABLE_TEXT}</p>
+          )}
         </div>
       </div>
 
       <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
         <SectionHeading icon={BarChart3} title="Section 1 - Executive Summary" subtitle="High-level indicators extracted by the AI evaluation pipeline." />
+        {anyDomainUnavailable && (
+          <p className="text-xs text-orange-700 dark:text-orange-400 bg-orange-500/10 border border-orange-500/20 rounded-lg px-3 py-2 mb-3">
+            One or more specialist analyses were unavailable. Financial/readiness metrics are marked as {NOT_AVAILABLE_TEXT}.
+          </p>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           <KPICard label="Total Issues" value={totalConflicts} sub="Non-compliance items" color={totalConflicts > 0 ? 'text-orange-500' : 'text-emerald-500'} />
           <KPICard label="Critical" value={criticalCount} sub="Require immediate action" color={criticalCount > 0 ? 'text-destructive' : 'text-emerald-500'} />
           {role === 'Supervisor' || role === 'Admin' ? (
             <>
-              <KPICard label="Readiness Score" value={readinessScore != null ? `${readinessScore}/100` : 'N/A'} sub="Approval readiness" color={(readinessScore || 0) > 80 ? 'text-emerald-500' : 'text-orange-500'} />
-              <KPICard label="Delay Risk" value={delayImpactDays != null ? `+${delayImpactDays} days` : 'N/A'} sub="Projected schedule slip" color={(delayImpactDays || 0) > 0 ? 'text-destructive' : 'text-emerald-500'} />
+              <KPICard label="Readiness Score" value={readinessScore != null ? `${readinessScore}/100` : NOT_AVAILABLE_TEXT} sub="Approval readiness" color={(readinessScore || 0) > 80 ? 'text-emerald-500' : 'text-orange-500'} />
+              <KPICard label="Delay Risk" value={delayImpactDays != null ? `+${delayImpactDays} days` : NOT_AVAILABLE_TEXT} sub="Projected schedule slip" color={(delayImpactDays || 0) > 0 ? 'text-destructive' : 'text-emerald-500'} />
               <KPICard label="Cost Impact" value={costImpactDisplay} sub="Remediation estimate" />
             </>
           ) : (
             <>
               <KPICard label="BOQ Items" value={materials.length} sub="Material categories" />
               <KPICard label="Conflicts Found" value={totalConflicts} sub="Regulatory tolerance" color={totalConflicts > 0 ? 'text-destructive' : 'text-emerald-500'} />
-              <KPICard label="AI Confidence" value={aiConfidencePct > 0 ? `${aiConfidencePct}%` : 'N/A'} sub="Pipeline confidence" color="text-emerald-500" />
+              <KPICard label="AI Confidence" value={aiConfidencePct > 0 ? `${aiConfidencePct}%` : NOT_AVAILABLE_TEXT} sub="Pipeline confidence" color="text-emerald-500" />
               <KPICard label="Status" value={isCritical ? 'Review' : 'Passed'} sub="Overall evaluation" color={isCritical ? 'text-destructive' : 'text-emerald-500'} />
             </>
           )}
@@ -352,7 +396,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           {constructionGates.map((gate: any, index: number) => (
             <div key={`${gate?.key || 'gate'}-${index}`} className="grid px-4 py-3 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-start" style={{ gridTemplateColumns: '9rem 1.2fr 6rem 1.3fr 1.1fr' }}>
               <span className="font-semibold text-foreground text-xs">{gate?.title || 'Control'}</span>
-              <span className="text-xs text-muted-foreground">{gate?.requirement || '-'}</span>
+              <span className="text-xs text-muted-foreground">{valueOrNotAvailable(gate?.requirement)}</span>
               <span>
                 <Badge className={
                   gate?.status === 'Critical'
@@ -364,8 +408,8 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
                   {gate?.status || 'Pass'}
                 </Badge>
               </span>
-              <span className="text-xs text-muted-foreground">{gate?.evidence || '-'}</span>
-              <span className="text-xs text-foreground">{gate?.action || '-'}</span>
+              <span className="text-xs text-muted-foreground">{valueOrNotAvailable(gate?.evidence)}</span>
+              <span className="text-xs text-foreground">{valueOrNotAvailable(gate?.action)}</span>
             </div>
           ))}
         </div>
@@ -399,6 +443,24 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       )}
 
+      <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
+        <div className="p-6">
+          <SectionHeading icon={Activity} title="Section 2A - Data Availability Register" subtitle="Mandatory declaration of what was available vs not available in uploaded evidence." />
+        </div>
+        <TableRow header cells={['Field', 'Status', 'Source Basis']} />
+        {dataAvailability.map((entry) => (
+          <div key={entry.field} className="grid px-4 py-3 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-center" style={{ gridTemplateColumns: '1.2fr 8rem 1fr' }}>
+            <span className="font-semibold text-foreground text-xs">{entry.field}</span>
+            <span>
+              <Badge className={entry.status ? 'bg-emerald-500/10 text-emerald-600 border-0 text-[10px] font-bold uppercase' : 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-0 text-[10px] font-bold uppercase'}>
+                {entry.status ? 'Available' : 'Not Available'}
+              </Badge>
+            </span>
+            <span className="text-xs text-muted-foreground">{valueOrNotAvailable(entry.source)}</span>
+          </div>
+        ))}
+      </div>
+
       {(role === 'Engineer' || role === 'Admin') && (
         <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
           <div className="p-6">
@@ -411,15 +473,15 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
                 <div key={i} className="grid px-4 py-3.5 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-center" style={{ gridTemplateColumns: '2rem 1fr 1fr 5.5rem 6.2rem 6.2rem 6rem' }}>
                   <span className="font-mono text-muted-foreground text-xs">{String(i + 1).padStart(2, '0')}</span>
                   <div className="min-w-0">
-                    <p className="font-semibold text-foreground text-xs truncate">{c.regulationRef}</p>
+                    <p className="font-semibold text-foreground text-xs truncate">{valueOrNotAvailable(c.regulationRef)}</p>
                     {typeof c.confidenceScore === 'number' && (
                       <p className="text-[10px] text-muted-foreground font-mono">confidence {Math.round(clamp(c.confidenceScore, 0, 1) * 100)}%</p>
                     )}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-muted-foreground text-xs truncate">{c.location}</p>
+                    <p className="text-muted-foreground text-xs truncate">{valueOrNotAvailable(c.location)}</p>
                     {c.evidence && (
-                      <p className="text-[10px] text-muted-foreground/90 truncate">evidence: {c.evidence}</p>
+                      <p className="text-[10px] text-muted-foreground/90 truncate">evidence: {valueOrNotAvailable(c.evidence)}</p>
                     )}
                     {Array.isArray(c.citationIds) && c.citationIds.length > 0 && (
                       <p className="text-[10px] text-primary/90 truncate">citations: {c.citationIds.join(', ')}</p>
@@ -427,11 +489,11 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
                   </div>
                   <span>
                     <Badge className={c.riskCategory === 'Critical' ? 'bg-destructive text-destructive-foreground text-[10px] font-bold uppercase' : 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-0 text-[10px] font-bold uppercase'}>
-                      {c.riskCategory}
+                      {valueOrNotAvailable(c.riskCategory)}
                     </Badge>
                   </span>
-                  <span className="text-xs font-medium text-emerald-600">{c.requiredValue}</span>
-                  <span className="text-xs font-bold text-destructive">{c.measuredValue}</span>
+                  <span className="text-xs font-medium text-emerald-600">{valueOrNotAvailable(c.requiredValue)}</span>
+                  <span className="text-xs font-bold text-destructive">{valueOrNotAvailable(c.measuredValue)}</span>
                   {c.riskCategory === 'Critical' ? (
                     <Button size="sm" className="h-7 text-[10px] font-bold px-2" onClick={() => { setSelectedConflict(c); setIsRfiOpen(true); setRfiTranscript(''); setDraftedRfi(''); }}>
                       <Wand2 className="h-3 w-3 mr-1" /> Draft RFI
@@ -465,10 +527,10 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
           {materials.map((m: any, i: number) => (
             <div key={i} className="grid px-4 py-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-center gap-3" style={{ gridTemplateColumns: '2rem 1fr 5rem 4rem 1fr' }}>
               <span className="font-mono text-muted-foreground text-xs">{String(i + 1).padStart(2, '0')}</span>
-              <span className="font-semibold text-foreground">{m.item}</span>
-              <span className="font-bold text-foreground font-mono">{m.quantity}</span>
-              <span className="text-muted-foreground">{m.unit}</span>
-              <span className="text-xs text-muted-foreground">{m.spec ? `Spec ${m.spec}` : 'Verify with site measure sheet'}</span>
+              <span className="font-semibold text-foreground">{valueOrNotAvailable(m.item)}</span>
+              <span className="font-bold text-foreground font-mono">{valueOrNotAvailable(m.quantity)}</span>
+              <span className="text-muted-foreground">{valueOrNotAvailable(m.unit)}</span>
+              <span className="text-xs text-muted-foreground">{m.spec ? `Spec ${m.spec}` : `${NOT_AVAILABLE_TEXT}; verify with site measure sheet`}</span>
             </div>
           ))}
           <div className="px-6 py-3 bg-muted/20 border-t border-border text-xs text-muted-foreground">
@@ -508,6 +570,30 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
       </div>
 
+      <div className="report-section bg-card border border-border rounded-2xl overflow-hidden shadow-sm mb-4">
+        <div className="p-6">
+          <SectionHeading icon={FileText} title="Section 5A - Evidence and Citation Register" subtitle="Retrieved evidence library used for grounded compliance, risk, and cost reasoning." />
+        </div>
+        {retrievedCitations.length > 0 ? (
+          <>
+            <TableRow header cells={['Citation', 'Title', 'Source', 'Collection', 'Score']} />
+            {retrievedCitations.map((row: any) => (
+              <div key={row.citationId} className="grid px-4 py-3 gap-3 border-b border-border/50 hover:bg-muted/20 transition-colors text-sm items-start" style={{ gridTemplateColumns: '5rem 1.2fr 1.2fr 8rem 5rem' }}>
+                <span className="font-mono text-xs text-foreground">{valueOrNotAvailable(row.citationId)}</span>
+                <span className="text-xs text-foreground">{valueOrNotAvailable(row.title)}</span>
+                <span className="text-xs text-muted-foreground break-all">{valueOrNotAvailable(row.source)}</span>
+                <span className="text-xs text-muted-foreground">{valueOrNotAvailable(row.collection)}</span>
+                <span className="text-xs text-foreground font-mono">{typeof row.score === 'number' ? row.score.toFixed(3) : NOT_AVAILABLE_TEXT}</span>
+              </div>
+            ))}
+          </>
+        ) : (
+          <div className="px-6 pb-6">
+            <p className="text-xs text-muted-foreground">{NOT_AVAILABLE_TEXT}</p>
+          </div>
+        )}
+      </div>
+
       <div className="report-section bg-card border border-border rounded-2xl p-6 shadow-sm mb-4">
         <SectionHeading icon={ShieldCheck} title="Section 6 - Assumptions, Limitations, and Sign-off" subtitle="Required governance notes before approvals and submissions." />
         <div className="space-y-3 text-xs">
@@ -523,7 +609,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
           {[
-            ['Prepared By', `Infralith Orchestrator ${r.modelVersion?.orchestratorVersion || 'N/A'}`],
+            ['Prepared By', `Infralith Orchestrator ${valueOrNotAvailable(r.modelVersion?.orchestratorVersion)}`],
             ['Reviewed By', 'Supervisor / Structural Lead'],
             ['Approved By', 'Authorized Signatory'],
           ].map(([label, value]) => (
@@ -539,19 +625,19 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
       <div className="report-section bg-muted/30 border border-border rounded-2xl p-6 shadow-sm mb-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
           {[
-            ['Engine', `Infralith ${r.modelVersion?.orchestratorVersion || 'N/A'}`],
+            ['Engine', `Infralith ${valueOrNotAvailable(r.modelVersion?.orchestratorVersion)}`],
             ['Pipeline Nodes', `${(r.devOpsInsights?.length || 0) + 3}`],
             ['Processing Time', pipelineSeconds],
             ['Security', 'End-to-End Encrypted'],
-            ['Model', r.modelVersion?.llmModel || 'N/A'],
+            ['Model', valueOrNotAvailable(r.modelVersion?.llmModel)],
             ['Timestamp', formattedDate],
-            ['Report Format', 'IS / NBC 2016 Aligned'],
+            ['Report Format', 'ISO 19650 / ISO 31000 / IS-NBC Grounded'],
             ['Classification', 'CONFIDENTIAL'],
             ...(docInfo ? [
-              ['File Name', docInfo.fileName || 'N/A'],
-              ['File Type', docInfo.extension || 'N/A'],
+              ['File Name', valueOrNotAvailable(docInfo.fileName)],
+              ['File Type', valueOrNotAvailable(docInfo.extension)],
               ['File Size', `${Math.max(0, Number(docInfo.sizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB`],
-              ['Extraction Coverage', extractionQuality ? `${extractionQuality.coverageScore}%` : 'N/A'],
+              ['Extraction Coverage', extractionQuality ? `${extractionQuality.coverageScore}%` : NOT_AVAILABLE_TEXT],
             ] : []),
           ].map(([k, v]) => (
             <div key={`${k}_${v}`} className="flex flex-col gap-0.5">
@@ -597,7 +683,7 @@ Provide revised detail and section drawings to resolve this non-compliance.`);
               <Zap className="h-5 w-5 text-primary" /> AI RFI Draft Assistant
             </DialogTitle>
             <DialogDescription className="mt-1.5 text-sm">
-              Generating a formal RFI for conflict: <span className="font-bold text-foreground">"{selectedConflict?.regulationRef}"</span>
+              Generating a formal RFI for conflict: <span className="font-bold text-foreground">"{valueOrNotAvailable(selectedConflict?.regulationRef)}"</span>
             </DialogDescription>
           </div>
           <div className="p-6 bg-card">

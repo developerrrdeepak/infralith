@@ -58,6 +58,8 @@ export interface WorkflowResult {
     // Agent Reports
     complianceReport?: {
         overallStatus: 'Pass' | 'Warning' | 'Fail';
+        analysisStatus?: 'available' | 'not_available';
+        analysisNotes?: string[];
         violations: Array<{
             ruleId: string;
             description: string;
@@ -75,6 +77,8 @@ export interface WorkflowResult {
     riskReport?: {
         riskIndex: number;
         level: 'Low' | 'Medium' | 'High' | 'Critical';
+        analysisStatus?: 'available' | 'not_available';
+        analysisNotes?: string[];
         hazards: Array<{
             type: string;
             severity: string;
@@ -88,6 +92,8 @@ export interface WorkflowResult {
     costEstimate?: {
         total: number;
         currency: string;
+        analysisStatus?: 'available' | 'not_available';
+        analysisNotes?: string[];
         breakdown: Array<{
             category: string;
             amount: number;
@@ -140,6 +146,28 @@ export interface WorkflowResult {
         reportingStandard: string;
         generatedAt: string;
         gates: ConstructionControlGate[];
+    };
+    referenceLibrary?: {
+        standards: Array<{
+            id: string;
+            title: string;
+            scope: string;
+            sourceUrl: string;
+        }>;
+        researchPapers: Array<{
+            id: string;
+            title: string;
+            sourceUrl: string;
+            relevance: string;
+        }>;
+        retrievedCitations: Array<{
+            citationId: string;
+            title: string;
+            source: string;
+            collection: string;
+            score?: number;
+            createdAt?: string;
+        }>;
     };
 
     /** ENTERPRISE FIELDS */
