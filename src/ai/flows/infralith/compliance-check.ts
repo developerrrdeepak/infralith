@@ -11,6 +11,35 @@ const clamp01 = (value: unknown, fallback: number): number => {
     return Math.max(0, Math.min(1, parsed));
 };
 
+const asText = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+const extractCitationIds = (...values: unknown[]): string[] => {
+    const found = new Set<string>();
+    for (const value of values) {
+        const text = asText(value);
+        if (!text) continue;
+        const matches = text.match(/\bR\d+\b/gi) || [];
+        for (const match of matches) {
+            found.add(match.toUpperCase());
+        }
+    }
+    return [...found];
+};
+
+const normalizeOverallStatus = (value: unknown): 'Pass' | 'Warning' | 'Fail' => {
+    const normalized = asText(value).toLowerCase();
+    if (normalized === 'pass') return 'Pass';
+    if (normalized === 'fail') return 'Fail';
+    if (normalized === 'warning' || normalized === 'warn') return 'Warning';
+    return 'Warning';
+};
+
+const normalizeSeverity = (value: unknown): 'Critical' | 'Warning' => {
+    const normalized = asText(value).toLowerCase();
+    if (normalized === 'critical' || normalized === 'high' || normalized.includes('critical')) return 'Critical';
+    return 'Warning';
+};
+
 type ComplianceOptions = {
     allowedCitationIds?: string[];
     requireCitations?: boolean;
@@ -64,56 +93,100 @@ Return one strict JSON object:
 `;
 
     const violationSchema = z.object({
-        ruleId: z.string(),
-        severity: z.enum(['Critical', 'Warning']),
-        location: z.string(),
-        requiredValue: z.string(),
-        measuredValue: z.string(),
-        evidence: z.string(),
-        description: z.string(),
-        comment: z.string(),
-        confidence: z.number().min(0).max(1),
-        citationIds: z.array(z.string()),
-    });
+        ruleId: z.union([z.string(), z.number()]).optional(),
+        rule: z.union([z.string(), z.number()]).optional(),
+        clause: z.union([z.string(), z.number()]).optional(),
+        code: z.union([z.string(), z.number()]).optional(),
+        regulationRef: z.union([z.string(), z.number()]).optional(),
+        severity: z.string().optional(),
+        level: z.string().optional(),
+        riskCategory: z.string().optional(),
+        location: z.string().optional(),
+        area: z.string().optional(),
+        section: z.string().optional(),
+        requiredValue: z.union([z.string(), z.number()]).optional(),
+        required: z.union([z.string(), z.number()]).optional(),
+        expectedValue: z.union([z.string(), z.number()]).optional(),
+        codeRequirement: z.union([z.string(), z.number()]).optional(),
+        measuredValue: z.union([z.string(), z.number()]).optional(),
+        observedValue: z.union([z.string(), z.number()]).optional(),
+        actualValue: z.union([z.string(), z.number()]).optional(),
+        evidence: z.union([z.string(), z.number()]).optional(),
+        rationale: z.union([z.string(), z.number()]).optional(),
+        proof: z.union([z.string(), z.number()]).optional(),
+        description: z.union([z.string(), z.number()]).optional(),
+        finding: z.union([z.string(), z.number()]).optional(),
+        issue: z.union([z.string(), z.number()]).optional(),
+        comment: z.union([z.string(), z.number()]).optional(),
+        action: z.union([z.string(), z.number()]).optional(),
+        recommendation: z.union([z.string(), z.number()]).optional(),
+        mitigation: z.union([z.string(), z.number()]).optional(),
+        confidence: z.union([z.number(), z.string()]).optional(),
+        score: z.union([z.number(), z.string()]).optional(),
+        citationIds: z.array(z.string()).optional(),
+    }).passthrough();
 
     const schema = z.object({
-        overallStatus: z.enum(['Pass', 'Warning', 'Fail']),
-        violations: z.array(violationSchema).max(32),
-    });
+        overallStatus: z.string().optional(),
+        status: z.string().optional(),
+        violations: z.array(violationSchema).optional(),
+        findings: z.array(violationSchema).optional(),
+        issues: z.array(violationSchema).optional(),
+    }).passthrough();
 
     try {
         const result = schema.parse(await generateAzureObject<any>(prompt, schema));
         const allowedCitationIds = new Set((options?.allowedCitationIds || []).map((id) => String(id || '').trim()).filter(Boolean));
         const requireCitations = !!options?.requireCitations && allowedCitationIds.size > 0;
+        const rawViolations = (Array.isArray(result.violations) ? result.violations
+            : Array.isArray(result.findings) ? result.findings
+                : Array.isArray(result.issues) ? result.issues
+                    : []).slice(0, 32);
 
-        const violations = result.violations.map((v) => {
-            const severity: 'Critical' | 'Warning' = v.severity === 'Critical' ? 'Critical' : 'Warning';
-            const citationIds = Array.isArray(v.citationIds)
-                ? v.citationIds
-                    .map((id) => String(id || '').trim())
-                    .filter((id) => id.length > 0 && (allowedCitationIds.size === 0 || allowedCitationIds.has(id)))
-                : [];
+        const violations = rawViolations.map((v) => {
+            const severity = normalizeSeverity(v.severity || v.level || v.riskCategory);
+            const rawCitationIds = [
+                ...(Array.isArray(v.citationIds) ? v.citationIds : []),
+                ...extractCitationIds(
+                    v.evidence,
+                    v.rationale,
+                    v.proof,
+                    v.description,
+                    v.finding,
+                    v.issue,
+                    v.comment,
+                    v.action,
+                    v.recommendation,
+                    v.mitigation
+                ),
+            ];
+            const citationIds = rawCitationIds
+                .map((id) => String(id || '').trim().toUpperCase())
+                .filter((id, index, arr) => id.length > 0 && arr.indexOf(id) === index)
+                .filter((id) => allowedCitationIds.size === 0 || allowedCitationIds.has(id));
 
             if (requireCitations && citationIds.length === 0) {
-                throw new Error(`Compliance finding "${v.ruleId}" is missing grounded citation ids.`);
+                throw new Error(`Compliance finding "${asText(v.ruleId || v.rule || v.clause || v.code || 'Unknown')}" is missing grounded citation ids.`);
             }
 
             return {
-                ruleId: String(v.ruleId || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
+                ruleId: asText(v.ruleId || v.rule || v.clause || v.code || v.regulationRef || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
                 severity,
-                location: String(v.location || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
-                requiredValue: String(v.requiredValue || v.comment || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
-                measuredValue: String(v.measuredValue || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
-                evidence: String(v.evidence || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
-                description: String(v.description || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
-                comment: String(v.comment || NOT_AVAILABLE_TEXT).trim() || NOT_AVAILABLE_TEXT,
-                confidence: Number.isFinite(Number(v.confidence)) ? clamp01(v.confidence, 0.5) : undefined,
+                location: asText(v.location || v.area || v.section || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                requiredValue: asText(v.requiredValue || v.required || v.expectedValue || v.codeRequirement || v.comment || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                measuredValue: asText(v.measuredValue || v.observedValue || v.actualValue || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                evidence: asText(v.evidence || v.rationale || v.proof || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                description: asText(v.description || v.finding || v.issue || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                comment: asText(v.comment || v.action || v.recommendation || v.mitigation || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                confidence: Number.isFinite(Number(v.confidence ?? v.score))
+                    ? clamp01(v.confidence ?? v.score, 0.5)
+                    : undefined,
                 citationIds,
             };
         });
 
         return {
-            overallStatus: result.overallStatus,
+            overallStatus: normalizeOverallStatus(result.overallStatus || result.status),
             violations,
         };
     } catch (error) {

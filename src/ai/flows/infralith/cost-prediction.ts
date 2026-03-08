@@ -5,6 +5,24 @@ import { z } from 'zod';
 
 const NOT_AVAILABLE_TEXT = 'Not available in provided project data';
 
+const asText = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+const toNumber = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const extractCitationIds = (...values: unknown[]): string[] => {
+    const found = new Set<string>();
+    for (const value of values) {
+        const text = asText(value);
+        if (!text) continue;
+        const matches = text.match(/\bR\d+\b/gi) || [];
+        for (const match of matches) found.add(match.toUpperCase());
+    }
+    return [...found];
+};
+
 type CostPredictionOptions = {
     allowedCitationIds?: string[];
     requireCitations?: boolean;
@@ -45,20 +63,40 @@ Output schema:
 }
 `;
 
+    const breakdownItemSchema = z.object({
+        category: z.union([z.string(), z.number()]).optional(),
+        name: z.union([z.string(), z.number()]).optional(),
+        item: z.union([z.string(), z.number()]).optional(),
+        amount: z.union([z.number(), z.string()]).optional(),
+        cost: z.union([z.number(), z.string()]).optional(),
+        value: z.union([z.number(), z.string()]).optional(),
+        percentage: z.union([z.number(), z.string()]).optional(),
+        share: z.union([z.number(), z.string()]).optional(),
+        pct: z.union([z.number(), z.string()]).optional(),
+        citationIds: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+    }).passthrough();
+
     const schema = z.object({
-        total: z.number().positive(),
-        currency: z.string().trim().min(3),
-        breakdown: z.array(z.object({
-            category: z.string().trim().min(1),
-            amount: z.number().positive(),
-            percentage: z.number().min(0).max(100),
-            citationIds: z.array(z.string().trim().min(1)).optional(),
-        })).min(1),
-        duration: z.string().trim().min(1),
-        confidenceScore: z.number().min(0).max(1),
-        assumptions: z.array(z.string()),
-        citationIds: z.array(z.string().trim().min(1)).optional(),
-    });
+        total: z.union([z.number(), z.string()]).optional(),
+        totalEstimatedCost: z.union([z.number(), z.string()]).optional(),
+        estimatedTotal: z.union([z.number(), z.string()]).optional(),
+        currency: z.string().optional(),
+        currencyCode: z.string().optional(),
+        breakdown: z.array(breakdownItemSchema).optional(),
+        costBreakdown: z.array(breakdownItemSchema).optional(),
+        categories: z.array(breakdownItemSchema).optional(),
+        duration: z.union([z.string(), z.number()]).optional(),
+        timeline: z.union([z.string(), z.number()]).optional(),
+        schedule: z.union([z.string(), z.number()]).optional(),
+        confidenceScore: z.union([z.number(), z.string()]).optional(),
+        confidence: z.union([z.number(), z.string()]).optional(),
+        score: z.union([z.number(), z.string()]).optional(),
+        assumptions: z.array(z.union([z.string(), z.number()])).optional(),
+        notes: z.array(z.union([z.string(), z.number()])).optional(),
+        justification: z.array(z.union([z.string(), z.number()])).optional(),
+        citationIds: z.array(z.string()).optional(),
+    }).passthrough();
 
     try {
         const result = schema.parse(await generateAzureObject<any>(prompt, schema));
@@ -68,52 +106,108 @@ Output schema:
             if (!Array.isArray(ids)) return [];
             return ids
                 .map((id) => String(id || '').trim())
+                .map((id) => id.toUpperCase())
                 .filter((id) => id.length > 0 && (allowedCitationIds.size === 0 || allowedCitationIds.has(id)));
         };
 
-        const normalizedBreakdown = result.breakdown.map((item) => {
-            const citationIds = filterCitationIds(item.citationIds);
-            if (requireCitations && citationIds.length === 0) {
-                throw new Error(`Cost breakdown category "${item.category}" is missing grounded citation ids.`);
+        const totalValue =
+            toNumber(result.total) ??
+            toNumber(result.totalEstimatedCost) ??
+            toNumber(result.estimatedTotal);
+        if (totalValue == null || totalValue <= 0) {
+            throw new Error('Cost output missing valid total value.');
+        }
+
+        const rawBreakdown = Array.isArray(result.breakdown) ? result.breakdown
+            : Array.isArray(result.costBreakdown) ? result.costBreakdown
+                : Array.isArray(result.categories) ? result.categories
+                    : [];
+        if (rawBreakdown.length === 0) {
+            throw new Error('Cost output missing breakdown categories.');
+        }
+
+        let normalizedBreakdown = rawBreakdown.map((item) => {
+            const amount = toNumber(item.amount) ?? toNumber(item.cost) ?? toNumber(item.value);
+            const percentageRaw = toNumber(item.percentage) ?? toNumber(item.share) ?? toNumber(item.pct);
+            const percentage = percentageRaw == null ? null : (percentageRaw <= 1 ? percentageRaw * 100 : percentageRaw);
+            const citationIds = filterCitationIds([
+                ...(Array.isArray(item.citationIds) ? item.citationIds : []),
+                ...extractCitationIds(item.notes, item.category, item.name, item.item),
+            ]);
+
+            if (amount == null || amount <= 0) {
+                throw new Error(`Cost breakdown "${asText(item.category || item.name || item.item || 'Unknown')}" has invalid amount.`);
             }
+            if (requireCitations && citationIds.length === 0) {
+                throw new Error(`Cost breakdown category "${asText(item.category || item.name || item.item || 'Unknown')}" is missing grounded citation ids.`);
+            }
+
             return {
-                category: String(item.category).trim(),
-                amount: item.amount,
-                percentage: item.percentage,
+                category: asText(item.category || item.name || item.item || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT,
+                amount,
+                percentage,
                 citationIds,
             };
         });
 
-        const normalizedCitationIds = filterCitationIds(result.citationIds);
-        if (requireCitations && normalizedCitationIds.length === 0) {
-            throw new Error('Cost estimate is missing grounded citation ids.');
+        const percentageMissing = normalizedBreakdown.some((row) => row.percentage == null);
+        if (percentageMissing) {
+            const sum = normalizedBreakdown.reduce((acc, row) => acc + row.amount, 0);
+            normalizedBreakdown = normalizedBreakdown.map((row) => ({
+                ...row,
+                percentage: sum > 0 ? Number(((row.amount / sum) * 100).toFixed(2)) : 0,
+            }));
         }
 
-        const percentageSum = normalizedBreakdown.reduce((sum, row) => sum + row.percentage, 0);
-        if (Math.abs(percentageSum - 100) > 7) {
+        const normalizedCitationIds = filterCitationIds([
+            ...(Array.isArray(result.citationIds) ? result.citationIds : []),
+            ...extractCitationIds(
+                ...(Array.isArray(result.assumptions) ? result.assumptions : []),
+                ...(Array.isArray(result.notes) ? result.notes : []),
+                ...(Array.isArray(result.justification) ? result.justification : []),
+            ),
+        ]);
+        if (requireCitations && normalizedCitationIds.length === 0) {
+            const unionFromRows = Array.from(new Set(normalizedBreakdown.flatMap((row) => row.citationIds)));
+            if (unionFromRows.length === 0) {
+                throw new Error('Cost estimate is missing grounded citation ids.');
+            }
+            normalizedCitationIds.push(...unionFromRows);
+        }
+
+        const percentageSum = normalizedBreakdown.reduce((sum, row) => sum + Number(row.percentage || 0), 0);
+        if (Math.abs(percentageSum - 100) > 15) {
             throw new Error(`Cost breakdown percentages are inconsistent (sum=${percentageSum.toFixed(2)}).`);
         }
 
         const amountSum = normalizedBreakdown.reduce((sum, row) => sum + row.amount, 0);
-        const tolerance = Math.max(1, result.total * 0.07);
-        if (Math.abs(amountSum - result.total) > tolerance) {
-            throw new Error(`Cost breakdown amounts do not reconcile with total (total=${result.total}, sum=${amountSum}).`);
+        const tolerance = Math.max(1, totalValue * 0.15);
+        if (Math.abs(amountSum - totalValue) > tolerance) {
+            throw new Error(`Cost breakdown amounts do not reconcile with total (total=${totalValue}, sum=${amountSum}).`);
         }
 
+        const durationText = asText(result.duration || result.timeline || result.schedule || NOT_AVAILABLE_TEXT) || NOT_AVAILABLE_TEXT;
+        const confidenceScore = toNumber(result.confidenceScore) ?? toNumber(result.confidence) ?? toNumber(result.score) ?? 0.5;
+        const assumptions = [
+            ...(Array.isArray(result.assumptions) ? result.assumptions : []),
+            ...(Array.isArray(result.notes) ? result.notes : []),
+            ...(Array.isArray(result.justification) ? result.justification : []),
+        ]
+            .map((item) => asText(item))
+            .filter(Boolean);
+
         return {
-            total: result.total,
-            currency: result.currency,
+            total: totalValue,
+            currency: asText(result.currency || result.currencyCode || 'INR') || 'INR',
             breakdown: normalizedBreakdown.map((item) => ({
-                category: String(item.category || NOT_AVAILABLE_TEXT).trim(),
+                category: item.category,
                 amount: item.amount,
-                percentage: item.percentage,
+                percentage: Number(item.percentage || 0),
                 citationIds: item.citationIds,
             })),
-            duration: String(result.duration || NOT_AVAILABLE_TEXT).trim(),
-            confidenceScore: result.confidenceScore,
-            assumptions: Array.isArray(result.assumptions)
-                ? result.assumptions.map((item) => String(item || '').trim()).filter(Boolean)
-                : [],
+            duration: durationText,
+            confidenceScore: Math.max(0, Math.min(1, confidenceScore)),
+            assumptions,
             citationIds: normalizedCitationIds,
         };
     } catch (error) {

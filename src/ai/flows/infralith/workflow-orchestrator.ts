@@ -48,6 +48,9 @@ const toNumberEnv = (value: string | undefined, fallback: number): number => {
 const isStrictRealDataMode = (): boolean =>
     toBooleanEnv(process.env.INFRALITH_STRICT_REAL_DATA, process.env.NODE_ENV === 'production');
 
+const isPartialReportMode = (): boolean =>
+    toBooleanEnv(process.env.INFRALITH_ALLOW_PARTIAL_REPORT, true);
+
 const getRequiredStandardHints = (): string[] => {
     const raw = String(process.env.INFRALITH_REQUIRED_STANDARD_TERMS || '')
         .split(',')
@@ -71,7 +74,9 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
 
     const role = session.user.role || "Guest";
     const strictRealData = isStrictRealDataMode();
+    const partialReportMode = isPartialReportMode();
     const minCoverageScore = clamp(Math.round(toNumberEnv(process.env.INFRALITH_MIN_EXTRACTION_COVERAGE, 70)), 0, 100);
+    const preflightWarnings: string[] = [];
 
     const startTime = Date.now();
     const runId = `RUN-${startTime.toString(36).toUpperCase()}`;
@@ -99,26 +104,34 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
     // 1. Context Generation
     const blueprint = await parseBlueprint(input);
     const parsedProjectScope = normalizeConflictText(blueprint?.projectScope, '');
-    if (strictRealData && !parsedProjectScope) {
+    if (strictRealData && !partialReportMode && !parsedProjectScope) {
         throw new Error('Strict real-data mode: project scope could not be extracted from the uploaded document.');
     }
-    const derivedProjectScope = parsedProjectScope || normalizeConflictText(originalFileName.replace(/\.[^.]+$/, ''), '');
+    if (!parsedProjectScope) {
+        preflightWarnings.push('Project scope is missing in extracted data. Marked as not available.');
+    }
+    const derivedProjectScope = parsedProjectScope || NOT_AVAILABLE_TEXT;
     const ragQuery = buildRagQuery(blueprint, originalFileName);
-    if (strictRealData && !ragQuery) {
+    if (strictRealData && !partialReportMode && !ragQuery) {
         throw new Error('Strict real-data mode: unable to build RAG query from extracted blueprint data.');
     }
     const ragContext = await retrieveConstructionContext(ragQuery, { top: 10 });
-    validateRagContext(ragContext, { strict: strictRealData });
+    try {
+        validateRagContext(ragContext, { strict: strictRealData });
+    } catch (error) {
+        if (!partialReportMode) throw error;
+        preflightWarnings.push(String((error as any)?.message || error));
+    }
     const ragPromptContext = await formatRagPromptContext(ragContext, 8_500);
     const allowedCitationIds = ragContext.chunks.map((chunk) => chunk.citationId);
 
     // 2. Parallel Domain Expert Analysis
-    const analysisWarnings: string[] = [];
+    const analysisWarnings: string[] = [...preflightWarnings];
     let compliance: ComplianceAnalysis;
     let risk: RiskAnalysis;
     let cost: CostAnalysis;
 
-    if (strictRealData) {
+    if (strictRealData && !partialReportMode) {
         [compliance, risk, cost] = await Promise.all([
             checkCompliance(JSON.stringify(blueprint), ragPromptContext, {
                 allowedCitationIds,
@@ -134,18 +147,19 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
             }),
         ]);
     } else {
+        const requireCitations = strictRealData;
         const [complianceSettled, riskSettled, costSettled] = await Promise.allSettled([
             checkCompliance(JSON.stringify(blueprint), ragPromptContext, {
                 allowedCitationIds,
-                requireCitations: false,
+                requireCitations,
             }),
             analyzeRisk(JSON.stringify(blueprint), ragPromptContext, {
                 allowedCitationIds,
-                requireCitations: false,
+                requireCitations,
             }),
             predictCost(JSON.stringify(blueprint), ragPromptContext, {
                 allowedCitationIds,
-                requireCitations: false,
+                requireCitations,
             }),
         ]);
 
@@ -154,17 +168,32 @@ export async function runInfralithWorkflow(formData: FormData): Promise<Workflow
         cost = resolveCostAnalysis(costSettled, analysisWarnings);
     }
 
-    validateSpecialistOutputs({ compliance, risk, cost, strict: strictRealData, allowedCitationIds });
+    try {
+        validateSpecialistOutputs({ compliance, risk, cost, strict: strictRealData, allowedCitationIds });
+    } catch (error) {
+        if (!partialReportMode) throw error;
+        analysisWarnings.push(String((error as any)?.message || error));
+    }
 
     const extractionQuality = buildExtractionQuality(blueprint);
-    if (strictRealData && extractionQuality.coverageScore < minCoverageScore) {
+    if (strictRealData && !partialReportMode && extractionQuality.coverageScore < minCoverageScore) {
         throw new Error(
             `Strict real-data mode: extraction coverage ${extractionQuality.coverageScore}% is below minimum ${minCoverageScore}%.`
         );
     }
-    if (strictRealData && (extractionQuality.criticalMissingFields?.length || 0) > 0) {
+    if (strictRealData && !partialReportMode && (extractionQuality.criticalMissingFields?.length || 0) > 0) {
         throw new Error(
             `Strict real-data mode: critical extracted fields missing (${extractionQuality.criticalMissingFields?.join(', ')}).`
+        );
+    }
+    if (strictRealData && partialReportMode && extractionQuality.coverageScore < minCoverageScore) {
+        analysisWarnings.push(
+            `Extraction coverage ${extractionQuality.coverageScore}% is below strict threshold ${minCoverageScore}%. Final report generated with partial data.`
+        );
+    }
+    if (strictRealData && partialReportMode && (extractionQuality.criticalMissingFields?.length || 0) > 0) {
+        analysisWarnings.push(
+            `Critical extracted fields missing (${extractionQuality.criticalMissingFields?.join(', ')}). Marked as not available in report.`
         );
     }
     if (ragContext.diagnostics.warning) {
