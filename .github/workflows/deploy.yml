@@ -13,27 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js version
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.x' # Matches the Node 22 version seen in your error log
-
-      - name: npm install, build, and package standalone
+      - name: Create source artifact for Azure Oryx build
         run: |
-          npm install
-          npm run build
-          
-          # The standalone output does not include the public and static directories
-          # They need to be explicitly copied for the server to serve them
-          cp -r public .next/standalone/ 2>/dev/null || true
-          mkdir -p .next/standalone/.next/static
-          cp -r .next/static/* .next/standalone/.next/static/ 2>/dev/null || true
-
-      - name: Zip artifact for deployment
-        run: |
-          cd .next/standalone
-          zip -r ../../release.zip .
-          cd ../..
+          # App Service is configured to run Oryx against the uploaded package.
+          # Deploy the source tree so Oryx can see src/app at the project root.
+          zip -r release.zip . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x ".azure/*" \
+            -x ".config/*" \
+            -x ".next/*" \
+            -x "node_modules/*" \
+            -x ".env.local" \
+            -x "project.txt" \
+            -x "release.zip"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4

@@ -23,7 +23,7 @@ AI-powered construction intelligence platform built with Next.js. It combines bl
 
 - `npm run dev` - start local development server
 - `npm run build` - production build
-- `npm run start` - run standalone build output
+- `npm run start` - run the production server after `npm run build`
 - `npm run lint` - TypeScript type check
 - `npm run typecheck` - TypeScript type check
 

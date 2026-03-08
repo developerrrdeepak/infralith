@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev --turbopack -p 3500",
     "build": "next build",
-    "start": "node .next/standalone/server.js",
+    "start": "next start",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "postinstall": "node -e \"console.log('Postinstall complete')\""

@@ -1,8 +1,8 @@
-# Azure App Service Deployment (No GitHub Actions)
+# Azure App Service Source Deployment
 
-This project is prepared for direct deployment from GitHub to **Azure App Service** using **Deployment Center** with App Service build automation.
+This project is prepared for **source-based deployment** to **Azure App Service** with App Service build automation (Oryx). This is compatible with Azure Deployment Center and with the checked-in GitHub Actions workflow, because both upload the project source instead of a prebuilt `.next/standalone` bundle.
 
-Last verified for no-GitHub-Actions deployment flow: 2026-03-04.
+Last verified for source-based App Service deployment flow: 2026-03-08.
 
 ## 1. Local build/run checks
 
@@ -30,11 +30,10 @@ Recommended build/runtime settings:
 - `SCM_DO_BUILD_DURING_DEPLOYMENT=true`
 - `ENABLE_ORYX_BUILD=true`
 
-Optional startup command (App Service `Configuration > General settings > Startup Command`):
+Recommended startup behavior:
 
-```bash
-bash startup.sh
-```
+- Leave App Service `Startup Command` empty so the platform uses `npm start`.
+- Use `bash startup.sh` only if you intentionally deploy a prebuilt standalone bundle and need to copy static assets into `.next/standalone` before boot.
 
 ## 3. Connect GitHub repo in Deployment Center
 
@@ -46,6 +45,8 @@ bash startup.sh
 6. Save.
 
 After saving, each push to the selected branch triggers App Service to pull, build (`npm install` + `npm run build`), and deploy.
+
+Important: if Azure receives only the contents of `.next/standalone` while the two build settings above are enabled, Oryx will fail with `Couldn't find any pages or app directory` because `src/app` is no longer present in that package.
 
 ## 4. Verify deployment
 
