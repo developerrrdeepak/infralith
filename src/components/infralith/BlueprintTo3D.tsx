@@ -74,10 +74,14 @@ import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
 import { estimateConstructionCost } from '@/lib/cost-estimator';
 
-// -- Optional custom human model (GLB) for walkthrough --
-// Put your model at /public/models/human.glb (or override via NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL).
-const CUSTOM_HUMAN_GLB_URL: string | null = process.env.NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL || "/models/human.glb";
-const CUSTOM_HUMAN_GLB_SCALE = 1.0;
+// -- Optional custom civil-engineer model (GLB) for walkthrough --
+// Prefer /public/models/civil-engineer.glb via NEXT_PUBLIC_CIVIL_ENGINEER_GLB_URL.
+// Legacy default path /public/models/human.glb is still supported.
+const CUSTOM_HUMAN_GLB_URL: string | null =
+    process.env.NEXT_PUBLIC_CIVIL_ENGINEER_GLB_URL ||
+    process.env.NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL ||
+    "/models/human.glb";
+const CUSTOM_HUMAN_GLB_SCALE = 1.04;
 const CUSTOM_HUMAN_GLB_Y_OFFSET = 0;
 
 // Normalizes model labels like "a person is walking" into Human rendering.
@@ -1651,47 +1655,87 @@ function WalkthroughController({
     );
 }
 
-function FallbackFreefireAvatar() {
+function FallbackCivilEngineerAvatar() {
     return (
-        <>
-            {/* Legs */}
-            <mesh position={[-0.14, 0.38, 0]} castShadow>
-                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
-                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+        <group>
+            {/* Boots */}
+            <mesh position={[-0.13, 0.06, 0.04]} castShadow>
+                <boxGeometry args={[0.16, 0.12, 0.28]} />
+                <meshStandardMaterial color="#1f2937" roughness={0.58} metalness={0.12} />
             </mesh>
-            <mesh position={[0.14, 0.38, 0]} castShadow>
-                <capsuleGeometry args={[0.09, 0.55, 6, 10]} />
-                <meshStandardMaterial color="#1e3a8a" roughness={0.65} />
+            <mesh position={[0.13, 0.06, 0.04]} castShadow>
+                <boxGeometry args={[0.16, 0.12, 0.28]} />
+                <meshStandardMaterial color="#1f2937" roughness={0.58} metalness={0.12} />
+            </mesh>
+
+            {/* Pants / legs */}
+            <mesh position={[-0.13, 0.38, 0]} castShadow>
+                <capsuleGeometry args={[0.085, 0.54, 8, 14]} />
+                <meshStandardMaterial color="#334155" roughness={0.62} />
+            </mesh>
+            <mesh position={[0.13, 0.38, 0]} castShadow>
+                <capsuleGeometry args={[0.085, 0.54, 8, 14]} />
+                <meshStandardMaterial color="#334155" roughness={0.62} />
             </mesh>
 
             {/* Torso */}
             <mesh position={[0, 1.02, 0]} castShadow>
-                <capsuleGeometry args={[0.23, 0.58, 8, 14]} />
-                <meshStandardMaterial color="#16a34a" roughness={0.6} metalness={0.05} />
+                <capsuleGeometry args={[0.24, 0.56, 8, 16]} />
+                <meshStandardMaterial color="#f59e0b" roughness={0.55} metalness={0.08} />
             </mesh>
 
-            {/* Arms */}
-            <mesh position={[-0.33, 1.02, 0]} castShadow>
-                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
-                <meshStandardMaterial color="#16a34a" roughness={0.65} />
+            {/* Reflective vest stripes */}
+            <mesh position={[0, 1.0, 0.23]} castShadow>
+                <boxGeometry args={[0.38, 0.06, 0.02]} />
+                <meshStandardMaterial color="#f8fafc" roughness={0.25} metalness={0.35} />
             </mesh>
-            <mesh position={[0.33, 1.02, 0]} castShadow>
-                <capsuleGeometry args={[0.07, 0.48, 6, 10]} />
-                <meshStandardMaterial color="#16a34a" roughness={0.65} />
+            <mesh position={[0, 1.12, 0.23]} castShadow>
+                <boxGeometry args={[0.38, 0.06, 0.02]} />
+                <meshStandardMaterial color="#f8fafc" roughness={0.25} metalness={0.35} />
+            </mesh>
+
+            {/* Sleeves / arms */}
+            <mesh position={[-0.33, 1.02, 0]} rotation={[0, 0, 0.12]} castShadow>
+                <capsuleGeometry args={[0.07, 0.48, 8, 12]} />
+                <meshStandardMaterial color="#1e293b" roughness={0.64} />
+            </mesh>
+            <mesh position={[0.33, 1.02, 0]} rotation={[0, 0, -0.12]} castShadow>
+                <capsuleGeometry args={[0.07, 0.48, 8, 12]} />
+                <meshStandardMaterial color="#1e293b" roughness={0.64} />
+            </mesh>
+
+            {/* Hands */}
+            <mesh position={[-0.45, 0.82, 0.04]} castShadow>
+                <sphereGeometry args={[0.06, 16, 16]} />
+                <meshStandardMaterial color="#f2c09d" roughness={0.72} />
+            </mesh>
+            <mesh position={[0.45, 0.82, 0.04]} castShadow>
+                <sphereGeometry args={[0.06, 16, 16]} />
+                <meshStandardMaterial color="#f2c09d" roughness={0.72} />
             </mesh>
 
             {/* Head */}
             <mesh position={[0, 1.58, 0]} castShadow>
-                <sphereGeometry args={[0.16, 20, 20]} />
-                <meshStandardMaterial color="#f3c7a3" roughness={0.7} />
+                <sphereGeometry args={[0.16, 24, 24]} />
+                <meshStandardMaterial color="#f2c09d" roughness={0.7} />
             </mesh>
 
-            {/* Helmet */}
-            <mesh position={[0, 1.67, 0.01]} castShadow>
-                <sphereGeometry args={[0.17, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
-                <meshStandardMaterial color="#0f172a" roughness={0.4} metalness={0.3} />
+            {/* Safety helmet */}
+            <mesh position={[0, 1.71, 0.01]} castShadow>
+                <sphereGeometry args={[0.19, 20, 20, 0, Math.PI * 2, 0, Math.PI * 0.62]} />
+                <meshStandardMaterial color="#facc15" roughness={0.36} metalness={0.22} />
             </mesh>
-        </>
+            <mesh position={[0, 1.645, 0.08]} castShadow>
+                <boxGeometry args={[0.26, 0.02, 0.16]} />
+                <meshStandardMaterial color="#facc15" roughness={0.38} metalness={0.2} />
+            </mesh>
+
+            {/* Clipboard */}
+            <mesh position={[0.34, 0.93, 0.2]} rotation={[-0.1, 0.18, -0.38]} castShadow>
+                <boxGeometry args={[0.22, 0.3, 0.02]} />
+                <meshStandardMaterial color="#cbd5e1" roughness={0.38} metalness={0.22} />
+            </mesh>
+        </group>
     );
 }
 
@@ -1735,8 +1779,8 @@ function HumanCharacter({ humanModelUrl, scale = 1 }: { humanModelUrl?: string |
     return (
         <group scale={[scale, scale, scale]}>
             {humanModelUrl ? (
-                <GLBLoadBoundary key={humanModelUrl} fallback={<FallbackFreefireAvatar />}>
-                    <Suspense fallback={<FallbackFreefireAvatar />}>
+                <GLBLoadBoundary key={humanModelUrl} fallback={<FallbackCivilEngineerAvatar />}>
+                    <Suspense fallback={<FallbackCivilEngineerAvatar />}>
                         <GLBHumanCharacter
                             url={humanModelUrl}
                             scale={CUSTOM_HUMAN_GLB_SCALE}
@@ -1745,13 +1789,13 @@ function HumanCharacter({ humanModelUrl, scale = 1 }: { humanModelUrl?: string |
                     </Suspense>
                 </GLBLoadBoundary>
             ) : (
-                <FallbackFreefireAvatar />
+                <FallbackCivilEngineerAvatar />
             )}
         </group>
     );
 }
 
-function FreefireWalkthroughController({ bounds, humanModelUrl }: { bounds?: any; humanModelUrl?: string | null }) {
+function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any; humanModelUrl?: string | null }) {
     const { camera } = useThree();
     const controlsRef = useRef<any>(null);
     const playerRef = useRef<THREE.Group>(null);
@@ -2541,11 +2585,11 @@ function BlueprintWorkspace() {
                             />
                             <ToolButton
                                 icon={<User className="h-4 w-4" />}
-                                label="Human"
+                                label="Engineer"
                                 active={isWalkthrough && showWalkthroughHuman}
                                 onClick={() => {
                                     if (!isWalkthrough) {
-                                        toast({ title: "Enable Walk Mode", description: "Turn on Walk Mode first to add a human character." });
+                                        toast({ title: "Enable Walk Mode", description: "Turn on Walk Mode first to enable engineer character mode." });
                                         return;
                                     }
                                     setShowWalkthroughHuman(prev => !prev);
@@ -2800,13 +2844,13 @@ function BlueprintWorkspace() {
                                 )}
                                 onClick={() => {
                                     if (!isWalkthrough) {
-                                        toast({ title: "Enable Walk Mode", description: "Turn on Walk Mode first to add a human character." });
+                                        toast({ title: "Enable Walk Mode", description: "Turn on Walk Mode first to enable engineer character mode." });
                                         return;
                                     }
                                     setShowWalkthroughHuman(prev => !prev);
                                 }}
                             >
-                                <User className="h-3 w-3 mr-1.5" /> Human
+                                <User className="h-3 w-3 mr-1.5" /> Engineer
                             </Button>
                             {siteResult && siteResult.buildings.length > 0 && (
                                 <div className="flex items-center gap-1.5 pl-1">
@@ -2865,7 +2909,7 @@ function BlueprintWorkspace() {
                         >
                             {isWalkthrough ? (
                                 showWalkthroughHuman ? (
-                                    <FreefireWalkthroughController
+                                    <EngineerWalkthroughController
                                         bounds={walkthroughBounds}
                                         humanModelUrl={CUSTOM_HUMAN_GLB_URL}
                                     />
@@ -2984,7 +3028,7 @@ function BlueprintWorkspace() {
                                         <span className="text-[11px] font-black tracking-widest uppercase mb-1">Interactive Walkthrough Enabled</span>
                                         <span className="text-[9px] font-bold text-white/60 tracking-wider">
                                             {showWalkthroughHuman
-                                                ? 'FREEFIRE MODE • DRAG TO ROTATE CAMERA • WASD MOVE • SHIFT SPRINT'
+                                                ? 'ENGINEER CHARACTER MODE • DRAG TO ROTATE • WASD MOVE • SHIFT SPRINT'
                                                 : 'CLICK TO LOOK • WASD MOVE • SHIFT SPRINT • SPACE JUMP • C/CTRL CROUCH • E USE • F FLASHLIGHT'}
                                         </span>
                                     </div>
