@@ -165,6 +165,12 @@ type ModelEditAttachment = {
     previewUrl: string;
 };
 
+type LocalModelEditResult = {
+    model: GeometricReconstruction;
+    message: string;
+    nextSelectedElement: { type: 'room' | 'wall', data: any } | null;
+};
+
 const formatConfidenceBadge = (value: unknown, fallback = 'n/a') => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
@@ -179,6 +185,288 @@ const normalizeBlueprintErrorMessage = (error: unknown): string => {
         return "Blueprint processing failed on the server. Retry once, and if it repeats upload a cleaner floor-plan crop instead of the full mixed sheet.";
     }
     return raw;
+};
+
+const BASIC_EDIT_COLOR_MAP: Record<string, string> = {
+    red: '#dc2626',
+    blue: '#2563eb',
+    green: '#16a34a',
+    yellow: '#ca8a04',
+    orange: '#ea580c',
+    white: '#f8fafc',
+    black: '#111827',
+    gray: '#6b7280',
+    grey: '#6b7280',
+    brown: '#8b5e3c',
+    beige: '#d6c0a5',
+    cream: '#f5e6d3',
+};
+
+const extractEditDistanceMeters = (text: string): number | null => {
+    const match = text.match(/(-?\d+(?:\.\d+)?)\s*(m|meter|meters|ft|feet|foot)?\b/i);
+    if (!match?.[1]) return null;
+    const raw = Number(match[1]);
+    if (!Number.isFinite(raw)) return null;
+    const unit = String(match[2] || 'm').toLowerCase();
+    const meters = /ft|feet|foot/.test(unit) ? raw * 0.3048 : raw;
+    return Number(meters.toFixed(3));
+};
+
+const extractEditColor = (text: string): string | null => {
+    const hex = text.match(/#([0-9a-f]{6})\b/i);
+    if (hex?.[0]) return hex[0].toLowerCase();
+    for (const [name, value] of Object.entries(BASIC_EDIT_COLOR_MAP)) {
+        if (new RegExp(`\\b${name}\\b`, 'i').test(text)) return value;
+    }
+    return null;
+};
+
+const extractMoveDeltaFromInstruction = (text: string, magnitudeMeters: number | null): [number, number] | null => {
+    if (magnitudeMeters == null || magnitudeMeters === 0) return null;
+    let dx = 0;
+    let dy = 0;
+    if (/\b(right|east)\b/i.test(text)) dx += magnitudeMeters;
+    if (/\b(left|west)\b/i.test(text)) dx -= magnitudeMeters;
+    if (/\b(up|north|top|back|backward)\b/i.test(text)) dy += magnitudeMeters;
+    if (/\b(down|south|bottom|front|forward)\b/i.test(text)) dy -= magnitudeMeters;
+    if (dx === 0 && dy === 0) return null;
+    return [Number(dx.toFixed(3)), Number(dy.toFixed(3))];
+};
+
+const shiftPlanPoint = (point: [number, number], dx: number, dy: number): [number, number] => [
+    Number((point[0] + dx).toFixed(3)),
+    Number((point[1] + dy).toFixed(3)),
+];
+
+const tryApplyRealtimeLocalEdit = (
+    model: GeometricReconstruction,
+    selectedElement: { type: 'room' | 'wall', data: any } | null,
+    instructionRaw: string
+): LocalModelEditResult | null => {
+    const instruction = String(instructionRaw || '').trim();
+    const text = instruction.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!instruction || !text) return null;
+
+    const moveDistance = Math.abs(extractEditDistanceMeters(text) ?? 0);
+    const moveDelta = extractMoveDeltaFromInstruction(text, moveDistance || null);
+    const color = extractEditColor(text);
+    const renameMatch = instruction.match(/\brename\b.*\bto\b\s+["']?(.+?)["']?\s*$/i);
+    const deleteIntent = /\b(delete|remove)\b/i.test(text);
+    const moveIntent = /\b(move|shift|drag|slide)\b/i.test(text);
+    const heightIntent = /\bheight\b/i.test(text);
+    const thicknessIntent = /\bthickness\b/i.test(text);
+    const colorIntent = /\b(color|colour|paint)\b/i.test(text);
+
+    const clone: GeometricReconstruction = {
+        ...model,
+        walls: [...(model.walls || [])],
+        wallSolids: model.wallSolids ? [...model.wallSolids] : model.wallSolids,
+        doors: [...(model.doors || [])],
+        windows: [...(model.windows || [])],
+        rooms: [...(model.rooms || [])],
+        furnitures: model.furnitures ? [...model.furnitures] : model.furnitures,
+        conflicts: [...(model.conflicts || [])],
+    };
+
+    const resolveSelected = (): { type: 'room' | 'wall'; id: string | number } | null => {
+        if (!selectedElement) return null;
+        return { type: selectedElement.type, id: selectedElement.data.id };
+    };
+
+    const selection = resolveSelected();
+
+    if (selection?.type === 'wall') {
+        const wallIndex = clone.walls.findIndex((wall) => wall.id === selection.id);
+        if (wallIndex >= 0) {
+            const baseWall = clone.walls[wallIndex];
+
+            if (deleteIntent) {
+                clone.walls = clone.walls.filter((wall) => wall.id !== selection.id);
+                clone.doors = clone.doors.filter((door) => String(door.host_wall_id) !== String(selection.id));
+                clone.windows = clone.windows.filter((win) => String(win.host_wall_id) !== String(selection.id));
+                return {
+                    model: clone,
+                    message: 'Selected wall removed instantly.',
+                    nextSelectedElement: null,
+                };
+            }
+
+            if (moveIntent && moveDelta) {
+                const [dx, dy] = moveDelta;
+                clone.walls[wallIndex] = {
+                    ...baseWall,
+                    start: shiftPlanPoint(baseWall.start, dx, dy),
+                    end: shiftPlanPoint(baseWall.end, dx, dy),
+                };
+                clone.doors = clone.doors.map((door) =>
+                    String(door.host_wall_id) === String(selection.id)
+                        ? { ...door, position: shiftPlanPoint(door.position, dx, dy) }
+                        : door
+                );
+                clone.windows = clone.windows.map((win) =>
+                    String(win.host_wall_id) === String(selection.id)
+                        ? { ...win, position: shiftPlanPoint(win.position, dx, dy) }
+                        : win
+                );
+                return {
+                    model: clone,
+                    message: `Selected wall moved instantly by ${moveDistance}m.`,
+                    nextSelectedElement: { type: 'wall', data: clone.walls[wallIndex] },
+                };
+            }
+
+            if (heightIntent) {
+                const nextHeight = extractEditDistanceMeters(text);
+                if (nextHeight != null && nextHeight >= 2 && nextHeight <= 8) {
+                    clone.walls[wallIndex] = { ...baseWall, height: Number(nextHeight.toFixed(3)) };
+                    return {
+                        model: clone,
+                        message: `Selected wall height updated instantly to ${nextHeight.toFixed(2)}m.`,
+                        nextSelectedElement: { type: 'wall', data: clone.walls[wallIndex] },
+                    };
+                }
+            }
+
+            if (thicknessIntent) {
+                const nextThickness = extractEditDistanceMeters(text);
+                if (nextThickness != null && nextThickness >= 0.08 && nextThickness <= 1.2) {
+                    clone.walls[wallIndex] = { ...baseWall, thickness: Number(nextThickness.toFixed(3)) };
+                    return {
+                        model: clone,
+                        message: `Selected wall thickness updated instantly to ${nextThickness.toFixed(2)}m.`,
+                        nextSelectedElement: { type: 'wall', data: clone.walls[wallIndex] },
+                    };
+                }
+            }
+
+            if (colorIntent && color) {
+                clone.walls[wallIndex] = { ...baseWall, color };
+                return {
+                    model: clone,
+                    message: 'Selected wall color updated instantly.',
+                    nextSelectedElement: { type: 'wall', data: clone.walls[wallIndex] },
+                };
+            }
+        }
+    }
+
+    if (selection?.type === 'room') {
+        const roomIndex = clone.rooms.findIndex((room) => room.id === selection.id);
+        if (roomIndex >= 0) {
+            const baseRoom = clone.rooms[roomIndex];
+
+            if (deleteIntent) {
+                clone.rooms = clone.rooms.filter((room) => room.id !== selection.id);
+                clone.furnitures = (clone.furnitures || []).filter((item) => String(item.room_id) !== String(selection.id));
+                return {
+                    model: clone,
+                    message: 'Selected room removed instantly.',
+                    nextSelectedElement: null,
+                };
+            }
+
+            if (moveIntent && moveDelta) {
+                const [dx, dy] = moveDelta;
+                const shiftedPolygon = baseRoom.polygon.map((point) => shiftPlanPoint(point, dx, dy));
+                clone.rooms[roomIndex] = {
+                    ...baseRoom,
+                    polygon: shiftedPolygon,
+                    area: Number(Math.abs(polygonArea2D(shiftedPolygon)).toFixed(2)),
+                };
+                clone.furnitures = (clone.furnitures || []).map((item) =>
+                    String(item.room_id) === String(selection.id)
+                        ? { ...item, position: shiftPlanPoint(item.position, dx, dy) }
+                        : item
+                );
+                return {
+                    model: clone,
+                    message: `Selected room moved instantly by ${moveDistance}m.`,
+                    nextSelectedElement: { type: 'room', data: clone.rooms[roomIndex] },
+                };
+            }
+
+            if (renameMatch?.[1]) {
+                const nextName = renameMatch[1].trim().replace(/^["']|["']$/g, '').slice(0, 80);
+                if (nextName) {
+                    clone.rooms[roomIndex] = { ...baseRoom, name: nextName };
+                    return {
+                        model: clone,
+                        message: `Selected room renamed instantly to "${nextName}".`,
+                        nextSelectedElement: { type: 'room', data: clone.rooms[roomIndex] },
+                    };
+                }
+            }
+
+            if (colorIntent && color) {
+                clone.rooms[roomIndex] = { ...baseRoom, floor_color: color };
+                return {
+                    model: clone,
+                    message: 'Selected room color updated instantly.',
+                    nextSelectedElement: { type: 'room', data: clone.rooms[roomIndex] },
+                };
+            }
+        }
+    }
+
+    if (/\ball walls?\b/i.test(text) && heightIntent) {
+        const nextHeight = extractEditDistanceMeters(text);
+        if (nextHeight != null && nextHeight >= 2 && nextHeight <= 8) {
+            clone.walls = clone.walls.map((wall) => ({ ...wall, height: Number(nextHeight.toFixed(3)) }));
+            const nextSelectedElement =
+                selection?.type === 'wall'
+                    ? { type: 'wall' as const, data: clone.walls.find((wall) => wall.id === selection.id) || selectedElement?.data }
+                    : selectedElement;
+            return {
+                model: clone,
+                message: `All wall heights updated instantly to ${nextHeight.toFixed(2)}m.`,
+                nextSelectedElement: nextSelectedElement || null,
+            };
+        }
+    }
+
+    if (/\ball walls?\b/i.test(text) && thicknessIntent) {
+        const nextThickness = extractEditDistanceMeters(text);
+        if (nextThickness != null && nextThickness >= 0.08 && nextThickness <= 1.2) {
+            clone.walls = clone.walls.map((wall) => ({ ...wall, thickness: Number(nextThickness.toFixed(3)) }));
+            const nextSelectedElement =
+                selection?.type === 'wall'
+                    ? { type: 'wall' as const, data: clone.walls.find((wall) => wall.id === selection.id) || selectedElement?.data }
+                    : selectedElement;
+            return {
+                model: clone,
+                message: `All wall thickness values updated instantly to ${nextThickness.toFixed(2)}m.`,
+                nextSelectedElement: nextSelectedElement || null,
+            };
+        }
+    }
+
+    if (/\ball walls?\b/i.test(text) && colorIntent && color) {
+        clone.walls = clone.walls.map((wall) => ({ ...wall, color }));
+        const nextSelectedElement =
+            selection?.type === 'wall'
+                ? { type: 'wall' as const, data: clone.walls.find((wall) => wall.id === selection.id) || selectedElement?.data }
+                : selectedElement;
+        return {
+            model: clone,
+            message: 'All wall colors updated instantly.',
+            nextSelectedElement: nextSelectedElement || null,
+        };
+    }
+
+    if (/\ball rooms?\b/i.test(text) && colorIntent && color) {
+        clone.rooms = clone.rooms.map((room) => ({ ...room, floor_color: color }));
+        const nextSelectedElement =
+            selection?.type === 'room'
+                ? { type: 'room' as const, data: clone.rooms.find((room) => room.id === selection.id) || selectedElement?.data }
+                : selectedElement;
+        return {
+            model: clone,
+            message: 'All room colors updated instantly.',
+            nextSelectedElement: nextSelectedElement || null,
+        };
+    }
+
+    return null;
 };
 
 const summarizeBlueprintReview = (
@@ -2365,6 +2653,7 @@ function BlueprintWorkspace() {
     const [modelEditAttachment, setModelEditAttachment] = useState<ModelEditAttachment | null>(null);
     const [modelEditMessages, setModelEditMessages] = useState<ModelEditChatEntry[]>([]);
     const [isApplyingModelEdit, setIsApplyingModelEdit] = useState(false);
+    const [isModelEditHistoryOpen, setIsModelEditHistoryOpen] = useState(false);
     const [walkHud, setWalkHud] = useState<WalkthroughHudState>({
         hint: null,
         activeFloor: 0,
@@ -2533,6 +2822,7 @@ function BlueprintWorkspace() {
         setActiveSiteBuildingId(buildingId);
         setElements(selected.model);
         setIsApplyingModelEdit(false);
+        setIsModelEditHistoryOpen(false);
         setModelEditMessages([]);
         setModelEditPrompt('');
         clearModelEditAttachment();
@@ -2776,6 +3066,31 @@ function BlueprintWorkspace() {
         }
     };
 
+    const applyUpdatedModelToWorkspace = useCallback((updatedModel: GeometricReconstruction, nextSelectedElement?: { type: 'room' | 'wall', data: any } | null) => {
+        setElements(updatedModel);
+        setSiteResult((prev) => {
+            if (!prev || !activeSiteBuildingId) return prev;
+            return {
+                ...prev,
+                buildings: prev.buildings.map((building) =>
+                    building.id === activeSiteBuildingId
+                        ? {
+                            ...building,
+                            name: updatedModel.building_name || building.name,
+                            floor_count: inferClientFloorCount(updatedModel),
+                            model: updatedModel,
+                        }
+                        : building
+                ),
+            };
+        });
+        if (nextSelectedElement !== undefined) {
+            setSelectedElement(nextSelectedElement);
+        }
+        setStatus('complete');
+        setProgress(1);
+    }, [activeSiteBuildingId, setElements, setSelectedElement]);
+
     const handleApplyModelEdit = useCallback(async () => {
         const instruction = modelEditPrompt.trim();
         if (!elements) {
@@ -2799,30 +3114,31 @@ function BlueprintWorkspace() {
         ]);
 
         try {
+            if (!modelEditAttachment) {
+                const localEdit = tryApplyRealtimeLocalEdit(elements, selectedElement, instruction);
+                if (localEdit) {
+                    applyUpdatedModelToWorkspace(localEdit.model, localEdit.nextSelectedElement);
+                    setModelEditMessages((prev) => prev.map((entry) =>
+                        entry.id === assistantEntryId
+                            ? {
+                                ...entry,
+                                status: 'success',
+                                content: `${localEdit.message} Applied locally in realtime.`,
+                            }
+                            : entry
+                    ));
+                    toast({ title: 'Instant Edit Applied', description: localEdit.message });
+                    setModelEditPrompt('');
+                    return;
+                }
+            }
+
             const updatedModel = await applyPromptEditToReconstruction(
                 elements,
                 instruction,
                 modelEditAttachment?.base64
             );
-            setElements(updatedModel);
-            setSiteResult((prev) => {
-                if (!prev || !activeSiteBuildingId) return prev;
-                return {
-                    ...prev,
-                    buildings: prev.buildings.map((building) =>
-                        building.id === activeSiteBuildingId
-                            ? {
-                                ...building,
-                                name: updatedModel.building_name || building.name,
-                                floor_count: inferClientFloorCount(updatedModel),
-                                model: updatedModel,
-                              }
-                            : building
-                    ),
-                };
-            });
-            setStatus('complete');
-            setProgress(1);
+            applyUpdatedModelToWorkspace(updatedModel, selectedElement);
             setModelEditMessages((prev) => prev.map((entry) =>
                 entry.id === assistantEntryId
                     ? {
@@ -2843,6 +3159,7 @@ function BlueprintWorkspace() {
         } catch (error) {
             console.error('Prompt-driven model edit failed.', error);
             const message = normalizeBlueprintErrorMessage(error);
+            setIsModelEditHistoryOpen(true);
             setModelEditMessages((prev) => prev.map((entry) =>
                 entry.id === assistantEntryId
                     ? { ...entry, status: 'error', content: message }
@@ -2854,12 +3171,13 @@ function BlueprintWorkspace() {
         }
     }, [
         activeSiteBuildingId,
+        applyUpdatedModelToWorkspace,
         clearModelEditAttachment,
         elements,
         isApplyingModelEdit,
         modelEditAttachment,
         modelEditPrompt,
-        setElements,
+        selectedElement,
         toast,
     ]);
 
@@ -2873,6 +3191,7 @@ function BlueprintWorkspace() {
         setActiveSiteBuildingId(null);
         setIsFullscreen(false);
         setIsApplyingModelEdit(false);
+        setIsModelEditHistoryOpen(false);
         setModelEditPrompt('');
         setModelEditMessages([]);
         clearModelEditAttachment();
@@ -2935,6 +3254,7 @@ function BlueprintWorkspace() {
         setSiteResult(null);
         setActiveSiteBuildingId(null);
         setIsApplyingModelEdit(false);
+        setIsModelEditHistoryOpen(false);
         setModelEditMessages([]);
         setModelEditPrompt('');
         clearModelEditAttachment();
@@ -3041,6 +3361,7 @@ function BlueprintWorkspace() {
         setActiveSiteBuildingId(null);
         setElements(null);
         setIsApplyingModelEdit(false);
+        setIsModelEditHistoryOpen(false);
         setModelEditMessages([]);
         setModelEditPrompt('');
         clearModelEditAttachment();
@@ -3106,6 +3427,7 @@ function BlueprintWorkspace() {
             setSiteResult(null);
             setActiveSiteBuildingId(null);
             setIsApplyingModelEdit(false);
+            setIsModelEditHistoryOpen(false);
             setModelEditMessages([]);
             setModelEditPrompt('');
             clearModelEditAttachment();
@@ -3816,30 +4138,30 @@ function BlueprintWorkspace() {
                         {status === 'complete' && elements && (
                             <div
                                 className={cn(
-                                    "absolute left-1/2 -translate-x-1/2 w-[min(880px,calc(100%-1rem))] z-40 pointer-events-auto",
-                                    useImmersiveLayout ? "bottom-6" : "bottom-24"
+                                    "absolute left-1/2 -translate-x-1/2 w-[min(820px,calc(100%-1rem))] z-40 pointer-events-auto",
+                                    useImmersiveLayout ? "bottom-5" : "bottom-24"
                                 )}
                             >
-                                <div className="rounded-[28px] border border-white/15 bg-background/88 backdrop-blur-2xl shadow-2xl overflow-hidden">
-                                    <div className="px-4 pt-4 pb-3 border-b border-white/10 flex items-center justify-between gap-3">
-                                        <div className="flex items-center gap-3 min-w-0">
-                                            <div className="h-10 w-10 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                                                <MessagesSquare className="h-5 w-5 text-primary" />
-                                            </div>
+                                {isModelEditHistoryOpen && modelEditMessages.length > 0 && (
+                                    <div className="mb-2 rounded-[22px] border border-white/15 bg-background/92 backdrop-blur-2xl shadow-2xl overflow-hidden">
+                                        <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between gap-3">
                                             <div className="min-w-0">
-                                                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-primary">Model Edit Bar</p>
-                                                <p className="text-[12px] font-bold text-foreground truncate">
+                                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Recent Model Edits</p>
+                                                <p className="text-[11px] text-muted-foreground truncate">
                                                     {activeSiteBuilding?.name || elements.building_name || 'Current BIM Model'}
                                                 </p>
                                             </div>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                                                onClick={() => setIsModelEditHistoryOpen(false)}
+                                            >
+                                                <ChevronDown className="h-4 w-4 rotate-180" />
+                                            </Button>
                                         </div>
-                                        <p className="hidden md:block text-[10px] text-muted-foreground/80 font-medium">
-                                            Type changes like "kitchen wall shift right" or attach an updated blueprint crop.
-                                        </p>
-                                    </div>
-
-                                    {modelEditMessages.length > 0 ? (
-                                        <div className="max-h-44 overflow-y-auto px-4 py-3 space-y-2 bg-white/5">
+                                        <div className="max-h-44 overflow-y-auto px-4 py-3 space-y-2">
                                             {modelEditMessages.slice(-4).map((entry) => (
                                                 <div
                                                     key={entry.id}
@@ -3855,7 +4177,7 @@ function BlueprintWorkspace() {
                                                                 ? "bg-primary text-primary-foreground border-primary/20"
                                                                 : entry.status === 'error'
                                                                     ? "bg-red-500/10 text-red-600 border-red-500/20"
-                                                                    : "bg-background/90 text-foreground border-white/10"
+                                                                    : "bg-white/5 text-foreground border-white/10"
                                                         )}
                                                     >
                                                         {entry.attachmentName && (
@@ -3868,88 +4190,104 @@ function BlueprintWorkspace() {
                                                 </div>
                                             ))}
                                         </div>
-                                    ) : (
-                                        <div className="px-4 py-3 bg-white/5">
-                                            <p className="text-[11px] text-muted-foreground/80">
-                                                Ask for geometry edits in natural language. Example: "Move the left bedroom wall 1m out", "add a powder room near the foyer", or "follow this new blueprint crop for the second floor".
+                                    </div>
+                                )}
+
+                                <div className="rounded-[22px] border border-white/15 bg-background/88 backdrop-blur-2xl shadow-2xl px-3 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="hidden sm:flex h-11 w-11 rounded-2xl bg-primary/10 border border-primary/20 items-center justify-center shrink-0">
+                                            <MessagesSquare className="h-5 w-5 text-primary" />
+                                        </div>
+
+                                        <div className="hidden lg:flex flex-col min-w-0 max-w-[180px] pr-1">
+                                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Model Edit</p>
+                                            <p className="text-[11px] font-bold text-foreground truncate">
+                                                {activeSiteBuilding?.name || elements.building_name || 'Current BIM Model'}
                                             </p>
                                         </div>
-                                    )}
 
-                                    <div className="p-3 space-y-3">
                                         {modelEditAttachment && (
-                                            <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                                            <div className="hidden md:flex items-center gap-2 min-w-0 max-w-[210px] rounded-full border border-white/10 bg-white/5 pl-2 pr-1 py-1 shrink">
                                                 <img
                                                     src={modelEditAttachment.previewUrl}
                                                     alt={modelEditAttachment.name}
-                                                    className="h-12 w-12 rounded-xl object-cover border border-white/10"
+                                                    className="h-8 w-8 rounded-full object-cover border border-white/10 shrink-0"
                                                 />
-                                                <div className="min-w-0 flex-1">
-                                                    <p className="text-[10px] font-black uppercase tracking-widest text-primary">Reference Blueprint</p>
-                                                    <p className="text-[11px] font-bold text-foreground truncate">{modelEditAttachment.name}</p>
-                                                </div>
+                                                <span className="min-w-0 flex-1 truncate text-[10px] font-black uppercase tracking-wider text-primary">
+                                                    {modelEditAttachment.name}
+                                                </span>
                                                 <button
                                                     type="button"
-                                                    className="h-8 w-8 rounded-full border border-white/10 bg-background/90 text-muted-foreground hover:text-foreground transition-colors flex items-center justify-center"
+                                                    className="h-7 w-7 rounded-full border border-white/10 bg-background/90 text-muted-foreground hover:text-foreground transition-colors flex items-center justify-center shrink-0"
                                                     onClick={clearModelEditAttachment}
                                                 >
-                                                    <X className="h-4 w-4" />
+                                                    <X className="h-3.5 w-3.5" />
                                                 </button>
                                             </div>
                                         )}
 
-                                        <div className="flex items-end gap-2">
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                size="icon"
-                                                className="h-11 w-11 rounded-2xl border-white/10 bg-white/5 hover:bg-white/10 shrink-0"
-                                                onClick={() => modelEditFileInputRef.current?.click()}
-                                            >
-                                                <Paperclip className="h-4 w-4" />
-                                            </Button>
-                                            <div className="flex-1 rounded-[22px] border border-white/10 bg-white/5 px-4 py-3 shadow-inner">
-                                                <textarea
-                                                    value={modelEditPrompt}
-                                                    onChange={(e) => setModelEditPrompt(e.target.value)}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === 'Enter' && !e.shiftKey) {
-                                                            e.preventDefault();
-                                                            void handleApplyModelEdit();
-                                                        }
-                                                    }}
-                                                    rows={2}
-                                                    placeholder="Tell the model what to change..."
-                                                    className="w-full resize-none bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
-                                                />
-                                            </div>
-                                            <Button
-                                                type="button"
-                                                className="h-11 px-5 rounded-2xl bg-primary hover:bg-primary/90 text-primary-foreground font-black uppercase tracking-widest text-[10px] shrink-0"
-                                                disabled={isApplyingModelEdit || !modelEditPrompt.trim()}
-                                                onClick={() => void handleApplyModelEdit()}
-                                            >
-                                                {isApplyingModelEdit ? <RefreshCw className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-                                            </Button>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="icon"
+                                            className="h-11 w-11 rounded-2xl border-white/10 bg-white/5 hover:bg-white/10 shrink-0"
+                                            onClick={() => modelEditFileInputRef.current?.click()}
+                                        >
+                                            <Paperclip className="h-4 w-4" />
+                                        </Button>
+
+                                        <div className="flex-1 rounded-full border border-white/10 bg-white/5 px-4 py-2 shadow-inner min-w-0">
+                                            <textarea
+                                                value={modelEditPrompt}
+                                                onChange={(e) => setModelEditPrompt(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                                        e.preventDefault();
+                                                        void handleApplyModelEdit();
+                                                    }
+                                                }}
+                                                rows={1}
+                                                placeholder="Tell the model what to change..."
+                                                className="w-full h-7 resize-none bg-transparent text-[13px] leading-7 text-foreground placeholder:text-muted-foreground/70 focus:outline-none overflow-hidden"
+                                            />
                                         </div>
 
-                                        <div className="flex items-center justify-between gap-3 px-1">
-                                            <p className="text-[10px] text-muted-foreground/80">
-                                                Shift+Enter for newline. Attach a fresh blueprint crop if you want edits to follow a revised plan.
-                                            </p>
-                                            <p className="hidden sm:block text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">
-                                                Realtime edit mode
-                                            </p>
-                                        </div>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-11 px-3 rounded-2xl border-white/10 bg-white/5 hover:bg-white/10 text-[10px] font-black uppercase tracking-widest shrink-0"
+                                            onClick={() => setIsModelEditHistoryOpen((prev) => !prev)}
+                                        >
+                                            <ChevronDown className={cn("h-4 w-4 mr-1 transition-transform", isModelEditHistoryOpen && "rotate-180")} />
+                                            {modelEditMessages.length}
+                                        </Button>
 
-                                        <input
-                                            ref={modelEditFileInputRef}
-                                            type="file"
-                                            accept={ACCEPTED_TYPES.join(',')}
-                                            className="hidden"
-                                            onChange={handleModelEditAttachmentUpload}
-                                        />
+                                        <Button
+                                            type="button"
+                                            className="h-11 px-4 rounded-2xl bg-primary hover:bg-primary/90 text-primary-foreground font-black uppercase tracking-widest text-[10px] shrink-0"
+                                            disabled={isApplyingModelEdit || !modelEditPrompt.trim()}
+                                            onClick={() => void handleApplyModelEdit()}
+                                        >
+                                            {isApplyingModelEdit ? <RefreshCw className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+                                        </Button>
                                     </div>
+
+                                    <div className="mt-2 flex items-center justify-between gap-3 px-1">
+                                        <p className="text-[10px] text-muted-foreground/80 truncate">
+                                            Shift+Enter for newline. Attach a revised blueprint crop when needed.
+                                        </p>
+                                        <p className="hidden sm:block text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 shrink-0">
+                                            Slim edit dock
+                                        </p>
+                                    </div>
+
+                                    <input
+                                        ref={modelEditFileInputRef}
+                                        type="file"
+                                        accept={ACCEPTED_TYPES.join(',')}
+                                        className="hidden"
+                                        onChange={handleModelEditAttachmentUpload}
+                                    />
                                 </div>
                             </div>
                         )}
