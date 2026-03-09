@@ -6203,6 +6203,17 @@ type BlueprintSheetAnalysis = {
   floorSignalCount: number;
 };
 
+type FocusedPlanCrop = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  regionCount: number;
+  confidence: number;
+  areaRatio: number;
+  reason: string;
+};
+
 type BoundingBox2D = [number, number, number, number];
 
 const polygonToBoundingBox = (polygon: number[] | null | undefined): BoundingBox2D | null => {
@@ -6658,14 +6669,79 @@ const deriveClusteredFloorCropPlans = (
   return selectBestFloorPlanPerLevel(filtered);
 };
 
-const deriveFloorCropPlans = (
-  layoutHints: BlueprintLayoutHints | null,
+const deriveRegionGuidedFloorCropPlans = (
+  sheetAnalysis: BlueprintSheetAnalysis | null,
   imageWidth: number,
   imageHeight: number
 ): FloorCropPlan[] => {
+  if (!sheetAnalysis || imageWidth <= 0 || imageHeight <= 0) return [];
+  if (sheetAnalysis.planRegionConfidence < 0.55) return [];
+
+  const candidatePlans = (sheetAnalysis.regions || [])
+    .map((region, index) => {
+      const left = toFiniteScalar(region.left);
+      const top = toFiniteScalar(region.top);
+      const width = toFiniteScalar(region.width);
+      const height = toFiniteScalar(region.height);
+      const confidence = clampConfidence01(toFiniteScalar(region.confidence) ?? 0);
+      if (
+        left == null ||
+        top == null ||
+        width == null ||
+        height == null ||
+        width <= 1 ||
+        height <= 1 ||
+        confidence < 0.42
+      ) {
+        return null;
+      }
+
+      const fallbackLevel = floorLabelToLevel(String(region.label || ''), index);
+      const level = Number.isFinite(region.level) ? Math.max(0, Math.round(region.level)) : fallbackLevel;
+      const bbox: BoundingBox2D = [left, top, left + width, top + height];
+      const areaRatio = (width * height) / Math.max(1, imageWidth * imageHeight);
+      const source: FloorCropPlan['source'] =
+        region.source === 'band' || region.source === 'whole' ? region.source : 'cluster';
+      const signalScore =
+        (confidence * 24) +
+        (isExplicitFloorPlanCaption(region.label) ? 7 : 0) +
+        Math.min(3.5, areaRatio * 10) +
+        (sheetAnalysis.kind === 'mixed_sheet' && source === 'cluster' ? 2.2 : 0);
+
+      return createFloorPlanFromBoundingBox(
+        String(region.label || '').trim() || `Floor ${level + 1}`,
+        level,
+        bbox,
+        imageWidth,
+        imageHeight,
+        source,
+        signalScore
+      );
+    })
+    .filter((plan): plan is FloorCropPlan => !!plan)
+    .sort(compareFloorPlanStrength);
+
+  if (candidatePlans.length === 0) return [];
+  return selectBestFloorPlanPerLevel(candidatePlans);
+};
+
+const deriveFloorCropPlans = (
+  layoutHints: BlueprintLayoutHints | null,
+  sheetAnalysis: BlueprintSheetAnalysis | null,
+  imageWidth: number,
+  imageHeight: number
+): FloorCropPlan[] => {
+  const regionGuided = deriveRegionGuidedFloorCropPlans(sheetAnalysis, imageWidth, imageHeight);
   const clustered = deriveClusteredFloorCropPlans(layoutHints, imageWidth, imageHeight);
+  const mergedStructured = selectBestFloorPlanPerLevel([...regionGuided, ...clustered]);
+  if (mergedStructured.length >= 2) return mergedStructured;
+  if (regionGuided.length >= 2) return regionGuided;
   if (clustered.length >= 2) return clustered;
-  return deriveBandFloorCropPlans(layoutHints, imageWidth, imageHeight);
+
+  const band = deriveBandFloorCropPlans(layoutHints, imageWidth, imageHeight);
+  const mergedFallback = selectBestFloorPlanPerLevel([...mergedStructured, ...band]);
+  if (mergedFallback.length >= 2) return mergedFallback;
+  return band.length > 0 ? band : mergedFallback;
 };
 
 const clampConfidence01 = (value: number): number =>
@@ -6754,7 +6830,7 @@ const derivePlanCropPlansForAnalysis = (
     };
   };
 
-  const plans = deriveFloorCropPlans(layoutHints, imageWidth, imageHeight)
+  const plans = deriveFloorCropPlans(layoutHints, null, imageWidth, imageHeight)
     .map(sanitizePlan)
     .filter((plan): plan is FloorCropPlan => !!plan);
   if (plans.length > 0) return plans;
@@ -6819,6 +6895,75 @@ const sanitizeBlueprintSheetAnalysis = (
     regions: safeRegions,
     explicitPlanCaptionCount: Math.max(0, Math.round(toFiniteScalar(sheetAnalysis.explicitPlanCaptionCount) ?? 0)),
     floorSignalCount: Math.max(0, Math.round(toFiniteScalar(sheetAnalysis.floorSignalCount) ?? 0)),
+  };
+};
+
+const deriveFocusedPlanCrop = (
+  sheetAnalysis: BlueprintSheetAnalysis | null,
+  imageWidth: number,
+  imageHeight: number
+): FocusedPlanCrop | null => {
+  if (!sheetAnalysis || imageWidth <= 0 || imageHeight <= 0) return null;
+  if (sheetAnalysis.kind !== 'mixed_sheet' && sheetAnalysis.kind !== 'floor_plan') return null;
+  if (sheetAnalysis.planRegionConfidence < 0.55) return null;
+
+  const candidateRegions = (sheetAnalysis.regions || [])
+    .filter((region) =>
+      Number.isFinite(region.left) &&
+      Number.isFinite(region.top) &&
+      Number.isFinite(region.width) &&
+      Number.isFinite(region.height) &&
+      Number.isFinite(region.confidence) &&
+      region.width > 1 &&
+      region.height > 1 &&
+      region.confidence >= 0.42
+    )
+    .sort((a, b) =>
+      (b.confidence - a.confidence) ||
+      ((b.width * b.height) - (a.width * a.height))
+    );
+
+  if (candidateRegions.length === 0) return null;
+
+  const regionsToUse =
+    sheetAnalysis.kind === 'mixed_sheet'
+      ? candidateRegions.slice(0, Math.min(4, candidateRegions.length))
+      : [candidateRegions[0]];
+
+  const minLeft = Math.min(...regionsToUse.map((region) => region.left));
+  const minTop = Math.min(...regionsToUse.map((region) => region.top));
+  const maxRight = Math.max(...regionsToUse.map((region) => region.left + region.width));
+  const maxBottom = Math.max(...regionsToUse.map((region) => region.top + region.height));
+
+  const padX = Math.max(28, Math.round(imageWidth * (sheetAnalysis.kind === 'mixed_sheet' ? 0.04 : 0.03)));
+  const padY = Math.max(28, Math.round(imageHeight * (sheetAnalysis.kind === 'mixed_sheet' ? 0.04 : 0.03)));
+  const left = Math.max(0, minLeft - padX);
+  const top = Math.max(0, minTop - padY);
+  const right = Math.min(imageWidth, maxRight + padX);
+  const bottom = Math.min(imageHeight, maxBottom + padY);
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  const areaRatio = (width * height) / Math.max(1, imageWidth * imageHeight);
+  const bestConfidence = Math.max(...regionsToUse.map((region) => region.confidence));
+
+  const meaningfulCrop =
+    sheetAnalysis.kind === 'mixed_sheet'
+      ? areaRatio < 0.985
+      : areaRatio < 0.94;
+  if (!meaningfulCrop) return null;
+
+  return {
+    left: Number(left.toFixed(2)),
+    top: Number(top.toFixed(2)),
+    width: Number(width.toFixed(2)),
+    height: Number(height.toFixed(2)),
+    regionCount: regionsToUse.length,
+    confidence: clampConfidence01(bestConfidence),
+    areaRatio: Number(areaRatio.toFixed(3)),
+    reason:
+      sheetAnalysis.kind === 'mixed_sheet'
+        ? 'focused union crop over detected plan blocks to suppress elevation/title noise'
+        : 'focused crop over strongest detected plan block',
   };
 };
 
@@ -7190,12 +7335,13 @@ async function attemptSegmentedMultiFloorReconstruction(
   structuralImage: string,
   fallbackImage: string,
   layoutHints: BlueprintLayoutHints | null,
+  sheetAnalysis: BlueprintSheetAnalysis | null,
   widthHint: number,
   heightHint: number,
   traceId: string
 ): Promise<GeometricReconstruction | null> {
   const { width, height } = resolveHintImageSize(layoutHints, widthHint, heightHint);
-  const plans = deriveFloorCropPlans(layoutHints, width, height);
+  const plans = deriveFloorCropPlans(layoutHints, sheetAnalysis, width, height);
   if (plans.length < 2) return null;
 
   traceLog('Infralith Vision Engine', traceId, '4/9', 'attempting segmented multi-floor reconstruction', {
@@ -8133,6 +8279,33 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     }, 'warn');
     sheetAnalysis = null;
   }
+  let focusedVisionImage = structuralInputImage;
+  const focusedPlanCrop = deriveFocusedPlanCrop(sheetAnalysis, preprocessed.width, preprocessed.height);
+  if (focusedPlanCrop) {
+    const croppedFocus =
+      (await cropImageRect(structuralInputImage, focusedPlanCrop.left, focusedPlanCrop.top, focusedPlanCrop.width, focusedPlanCrop.height)) ||
+      (await cropImageRect(imageUrl, focusedPlanCrop.left, focusedPlanCrop.top, focusedPlanCrop.width, focusedPlanCrop.height));
+    if (croppedFocus) {
+      focusedVisionImage = croppedFocus;
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'focused primary vision input from detected plan regions', {
+        kind: sheetAnalysis?.kind || 'unknown',
+        reason: focusedPlanCrop.reason,
+        regionCount: focusedPlanCrop.regionCount,
+        confidence: focusedPlanCrop.confidence,
+        areaRatio: focusedPlanCrop.areaRatio,
+        left: focusedPlanCrop.left,
+        top: focusedPlanCrop.top,
+        width: focusedPlanCrop.width,
+        height: focusedPlanCrop.height,
+      }, 'warn');
+    } else {
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'focused plan crop could not be materialized; continuing with full preprocessed image', {
+        reason: focusedPlanCrop.reason,
+        regionCount: focusedPlanCrop.regionCount,
+        confidence: focusedPlanCrop.confidence,
+      }, 'warn');
+    }
+  }
   const requiredSemanticMentions = extractRequiredSemanticMentionKeys(layoutHints);
   if (requiredSemanticMentions.length > 0) {
     traceLog('Infralith Vision Engine', traceId, '1/9', 'semantic anchors detected from blueprint text', {
@@ -8217,7 +8390,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       );
     };
 
-    let result = await runVisionPass('initial-reconstruction', '2/9', prompt, structuralInputImage);
+    let result = await runVisionPass('initial-reconstruction', '2/9', prompt, focusedVisionImage);
     traceLog('Infralith Vision Engine', traceId, '3/9', 'AI reconstruction received', summarizeReconstruction(result));
 
     let bestResult = result;
@@ -8342,7 +8515,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       VISION_CONSENSUS_MIN_SCORE - VISION_ORIGINAL_BASELINE_SCORE_OFFSET
     );
     const shouldTryOriginalBaseline =
-      structuralInputImage !== imageUrl &&
+      focusedVisionImage !== imageUrl &&
       (bestFidelity.shouldRetry || bestScore < baselineScoreGate);
 
     if (shouldTryOriginalBaseline && canRunVisionPass('original-image-baseline', false)) {
@@ -8382,7 +8555,7 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
     let fidelity = bestFidelity;
     while (fidelity.shouldRetry && retryCount < maxRetries && canRunVisionPass('strict-retry', false)) {
       retryCount += 1;
-      const retryImage = retryCount % 2 === 1 ? imageUrl : structuralInputImage;
+      const retryImage = retryCount % 2 === 1 ? imageUrl : focusedVisionImage;
       const strictPrompt = buildBlueprintRetryPrompt(prompt, fidelity.reasons);
       traceLog('Infralith Vision Engine', traceId, '4/9', 'underfit detected, retrying with stricter constraints', {
         retryCount,
@@ -8443,7 +8616,7 @@ SEMANTIC ANCHOR ENFORCEMENT (OCR-CONDITIONED):
       );
 
       try {
-        const semanticCandidate = await runVisionPass('semantic-enforcement', '5/9', semanticPrompt, imageUrl);
+        const semanticCandidate = await runVisionPass('semantic-enforcement', '5/9', semanticPrompt, focusedVisionImage);
         if (hasNonEmptyWalls(semanticCandidate)) {
           const promotedSemantic = promoteBestCandidate(semanticCandidate, 'semantic-enforcement', {
             minScoreGain: 0.6,
@@ -8503,7 +8676,7 @@ VERTICAL CIRCULATION ENFORCEMENT:
       );
 
       try {
-        const stairCandidate = await runVisionPass('staircase-enforcement', '5/9', stairPrompt, imageUrl);
+        const stairCandidate = await runVisionPass('staircase-enforcement', '5/9', stairPrompt, focusedVisionImage);
         if (hasNonEmptyWalls(stairCandidate)) {
           const promotedStairCandidate = promoteBestCandidate(stairCandidate, 'staircase-enforcement', {
             minScoreGain: 0.4,
@@ -8560,7 +8733,7 @@ NON-TEXT STAIR SYMBOL RECOVERY:
       );
 
       try {
-        const stairSymbolCandidate = await runVisionPass('stair-symbol-recovery', '5/9', stairSymbolPrompt, imageUrl);
+        const stairSymbolCandidate = await runVisionPass('stair-symbol-recovery', '5/9', stairSymbolPrompt, focusedVisionImage);
         if (hasNonEmptyWalls(stairSymbolCandidate)) {
           const promotedStairSymbol = promoteBestCandidate(stairSymbolCandidate, 'stair-symbol-recovery', {
             minScoreGain: 0.3,
@@ -8617,7 +8790,7 @@ INTERIOR PARTITION REFINEMENT:
       const interiorPrompt = buildBlueprintRetryPrompt(interiorPromptSeed, recoveryDiagnostics.slice(0, 4));
 
       try {
-        const interiorCandidate = await runVisionPass('interior-layout-recovery', '5/9', interiorPrompt, structuralInputImage);
+        const interiorCandidate = await runVisionPass('interior-layout-recovery', '5/9', interiorPrompt, focusedVisionImage);
         if (hasNonEmptyWalls(interiorCandidate)) {
           const promotedInterior = promoteBestCandidate(interiorCandidate, 'interior-layout-recovery', {
             minScoreGain: 0.4,
@@ -8672,7 +8845,7 @@ ROOM DIMENSION + POSITION ENFORCEMENT:
       const dimensionPrompt = buildBlueprintRetryPrompt(dimensionPromptSeed, diagnostics.slice(0, 4));
 
       try {
-        const dimensionCandidate = await runVisionPass('room-dimension-enforcement', '5/9', dimensionPrompt, imageUrl);
+        const dimensionCandidate = await runVisionPass('room-dimension-enforcement', '5/9', dimensionPrompt, focusedVisionImage);
         if (hasNonEmptyWalls(dimensionCandidate)) {
           const promotedDimension = promoteBestCandidate(dimensionCandidate, 'room-dimension-enforcement', {
             minScoreGain: 0.3,
@@ -8738,7 +8911,7 @@ OPENING-RECOVERY OVERRIDE:
       }, 'warn');
 
       try {
-        const openingCandidate = await runVisionPass('opening-recovery', '5/9', openingRecoveryPrompt, imageUrl);
+        const openingCandidate = await runVisionPass('opening-recovery', '5/9', openingRecoveryPrompt, focusedVisionImage);
         if (hasNonEmptyWalls(openingCandidate)) {
           const mergedCandidate = mergeOpeningsFromRecovery(result, openingCandidate);
           const openingCandidateScore = scoreReconstructionDensity(openingCandidate, layoutHints);
@@ -8795,8 +8968,13 @@ OPENING-RECOVERY OVERRIDE:
 
     const hintedFloorCount = estimateFloorHintCount(layoutHints);
     const explicitPlanCaptionCount = estimateExplicitFloorPlanHintCount(layoutHints);
-    const segmentationFloorSignal = Math.max(hintedFloorCount, explicitPlanCaptionCount);
-    const strongPlanCaptionSignal = explicitPlanCaptionCount >= 2;
+    const detectedPlanRegionCount = sheetAnalysis?.planRegionCount || 0;
+    const segmentationFloorSignal = Math.max(hintedFloorCount, explicitPlanCaptionCount, detectedPlanRegionCount);
+    const strongPlanCaptionSignal =
+      explicitPlanCaptionCount >= 2 ||
+      ((sheetAnalysis?.kind === 'mixed_sheet' || sheetAnalysis?.kind === 'floor_plan') &&
+        detectedPlanRegionCount >= 2 &&
+        (sheetAnalysis?.planRegionConfidence || 0) >= 0.62);
     const inferredFloorCount = estimateResultFloorCount(result);
     const sparseMultiFloorShell = isLikelySparseMultiFloorShell(result, segmentationFloorSignal);
     const interiorLayoutSignal = analyzeInteriorLayoutSignal(result);
@@ -8808,17 +8986,32 @@ OPENING-RECOVERY OVERRIDE:
     const wallDensityPerFloor = (result?.walls?.length || 0) / densityFloorCount;
     const lowRoomDensity = segmentationFloorSignal >= 2 && roomDensityPerFloor < 1.4;
     const lowWallDensity = segmentationFloorSignal >= 2 && wallDensityPerFloor < 4.8 && roomDensityPerFloor < 2.2;
+    const sheetDrivenSegmentation =
+      !!sheetAnalysis &&
+      sheetAnalysis.kind === 'mixed_sheet' &&
+      detectedPlanRegionCount >= 2 &&
+      sheetAnalysis.planRegionConfidence >= 0.62;
     const shouldAttemptSegmentation =
       segmentationFloorSignal >= 2 &&
-      (inferredFloorCount <= 1 || sparseMultiFloorShell || lowRoomDensity || lowWallDensity || placeholderInterior || significantDimensionMismatch);
+      (
+        inferredFloorCount <= 1 ||
+        sparseMultiFloorShell ||
+        lowRoomDensity ||
+        lowWallDensity ||
+        placeholderInterior ||
+        significantDimensionMismatch ||
+        sheetDrivenSegmentation
+      );
 
     if (shouldAttemptSegmentation && canRunVisionPass('segmented-floor-recovery', true, VISION_PASS_ESTIMATED_COST_MS * 3)) {
       const monolithicScore = scoreReconstructionDensity(result, layoutHints);
       traceLog('Infralith Vision Engine', traceId, '5/9', 'segmentation candidate triggered for multi-floor quality recovery', {
         hintedFloorCount,
         explicitPlanCaptionCount,
+        detectedPlanRegionCount,
         segmentationFloorSignal,
         strongPlanCaptionSignal,
+        sheetDrivenSegmentation,
         inferredFloorCount,
         sparseMultiFloorShell,
         lowRoomDensity,
@@ -8836,6 +9029,7 @@ OPENING-RECOVERY OVERRIDE:
         structuralInputImage,
         imageUrl,
         layoutHints,
+        sheetAnalysis,
         preprocessed.width,
         preprocessed.height,
         traceId
@@ -8897,7 +9091,7 @@ OPENING-RECOVERY OVERRIDE:
         const consensusPrompt = consensusReasons.length > 0
           ? buildBlueprintRetryPrompt(prompt, consensusReasons)
           : prompt;
-        const consensusImage = consensusRun % 2 === 0 ? imageUrl : structuralInputImage;
+        const consensusImage = consensusRun % 2 === 0 ? imageUrl : focusedVisionImage;
         const consensusLabel = `consensus-${consensusRun}`;
 
         try {
