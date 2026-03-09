@@ -20,6 +20,7 @@ import { applyBuildingCodes } from './building-codes';
 import {
   buildAssetPrompt,
   buildAssetRetryPrompt,
+  buildBlueprintModelAuditPrompt,
   buildBlueprintModelEditPrompt,
   buildBlueprintRetryPrompt,
   buildBlueprintVisionPrompt,
@@ -44,6 +45,22 @@ const AIAssetSchema = z.object({
     material: z.enum(['wood', 'metal', 'glass', 'plastic', 'stone', 'cloth'])
   }))
 });
+
+const BlueprintAuditIssueSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  severity: z.enum(['low', 'medium', 'high']),
+  floor_level: z.number().int(),
+  location: z.tuple([z.number(), z.number()]),
+  context_label: z.string(),
+  suggested_edit: z.string(),
+  target_ref: z.string(),
+}).strict();
+
+const BlueprintAuditResultSchema = z.object({
+  summary: z.string(),
+  issues: z.array(BlueprintAuditIssueSchema).max(6),
+}).strict();
 
 const summarizeReconstruction = (payload: GeometricReconstruction) => ({
   walls: payload?.walls?.length || 0,
@@ -9621,6 +9638,46 @@ export async function applyPromptEditToReconstruction(
     return finalModel;
   } catch (error) {
     traceLog('Infralith Edit Engine', traceId, 'error', 'model edit failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }, 'error');
+    throw error;
+  }
+}
+
+export async function auditBlueprintAgainstReconstruction(
+  currentModel: GeometricReconstruction,
+  referenceImage: string
+): Promise<z.infer<typeof BlueprintAuditResultSchema>> {
+  const traceId = createTraceId('auditbim');
+  const startedAt = Date.now();
+  if (!referenceImage || !String(referenceImage).trim()) {
+    throw new Error('Blueprint audit requires a reference image.');
+  }
+  if (!hasNonEmptyWalls(currentModel)) {
+    throw new Error('No editable model is loaded yet.');
+  }
+
+  const prompt = buildBlueprintModelAuditPrompt(serializeModelForEditPrompt(currentModel));
+  traceLog('Infralith Audit Engine', traceId, '0/2', 'starting blueprint-vs-model audit', {
+    hasReferenceImage: true,
+    walls: currentModel.walls?.length || 0,
+    rooms: currentModel.rooms?.length || 0,
+    conflicts: currentModel.conflicts?.length || 0,
+  });
+
+  try {
+    const result = await generateAzureVisionObject<z.infer<typeof BlueprintAuditResultSchema>>(
+      prompt,
+      referenceImage,
+      BlueprintAuditResultSchema
+    );
+    traceLog('Infralith Audit Engine', traceId, '2/2', `audit completed in ${Date.now() - startedAt}ms`, {
+      issues: result.issues.length,
+      summary: result.summary,
+    });
+    return result;
+  } catch (error) {
+    traceLog('Infralith Audit Engine', traceId, 'error', 'blueprint audit failed', {
       error: error instanceof Error ? error.message : String(error),
     }, 'error');
     throw error;

@@ -405,6 +405,52 @@ STRICT OUTPUT RULE:
 - No markdown, no commentary, no code fences.
 `;
 
+export const buildBlueprintModelAuditPrompt = (currentModelJson: string): string => `
+You are the Infralith Engineer Audit Engine.
+Your task: compare the ATTACHED BLUEPRINT IMAGE against the CURRENT model JSON and produce a concise issue list for walkthrough review.
+
+CURRENT MODEL JSON:
+${currentModelJson}
+
+MANDATORY AUDIT RULES:
+- Use BOTH sources together: the attached blueprint image is the ground reference, and the JSON describes the currently generated model.
+- Focus on mismatches that are useful to fix in the current model: missing rooms, wrong room labeling, misplaced interior walls, suspicious exterior wall alignment, missing windows/doors, missing stairs, incorrect floor stack, or shell/roof mismatch.
+- Prefer issues that can be localized to a room or wall.
+- Do not report cosmetic observations that are not grounded in the blueprint.
+- If a mismatch cannot be localized, return target_ref as an empty string.
+- target_ref must be one of:
+  - "room:<id>"
+  - "wall:<id>"
+  - "" if no reliable target id exists
+- context_label should be a short label like "Kitchen", "Wall w12", or "Floor 2".
+- floor_level must be an integer floor index starting from 0.
+- location must be a 2-number [x, y] plan coordinate from the current model. If uncertain, use the nearest relevant room or wall center.
+- suggested_edit must be a direct prompt that can be sent into the model edit bar.
+- Return at most 6 issues, highest value first.
+- If the model is already mostly aligned, return fewer issues instead of padding.
+
+OUTPUT JSON SHAPE:
+{
+  "summary": "Short one-line audit summary",
+  "issues": [
+    {
+      "title": "Short issue title",
+      "description": "Why this is mismatched between image and model",
+      "severity": "low|medium|high",
+      "floor_level": 0,
+      "location": [0, 0],
+      "context_label": "Kitchen",
+      "suggested_edit": "Direct model edit prompt",
+      "target_ref": "room:r2"
+    }
+  ]
+}
+
+STRICT OUTPUT RULE:
+- Output JSON object only.
+- No markdown, no commentary, no code fences.
+`;
+
 export const buildTextToBuildingPrompt = (description: string): string => `
 You are the Infralith Architect AI - the world's most advanced parametric architectural modeling engine.
 Your task: Generate a COMPLETE, REALISTIC, and STRUCTURALLY SOUND 3D building from the user's description.

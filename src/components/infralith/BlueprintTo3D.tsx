@@ -75,6 +75,7 @@ import {
     generateBuildingFromDescription,
     generateRealTimeAsset,
     applyPromptEditToReconstruction,
+    auditBlueprintAgainstReconstruction,
 } from '@/ai/flows/infralith/blueprint-to-3d-agent';
 
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
@@ -173,11 +174,25 @@ type EngineerAuditIssue = {
     severity: 'low' | 'medium' | 'high';
     floorLevel: number;
     location: [number, number];
-    source: 'review' | 'conflict' | 'room-scan' | 'wall-scan' | 'global';
+    source: 'review' | 'conflict' | 'room-scan' | 'wall-scan' | 'global' | 'ai-compare';
     suggestedEdit: string;
     contextLabel?: string;
     target?: { type: 'room' | 'wall'; id: string | number };
     discoveredAt: number;
+};
+
+type EngineerAuditAIResult = {
+    summary: string;
+    issues: Array<{
+        title: string;
+        description: string;
+        severity: 'low' | 'medium' | 'high';
+        floor_level: number;
+        location: [number, number];
+        context_label: string;
+        suggested_edit: string;
+        target_ref: string;
+    }>;
 };
 
 type LocalModelEditResult = {
@@ -2896,6 +2911,7 @@ function BlueprintWorkspace() {
     const [siteResult, setSiteResult] = useState<SiteReconstruction | null>(null);
     const [activeSiteBuildingId, setActiveSiteBuildingId] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
+    const [blueprintReferenceImage, setBlueprintReferenceImage] = useState<string | null>(null);
     const [description, setDescription] = useState('');
     const [status, setStatus] = useState<'idle' | 'preprocessing' | 'analyzing' | 'generating' | 'complete'>('idle');
     const [progress, setProgress] = useState(0);
@@ -2931,6 +2947,8 @@ function BlueprintWorkspace() {
     const [walkInventory, setWalkInventory] = useState<Array<{ id: string; label: string; count: number }>>([]);
     const [engineerAuditIssues, setEngineerAuditIssues] = useState<EngineerAuditIssue[]>([]);
     const [engineerAuditFeed, setEngineerAuditFeed] = useState<string | null>(null);
+    const [engineerAuditAiSummary, setEngineerAuditAiSummary] = useState<string | null>(null);
+    const [isRunningEngineerAiAudit, setIsRunningEngineerAiAudit] = useState(false);
     const [isEngineerAuditExpanded, setIsEngineerAuditExpanded] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
@@ -2943,6 +2961,7 @@ function BlueprintWorkspace() {
     const discoveredEngineerAuditIdsRef = useRef<Set<string>>(new Set());
     const inspectedEngineerRoomIdsRef = useRef<Set<string>>(new Set());
     const inspectedEngineerWallIdsRef = useRef<Set<string>>(new Set());
+    const engineerAuditAiRunKeyRef = useRef<string | null>(null);
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
     const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
     const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
@@ -3101,6 +3120,35 @@ function BlueprintWorkspace() {
             description: 'Audit issue was copied into the model edit dock.',
         });
     }, [elements, setSelectedElement, toast]);
+
+    const mergeEngineerAiAudit = useCallback((audit: EngineerAuditAIResult) => {
+        setEngineerAuditAiSummary(audit.summary || null);
+        for (const issue of audit.issues || []) {
+            const targetRef = String(issue.target_ref || '').trim();
+            let target: EngineerAuditIssue['target'];
+            if (targetRef.startsWith('room:')) {
+                target = { type: 'room', id: targetRef.slice(5) };
+            } else if (targetRef.startsWith('wall:')) {
+                target = { type: 'wall', id: targetRef.slice(5) };
+            }
+
+            registerEngineerAuditIssue({
+                id: createEngineerAuditIssueId('ai-compare', `${issue.title}-${issue.target_ref}-${issue.context_label}`),
+                title: issue.title,
+                description: issue.description,
+                severity: issue.severity,
+                floorLevel: normalizeFloorLevel(issue.floor_level),
+                location: Array.isArray(issue.location) && issue.location.length >= 2
+                    ? [Number(issue.location[0]) || 0, Number(issue.location[1]) || 0]
+                    : [0, 0],
+                source: 'ai-compare',
+                contextLabel: issue.context_label || undefined,
+                target,
+                suggestedEdit: issue.suggested_edit,
+                discoveredAt: Date.now(),
+            });
+        }
+    }, [registerEngineerAuditIssue]);
 
     const handleEngineerAuditSample = useCallback((sample: { position: [number, number]; speed: number }) => {
         if (!elements || !isWalkthrough || !showWalkthroughHuman) return;
@@ -3321,6 +3369,45 @@ function BlueprintWorkspace() {
     }, [blueprintReviewSummary, elements, isWalkthrough, registerEngineerAuditIssue, showWalkthroughHuman]);
 
     React.useEffect(() => {
+        if (!(isWalkthrough && showWalkthroughHuman && elements && blueprintReferenceImage)) return;
+        const runKey = [
+            elements.building_name || 'building',
+            elements.walls?.length || 0,
+            elements.rooms?.length || 0,
+            elements.conflicts?.length || 0,
+            blueprintReferenceImage.length,
+        ].join('|');
+        if (engineerAuditAiRunKeyRef.current === runKey) return;
+        engineerAuditAiRunKeyRef.current = runKey;
+        let cancelled = false;
+        setIsRunningEngineerAiAudit(true);
+
+        void auditBlueprintAgainstReconstruction(elements, blueprintReferenceImage)
+            .then((audit) => {
+                if (cancelled) return;
+                mergeEngineerAiAudit(audit as EngineerAuditAIResult);
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                console.warn('Engineer AI audit failed.', error);
+                setEngineerAuditAiSummary('AI compare could not complete. Heuristic audit is still active.');
+            })
+            .finally(() => {
+                if (!cancelled) setIsRunningEngineerAiAudit(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        blueprintReferenceImage,
+        elements,
+        isWalkthrough,
+        mergeEngineerAiAudit,
+        showWalkthroughHuman,
+    ]);
+
+    React.useEffect(() => {
         if (!siteResult || siteResult.buildings.length === 0) {
             setActiveSiteBuildingId(null);
             return;
@@ -3371,8 +3458,11 @@ function BlueprintWorkspace() {
         discoveredEngineerAuditIdsRef.current.clear();
         inspectedEngineerRoomIdsRef.current.clear();
         inspectedEngineerWallIdsRef.current.clear();
+        engineerAuditAiRunKeyRef.current = null;
         setEngineerAuditIssues([]);
         setEngineerAuditFeed(null);
+        setEngineerAuditAiSummary(null);
+        setIsRunningEngineerAiAudit(false);
     }, [elements, isWalkthrough, showWalkthroughHuman]);
 
     React.useEffect(() => {
@@ -3829,7 +3919,9 @@ function BlueprintWorkspace() {
         flowRunIdRef.current = null;
         pendingAutoWalkRef.current = false;
         hasAutoEnteredFullscreenRef.current = false;
+        engineerAuditAiRunKeyRef.current = null;
         setPreview(null); setDescription('');
+        setBlueprintReferenceImage(null);
         setStatus('idle'); setProgress(0); setElements(null);
         setSiteResult(null);
         setActiveSiteBuildingId(null);
@@ -3838,6 +3930,8 @@ function BlueprintWorkspace() {
         setIsModelEditHistoryOpen(false);
         setModelEditPrompt('');
         setModelEditMessages([]);
+        setEngineerAuditAiSummary(null);
+        setIsRunningEngineerAiAudit(false);
         clearModelEditAttachment();
     }, [clearModelEditAttachment, setElements]);
 
@@ -3901,6 +3995,10 @@ function BlueprintWorkspace() {
         setIsModelEditHistoryOpen(false);
         setModelEditMessages([]);
         setModelEditPrompt('');
+        setBlueprintReferenceImage(null);
+        setEngineerAuditAiSummary(null);
+        setIsRunningEngineerAiAudit(false);
+        engineerAuditAiRunKeyRef.current = null;
         clearModelEditAttachment();
         setStatus('preprocessing'); setProgress(0);
 
@@ -3924,6 +4022,7 @@ function BlueprintWorkspace() {
                 console.warn(`[Blueprint Flow][${runId}] Aborted after base64 conversion because a newer blueprint superseded it.`);
                 return;
             }
+            setBlueprintReferenceImage(b64);
             logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', {
                 base64Chars: b64.length,
                 siteModeEnabled,
@@ -4008,6 +4107,10 @@ function BlueprintWorkspace() {
         setIsModelEditHistoryOpen(false);
         setModelEditMessages([]);
         setModelEditPrompt('');
+        setBlueprintReferenceImage(null);
+        setEngineerAuditAiSummary(null);
+        setIsRunningEngineerAiAudit(false);
+        engineerAuditAiRunKeyRef.current = null;
         clearModelEditAttachment();
         setStatus('analyzing'); setProgress(0);
         let cur = 0;
@@ -4074,6 +4177,10 @@ function BlueprintWorkspace() {
             setIsModelEditHistoryOpen(false);
             setModelEditMessages([]);
             setModelEditPrompt('');
+            setBlueprintReferenceImage(null);
+            setEngineerAuditAiSummary(null);
+            setIsRunningEngineerAiAudit(false);
+            engineerAuditAiRunKeyRef.current = null;
             clearModelEditAttachment();
             setStatus('complete'); setProgress(1);
             setShowProjects(false);
@@ -4827,6 +4934,15 @@ function BlueprintWorkspace() {
                                                         </div>
                                                         <p className="mt-1 text-[10px] leading-snug text-white/65">
                                                             Walk near rooms and walls to build a blueprint mismatch checklist, then push fixes into the edit dock.
+                                                        </p>
+                                                        <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-white/40">
+                                                            {isRunningEngineerAiAudit
+                                                                ? 'AI compare running...'
+                                                                : engineerAuditAiSummary
+                                                                    ? `Image + JSON: ${engineerAuditAiSummary}`
+                                                                    : blueprintReferenceImage
+                                                                        ? 'Image + JSON compare ready'
+                                                                        : 'JSON audit only'}
                                                         </p>
                                                     </div>
                                                     <ChevronDown className={cn("h-4 w-4 text-white/70 transition-transform shrink-0", isEngineerAuditExpanded && "rotate-180")} />
