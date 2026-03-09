@@ -6714,9 +6714,112 @@ const derivePlanCropPlansForAnalysis = (
   imageWidth: number,
   imageHeight: number
 ): FloorCropPlan[] => {
-  const plans = deriveFloorCropPlans(layoutHints, imageWidth, imageHeight);
+  const sanitizePlan = (plan: FloorCropPlan): FloorCropPlan | null => {
+    const left = toFiniteScalar(plan.left);
+    const top = toFiniteScalar(plan.top);
+    const width = toFiniteScalar(plan.width);
+    const height = toFiniteScalar(plan.height);
+    if (
+      left == null ||
+      top == null ||
+      width == null ||
+      height == null ||
+      width <= 1 ||
+      height <= 1 ||
+      imageWidth <= 0 ||
+      imageHeight <= 0
+    ) {
+      return null;
+    }
+
+    const safeLeft = Math.min(Math.max(0, left), Math.max(0, imageWidth - 1));
+    const safeTop = Math.min(Math.max(0, top), Math.max(0, imageHeight - 1));
+    const safeWidth = Math.min(Math.max(1, width), Math.max(1, imageWidth - safeLeft));
+    const safeHeight = Math.min(Math.max(1, height), Math.max(1, imageHeight - safeTop));
+    const safeLevel = Number.isFinite(plan.level) ? Math.max(0, Math.round(plan.level)) : 0;
+    const safeSignal = toFiniteScalar(plan.signalScore) ?? 0;
+    const safeSource: FloorCropPlan['source'] =
+      plan.source === 'band' || plan.source === 'whole' ? plan.source : 'cluster';
+    const safeLabel = String(plan.label || '').trim() || `Floor ${safeLevel + 1}`;
+
+    return {
+      label: safeLabel,
+      level: safeLevel,
+      left: Number(safeLeft.toFixed(2)),
+      top: Number(safeTop.toFixed(2)),
+      width: Number(safeWidth.toFixed(2)),
+      height: Number(safeHeight.toFixed(2)),
+      source: safeSource,
+      signalScore: Number(safeSignal.toFixed(3)),
+    };
+  };
+
+  const plans = deriveFloorCropPlans(layoutHints, imageWidth, imageHeight)
+    .map(sanitizePlan)
+    .filter((plan): plan is FloorCropPlan => !!plan);
   if (plans.length > 0) return plans;
-  return deriveWholeSheetPlanFallback(layoutHints, imageWidth, imageHeight);
+  return deriveWholeSheetPlanFallback(layoutHints, imageWidth, imageHeight)
+    .map(sanitizePlan)
+    .filter((plan): plan is FloorCropPlan => !!plan);
+};
+
+const sanitizeBlueprintSheetAnalysis = (
+  sheetAnalysis: BlueprintSheetAnalysis | null
+): BlueprintSheetAnalysis | null => {
+  if (!sheetAnalysis) return null;
+
+  const safeRegions = (sheetAnalysis.regions || [])
+    .map((region) => {
+      const left = toFiniteScalar(region.left);
+      const top = toFiniteScalar(region.top);
+      const width = toFiniteScalar(region.width);
+      const height = toFiniteScalar(region.height);
+      const confidence = toFiniteScalar(region.confidence);
+      if (
+        left == null ||
+        top == null ||
+        width == null ||
+        height == null ||
+        confidence == null ||
+        width <= 1 ||
+        height <= 1
+      ) {
+        return null;
+      }
+
+      return {
+        label: String(region.label || '').trim() || `Floor ${Math.max(0, Math.round(region.level || 0)) + 1}`,
+        level: Number.isFinite(region.level) ? Math.max(0, Math.round(region.level)) : 0,
+        left: Number(left.toFixed(2)),
+        top: Number(top.toFixed(2)),
+        width: Number(width.toFixed(2)),
+        height: Number(height.toFixed(2)),
+        source: region.source === 'band' || region.source === 'whole' ? region.source : 'cluster',
+        confidence: clampConfidence01(confidence),
+      };
+    })
+    .filter((region): region is BlueprintSheetAnalysis['regions'][number] => !!region)
+    .slice(0, 6);
+
+  const kind: BlueprintSheetType =
+    sheetAnalysis.kind === 'floor_plan' ||
+    sheetAnalysis.kind === 'mixed_sheet' ||
+    sheetAnalysis.kind === 'site_plan' ||
+    sheetAnalysis.kind === 'elevation_only'
+      ? sheetAnalysis.kind
+      : 'unknown';
+
+  return {
+    kind,
+    confidence: clampConfidence01(toFiniteScalar(sheetAnalysis.confidence) ?? 0),
+    planRegionCount: safeRegions.length,
+    planRegionConfidence: clampConfidence01(toFiniteScalar(sheetAnalysis.planRegionConfidence) ?? 0),
+    manualReviewRecommended: Boolean(sheetAnalysis.manualReviewRecommended),
+    reasons: (sheetAnalysis.reasons || []).map((reason) => String(reason || '').trim()).filter(Boolean).slice(0, 5),
+    regions: safeRegions,
+    explicitPlanCaptionCount: Math.max(0, Math.round(toFiniteScalar(sheetAnalysis.explicitPlanCaptionCount) ?? 0)),
+    floorSignalCount: Math.max(0, Math.round(toFiniteScalar(sheetAnalysis.floorSignalCount) ?? 0)),
+  };
 };
 
 const analyzeBlueprintSheet = (
@@ -8009,16 +8112,26 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       ...summarizeLayoutHints(layoutHints),
     });
   }
-  const sheetAnalysis = analyzeBlueprintSheet(layoutHints, preprocessed.width, preprocessed.height);
-  if (sheetAnalysis) {
-    traceLog('Infralith Vision Engine', traceId, '1/9', 'heuristic sheet analysis', {
-      kind: sheetAnalysis.kind,
-      confidence: sheetAnalysis.confidence,
-      planRegionCount: sheetAnalysis.planRegionCount,
-      planRegionConfidence: sheetAnalysis.planRegionConfidence,
-      manualReviewRecommended: sheetAnalysis.manualReviewRecommended,
-      reasons: sheetAnalysis.reasons,
-    }, sheetAnalysis.manualReviewRecommended ? 'warn' : 'log');
+  let sheetAnalysis: BlueprintSheetAnalysis | null = null;
+  try {
+    sheetAnalysis = sanitizeBlueprintSheetAnalysis(
+      analyzeBlueprintSheet(layoutHints, preprocessed.width, preprocessed.height)
+    );
+    if (sheetAnalysis) {
+      traceLog('Infralith Vision Engine', traceId, '1/9', 'heuristic sheet analysis', {
+        kind: sheetAnalysis.kind,
+        confidence: sheetAnalysis.confidence,
+        planRegionCount: sheetAnalysis.planRegionCount,
+        planRegionConfidence: sheetAnalysis.planRegionConfidence,
+        manualReviewRecommended: sheetAnalysis.manualReviewRecommended,
+        reasons: sheetAnalysis.reasons,
+      }, sheetAnalysis.manualReviewRecommended ? 'warn' : 'log');
+    }
+  } catch (error) {
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'sheet analysis failed; continuing without review metadata', {
+      reason: error instanceof Error ? error.message : String(error),
+    }, 'warn');
+    sheetAnalysis = null;
   }
   const requiredSemanticMentions = extractRequiredSemanticMentionKeys(layoutHints);
   if (requiredSemanticMentions.length > 0) {
@@ -8986,7 +9099,16 @@ OPENING-RECOVERY OVERRIDE:
       }, 'warn');
     }
     traceLog('Infralith Vision Engine', traceId, '7/9', 'validation complete', summarizeReconstruction(validatedResult));
-    const reviewedResult = applySheetAnalysisToResult(validatedResult, sheetAnalysis);
+    let reviewedResult = validatedResult;
+    if (sheetAnalysis) {
+      try {
+        reviewedResult = applySheetAnalysisToResult(validatedResult, sheetAnalysis);
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '7/9', 'sheet analysis metadata application failed; returning validated result only', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
     const finalPayload: GeometricReconstruction = {
       ...reviewedResult,
       is_vision_only: !layoutHints,

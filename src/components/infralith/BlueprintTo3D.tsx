@@ -152,6 +152,16 @@ const formatConfidenceBadge = (value: unknown, fallback = 'n/a') => {
     return `${Math.round(Math.max(0, Math.min(1, numeric)) * 100)}%`;
 };
 
+const normalizeBlueprintErrorMessage = (error: unknown): string => {
+    const fallback = "The vision engine could not understand this layout. Please try a clearer blueprint.";
+    const raw = error instanceof Error ? error.message : fallback;
+    if (!raw) return fallback;
+    if (/server components render|digest property/i.test(raw)) {
+        return "Blueprint processing failed on the server. Retry once, and if it repeats upload a cleaner floor-plan crop instead of the full mixed sheet.";
+    }
+    return raw;
+};
+
 const summarizeBlueprintReview = (
     model: GeometricReconstruction | null | undefined,
     siteModeEnabled: boolean
@@ -2841,9 +2851,7 @@ function BlueprintWorkspace() {
             setSiteResult(null);
             setActiveSiteBuildingId(null);
             console.error('[Blueprint Flow] Generation failed.', error);
-            const message = error instanceof Error
-                ? error.message
-                : "The vision engine could not understand this layout. Please try a clearer blueprint.";
+            const message = normalizeBlueprintErrorMessage(error);
             toast({ title: "Construction Failed", description: message, variant: 'destructive' });
         }
     };

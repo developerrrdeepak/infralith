@@ -32,6 +32,11 @@ const toFinite = (value: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+const roundFinite = (value: unknown, digits = 3): number | null => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(digits)) : null;
+};
+
 const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, number, number, number] | null => {
   if (!Array.isArray(polygon) || polygon.length < 6) return null;
   const xs: number[] = [];
@@ -146,17 +151,22 @@ const summarizeSheetAnalysisForPrompt = (sheetAnalysis?: PromptSheetAnalysis): s
 
   return JSON.stringify({
     kind: sheetAnalysis.kind,
-    confidence: Number(sheetAnalysis.confidence.toFixed(3)),
+    confidence: roundFinite(sheetAnalysis.confidence),
     planRegionCount: sheetAnalysis.planRegionCount,
-    planRegionConfidence: Number(sheetAnalysis.planRegionConfidence.toFixed(3)),
+    planRegionConfidence: roundFinite(sheetAnalysis.planRegionConfidence),
     manualReviewRecommended: sheetAnalysis.manualReviewRecommended,
     reasons: sheetAnalysis.reasons.slice(0, 4),
     regions: sheetAnalysis.regions.slice(0, 4).map((region) => ({
       label: region.label,
       level: region.level,
       source: region.source,
-      confidence: Number(region.confidence.toFixed(3)),
-      bbox: [region.left, region.top, region.left + region.width, region.top + region.height],
+      confidence: roundFinite(region.confidence),
+      bbox: [
+        roundFinite(region.left, 2),
+        roundFinite(region.top, 2),
+        roundFinite(region.left + region.width, 2),
+        roundFinite(region.top + region.height, 2),
+      ],
     })),
   }, null, 2);
 };
