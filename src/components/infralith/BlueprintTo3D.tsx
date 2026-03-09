@@ -166,6 +166,20 @@ type ModelEditAttachment = {
     previewUrl: string;
 };
 
+type EngineerAuditIssue = {
+    id: string;
+    title: string;
+    description: string;
+    severity: 'low' | 'medium' | 'high';
+    floorLevel: number;
+    location: [number, number];
+    source: 'review' | 'conflict' | 'room-scan' | 'wall-scan' | 'global';
+    suggestedEdit: string;
+    contextLabel?: string;
+    target?: { type: 'room' | 'wall'; id: string | number };
+    discoveredAt: number;
+};
+
 type LocalModelEditResult = {
     model: GeometricReconstruction;
     message: string;
@@ -1177,6 +1191,31 @@ const pointToSegmentDistance2D = (
     const cz = az + t * dz;
     return { distance: Math.hypot(pointX - cx, pointZ - cz), t };
 };
+
+const isPointInsidePolygon2D = (x: number, z: number, polygon: [number, number][]): boolean => {
+    if (!Array.isArray(polygon) || polygon.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const xi = Number(polygon[i]?.[0]);
+        const zi = Number(polygon[i]?.[1]);
+        const xj = Number(polygon[j]?.[0]);
+        const zj = Number(polygon[j]?.[1]);
+        if (![xi, zi, xj, zj].every(Number.isFinite)) continue;
+        const intersects = ((zi > z) !== (zj > z))
+            && (x < (((xj - xi) * (z - zi)) / ((zj - zi) || 1e-9)) + xi);
+        if (intersects) inside = !inside;
+    }
+    return inside;
+};
+
+const isGenericRoomLabel = (value: string): boolean => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return true;
+    return /^(room|space|area|hall|zone|section|unknown|unnamed)(\s*\d+)?$/.test(normalized);
+};
+
+const createEngineerAuditIssueId = (source: string, key: string) =>
+    `${source}:${key}`.toLowerCase().replace(/[^a-z0-9:_-]+/g, '-');
 
 // -- UI Helper Components for Professional CAD Interface --
 
@@ -2644,7 +2683,15 @@ function HumanCharacter({
     );
 }
 
-function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any; humanModelUrl?: string | null }) {
+function EngineerWalkthroughController({
+    bounds,
+    humanModelUrl,
+    onAuditSample,
+}: {
+    bounds?: any;
+    humanModelUrl?: string | null;
+    onAuditSample?: (sample: { position: [number, number]; speed: number }) => void;
+}) {
     const { camera } = useThree();
     const controlsRef = useRef<any>(null);
     const playerRef = useRef<THREE.Group>(null);
@@ -2664,6 +2711,7 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
     const upAxisRef = useRef(new THREE.Vector3(0, 1, 0));
     const followTargetRef = useRef(new THREE.Vector3());
     const bobOffsetRef = useRef(0);
+    const lastAuditSampleRef = useRef({ time: 0, x: Number.NaN, z: Number.NaN });
 
     const syncAnimationState = useCallback(() => {
         // actual moving/sprinting state is derived from smoothed velocity in-frame
@@ -2791,6 +2839,25 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
         const target = followTargetRef.current.set(playerPosition.current.x, 1.15, playerPosition.current.z);
         controls.target.lerp(target, Math.min(1, dt * 11));
         controls.update();
+
+        if (onAuditSample) {
+            const lastSample = lastAuditSampleRef.current;
+            const distanceSinceLast = Number.isFinite(lastSample.x) && Number.isFinite(lastSample.z)
+                ? Math.hypot(playerPosition.current.x - lastSample.x, playerPosition.current.z - lastSample.z)
+                : Number.POSITIVE_INFINITY;
+            const now = state.clock.elapsedTime;
+            if ((now - lastSample.time) >= 0.35 && (distanceSinceLast >= 0.55 || horizontalSpeed <= 0.08)) {
+                lastAuditSampleRef.current = {
+                    time: now,
+                    x: playerPosition.current.x,
+                    z: playerPosition.current.z,
+                };
+                onAuditSample({
+                    position: [Number(playerPosition.current.x.toFixed(3)), Number(playerPosition.current.z.toFixed(3))],
+                    speed: Number(horizontalSpeed.toFixed(3)),
+                });
+            }
+        }
     });
 
     return (
@@ -2862,13 +2929,20 @@ function BlueprintWorkspace() {
     const [walkOpenedDoorIds, setWalkOpenedDoorIds] = useState<Set<string>>(new Set());
     const [walkCollectedItemIds, setWalkCollectedItemIds] = useState<Set<string>>(new Set());
     const [walkInventory, setWalkInventory] = useState<Array<{ id: string; label: string; count: number }>>([]);
+    const [engineerAuditIssues, setEngineerAuditIssues] = useState<EngineerAuditIssue[]>([]);
+    const [engineerAuditFeed, setEngineerAuditFeed] = useState<string | null>(null);
+    const [isEngineerAuditExpanded, setIsEngineerAuditExpanded] = useState(true);
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
     const modelEditFileInputRef = useRef<HTMLInputElement | null>(null);
+    const modelEditTextareaRef = useRef<HTMLTextAreaElement | null>(null);
     const reviewPopoverRef = useRef<HTMLDivElement | null>(null);
     const pendingAutoWalkRef = useRef(false);
     const hasAutoEnteredFullscreenRef = useRef(false);
+    const discoveredEngineerAuditIdsRef = useRef<Set<string>>(new Set());
+    const inspectedEngineerRoomIdsRef = useRef<Set<string>>(new Set());
+    const inspectedEngineerWallIdsRef = useRef<Set<string>>(new Set());
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
     const walkthroughInteractables = useMemo(() => buildWalkthroughInteractables(elements), [elements]);
     const walkthroughFloorCount = useMemo(() => inferClientFloorCount(elements), [elements]);
@@ -2981,6 +3055,190 @@ function BlueprintWorkspace() {
         });
     }, [toast, walkCollectedItemIds]);
 
+    const registerEngineerAuditIssue = useCallback((issue: EngineerAuditIssue) => {
+        if (discoveredEngineerAuditIdsRef.current.has(issue.id)) return false;
+        discoveredEngineerAuditIdsRef.current.add(issue.id);
+        setEngineerAuditIssues((prev) => {
+            const next = [issue, ...prev];
+            next.sort((a, b) => {
+                const severityRank = { high: 3, medium: 2, low: 1 };
+                const delta = severityRank[b.severity] - severityRank[a.severity];
+                if (delta !== 0) return delta;
+                return b.discoveredAt - a.discoveredAt;
+            });
+            return next.slice(0, 18);
+        });
+        setEngineerAuditFeed(`${issue.title}${issue.contextLabel ? ` • ${issue.contextLabel}` : ''}`);
+        if (issue.severity === 'high') {
+            toast({
+                title: 'Engineer Audit Flagged',
+                description: `${issue.title}${issue.contextLabel ? ` in ${issue.contextLabel}` : ''}.`,
+                variant: 'destructive',
+            });
+        }
+        return true;
+    }, [toast]);
+
+    const dismissEngineerAuditIssue = useCallback((issueId: string) => {
+        setEngineerAuditIssues((prev) => prev.filter((issue) => issue.id !== issueId));
+    }, []);
+
+    const useEngineerAuditIssueFix = useCallback((issue: EngineerAuditIssue) => {
+        if (issue.target && elements) {
+            if (issue.target.type === 'room') {
+                const room = (elements.rooms || []).find((entry) => String(entry.id) === String(issue.target?.id));
+                if (room) setSelectedElement({ type: 'room', data: room });
+            } else {
+                const wall = (elements.walls || []).find((entry) => String(entry.id) === String(issue.target?.id));
+                if (wall) setSelectedElement({ type: 'wall', data: wall });
+            }
+        }
+        setModelEditPrompt(issue.suggestedEdit);
+        setIsModelEditHistoryOpen(true);
+        window.requestAnimationFrame(() => modelEditTextareaRef.current?.focus());
+        toast({
+            title: 'Fix Prompt Prepared',
+            description: 'Audit issue was copied into the model edit dock.',
+        });
+    }, [elements, setSelectedElement, toast]);
+
+    const handleEngineerAuditSample = useCallback((sample: { position: [number, number]; speed: number }) => {
+        if (!elements || !isWalkthrough || !showWalkthroughHuman) return;
+        const [x, z] = sample.position;
+        const movingFast = sample.speed > 5.4;
+        const rooms = elements.rooms || [];
+        const walls = elements.walls || [];
+        const doors = elements.doors || [];
+        const windows = elements.windows || [];
+
+        let activeRoom =
+            rooms.find((room) => isPointInsidePolygon2D(x, z, room.polygon || [])) || null;
+        if (!activeRoom) {
+            let bestRoom: typeof activeRoom = null;
+            let bestDistance = Number.POSITIVE_INFINITY;
+            for (const room of rooms) {
+                const center = computeRoomCenter(room.polygon || []);
+                if (!center) continue;
+                const distance = Math.hypot(center[0] - x, center[1] - z);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestRoom = room;
+                }
+            }
+            if (bestDistance <= 2.25) activeRoom = bestRoom;
+        }
+
+        if (activeRoom && !inspectedEngineerRoomIdsRef.current.has(String(activeRoom.id))) {
+            inspectedEngineerRoomIdsRef.current.add(String(activeRoom.id));
+            const roomCenter = computeRoomCenter(activeRoom.polygon || []) || [x, z];
+            const roomArea = Math.abs(Number(activeRoom.area) || 0);
+            const roomConfidence = Number(activeRoom.confidence);
+            const roomLevel = normalizeFloorLevel(activeRoom.floor_level);
+            const roomLabel = String(activeRoom.name || `Room ${activeRoom.id}`).trim() || `Room ${activeRoom.id}`;
+            if (Number.isFinite(roomConfidence) && roomConfidence < 0.7) {
+                registerEngineerAuditIssue({
+                    id: createEngineerAuditIssueId('room-confidence', `${activeRoom.id}`),
+                    title: 'Room shape confidence is low',
+                    description: `${roomLabel} looks weakly parsed versus the blueprint. Interior boundaries around this room may need correction.`,
+                    severity: roomConfidence < 0.52 ? 'high' : 'medium',
+                    floorLevel: roomLevel,
+                    location: roomCenter as [number, number],
+                    source: 'room-scan',
+                    contextLabel: roomLabel,
+                    target: { type: 'room', id: activeRoom.id },
+                    suggestedEdit: `Refine the ${roomLabel} room to match the blueprint more closely. Correct its polygon, wall alignment, and connected openings on floor ${roomLevel + 1}.`,
+                    discoveredAt: Date.now(),
+                });
+            }
+            if (isGenericRoomLabel(roomLabel)) {
+                registerEngineerAuditIssue({
+                    id: createEngineerAuditIssueId('room-label', `${activeRoom.id}`),
+                    title: 'Room label is too generic',
+                    description: `${roomLabel} was parsed without a reliable semantic label. Compare this space with the blueprint room name and update it.`,
+                    severity: 'medium',
+                    floorLevel: roomLevel,
+                    location: roomCenter as [number, number],
+                    source: 'room-scan',
+                    contextLabel: roomLabel,
+                    target: { type: 'room', id: activeRoom.id },
+                    suggestedEdit: `Rename the room near ${roomLabel} to the correct blueprint space name and adjust its walls if the room boundary is wrong.`,
+                    discoveredAt: Date.now(),
+                });
+            }
+            if (roomArea > 0 && roomArea < 3.2) {
+                registerEngineerAuditIssue({
+                    id: createEngineerAuditIssueId('room-area', `${activeRoom.id}`),
+                    title: 'Room area looks unusually small',
+                    description: `${roomLabel} is only ${roomArea.toFixed(1)} m². This often means the blueprint partition or room polygon was clipped incorrectly.`,
+                    severity: 'medium',
+                    floorLevel: roomLevel,
+                    location: roomCenter as [number, number],
+                    source: 'room-scan',
+                    contextLabel: roomLabel,
+                    target: { type: 'room', id: activeRoom.id },
+                    suggestedEdit: `Expand or correct the ${roomLabel} room boundary so its size and enclosing walls match the blueprint.`,
+                    discoveredAt: Date.now(),
+                });
+            }
+        }
+
+        let nearestWall: GeometricReconstruction['walls'][number] | null = null;
+        let nearestWallDistance = Number.POSITIVE_INFINITY;
+        for (const wall of walls) {
+            const result = pointToSegmentDistance2D(x, z, wall.start[0], wall.start[1], wall.end[0], wall.end[1]);
+            if (result.distance < nearestWallDistance) {
+                nearestWallDistance = result.distance;
+                nearestWall = wall;
+            }
+        }
+
+        if (nearestWall && nearestWallDistance <= (movingFast ? 0.9 : 1.25) && !inspectedEngineerWallIdsRef.current.has(String(nearestWall.id))) {
+            inspectedEngineerWallIdsRef.current.add(String(nearestWall.id));
+            const wallCenter: [number, number] = [
+                Number(((nearestWall.start[0] + nearestWall.end[0]) * 0.5).toFixed(3)),
+                Number(((nearestWall.start[1] + nearestWall.end[1]) * 0.5).toFixed(3)),
+            ];
+            const wallLength = Math.hypot(nearestWall.end[0] - nearestWall.start[0], nearestWall.end[1] - nearestWall.start[1]);
+            const wallConfidence = Number(nearestWall.confidence);
+            const wallLevel = normalizeFloorLevel(nearestWall.floor_level);
+            const hostedOpeningCount =
+                doors.filter((door) => String(door.host_wall_id) === String(nearestWall.id)).length +
+                windows.filter((win) => String(win.host_wall_id) === String(nearestWall.id)).length;
+
+            if (Number.isFinite(wallConfidence) && wallConfidence < 0.7) {
+                registerEngineerAuditIssue({
+                    id: createEngineerAuditIssueId('wall-confidence', `${nearestWall.id}`),
+                    title: 'Wall alignment confidence is low',
+                    description: `A nearby wall on floor ${wallLevel + 1} looks uncertain against the blueprint trace. Check its alignment and junctions.`,
+                    severity: wallConfidence < 0.52 ? 'high' : 'medium',
+                    floorLevel: wallLevel,
+                    location: wallCenter,
+                    source: 'wall-scan',
+                    contextLabel: `Wall ${nearestWall.id}`,
+                    target: { type: 'wall', id: nearestWall.id },
+                    suggestedEdit: `Re-align wall ${nearestWall.id} on floor ${wallLevel + 1} to the blueprint trace. Correct its start/end points, thickness, and junctions.`,
+                    discoveredAt: Date.now(),
+                });
+            }
+
+            if (wallLength >= 6 && hostedOpeningCount === 0) {
+                registerEngineerAuditIssue({
+                    id: createEngineerAuditIssueId('wall-opening', `${nearestWall.id}`),
+                    title: 'Long wall has no detected openings',
+                    description: `This ${wallLength.toFixed(1)}m wall has no doors or windows attached. Compare it with the blueprint in case an opening was missed.`,
+                    severity: nearestWall.is_exterior ? 'medium' : 'low',
+                    floorLevel: wallLevel,
+                    location: wallCenter,
+                    source: 'wall-scan',
+                    contextLabel: `Wall ${nearestWall.id}`,
+                    target: { type: 'wall', id: nearestWall.id },
+                    suggestedEdit: `Inspect wall ${nearestWall.id} against the blueprint and add any missing window or door openings if they exist on that wall.`,
+                    discoveredAt: Date.now(),
+                });
+            }
+        }
+    }, [elements, isWalkthrough, registerEngineerAuditIssue, showWalkthroughHuman]);
+
     // Initialize visibility
     React.useEffect(() => {
         if (elements) {
@@ -3003,6 +3261,64 @@ function BlueprintWorkspace() {
             return next;
         });
     };
+
+    React.useEffect(() => {
+        if (!(isWalkthrough && showWalkthroughHuman && elements)) return;
+
+        const fallbackLocation: [number, number] =
+            (elements.rooms?.[0]?.polygon?.[0] as [number, number] | undefined) ||
+            (elements.walls?.[0]?.start as [number, number] | undefined) ||
+            [0, 0];
+
+        if (blueprintReviewSummary) {
+            registerEngineerAuditIssue({
+                id: createEngineerAuditIssueId('review', blueprintReviewSummary.title),
+                title: blueprintReviewSummary.title,
+                description: blueprintReviewSummary.description,
+                severity: blueprintReviewSummary.severity,
+                floorLevel: 0,
+                location: fallbackLocation,
+                source: 'review',
+                contextLabel: 'Blueprint review',
+                suggestedEdit: `Review the model against the blueprint and resolve this issue: ${blueprintReviewSummary.description}`,
+                discoveredAt: Date.now(),
+            });
+        }
+
+        for (const conflict of (elements.conflicts || []).slice(0, 8)) {
+            registerEngineerAuditIssue({
+                id: createEngineerAuditIssueId('conflict', `${conflict.type}-${conflict.description}-${conflict.location?.join(',')}`),
+                title: `${conflict.type[0].toUpperCase()}${conflict.type.slice(1)} issue detected`,
+                description: conflict.description,
+                severity: conflict.severity,
+                floorLevel: 0,
+                location: Array.isArray(conflict.location) ? conflict.location : fallbackLocation,
+                source: 'conflict',
+                contextLabel: 'Conflict log',
+                suggestedEdit: `Fix this ${conflict.type} issue in the model: ${conflict.description}`,
+                discoveredAt: Date.now(),
+            });
+        }
+
+        const floorCount = inferClientFloorCount(elements);
+        const hasStairSignal =
+            (elements.rooms || []).some((room) => /stair|stairs|staircase|landing/i.test(String(room.name || ''))) ||
+            (elements.furnitures || []).some((item) => /stair|stairs|staircase|landing/i.test(`${item.type} ${item.description}`));
+        if (floorCount > 1 && !hasStairSignal) {
+            registerEngineerAuditIssue({
+                id: createEngineerAuditIssueId('global', `stairs-${floorCount}`),
+                title: 'Vertical circulation is missing',
+                description: `The model has ${floorCount} floors but no clear stairs or landing semantics were found. Compare this with the blueprint before walkthrough sign-off.`,
+                severity: 'high',
+                floorLevel: 0,
+                location: fallbackLocation,
+                source: 'global',
+                contextLabel: 'Core circulation',
+                suggestedEdit: `Add or correct staircase and landing geometry so all ${floorCount} floors connect according to the blueprint.`,
+                discoveredAt: Date.now(),
+            });
+        }
+    }, [blueprintReviewSummary, elements, isWalkthrough, registerEngineerAuditIssue, showWalkthroughHuman]);
 
     React.useEffect(() => {
         if (!siteResult || siteResult.buildings.length === 0) {
@@ -3051,10 +3367,31 @@ function BlueprintWorkspace() {
     }, [isWalkthrough]);
 
     React.useEffect(() => {
+        if (isWalkthrough && showWalkthroughHuman && elements) return;
+        discoveredEngineerAuditIdsRef.current.clear();
+        inspectedEngineerRoomIdsRef.current.clear();
+        inspectedEngineerWallIdsRef.current.clear();
+        setEngineerAuditIssues([]);
+        setEngineerAuditFeed(null);
+    }, [elements, isWalkthrough, showWalkthroughHuman]);
+
+    React.useEffect(() => {
+        if (isWalkthrough && showWalkthroughHuman) {
+            setIsEngineerAuditExpanded(true);
+        }
+    }, [isWalkthrough, showWalkthroughHuman]);
+
+    React.useEffect(() => {
         if (!walkActionFeed) return;
         const timer = window.setTimeout(() => setWalkActionFeed(null), 2200);
         return () => window.clearTimeout(timer);
     }, [walkActionFeed]);
+
+    React.useEffect(() => {
+        if (!engineerAuditFeed) return;
+        const timer = window.setTimeout(() => setEngineerAuditFeed(null), 2600);
+        return () => window.clearTimeout(timer);
+    }, [engineerAuditFeed]);
 
     React.useEffect(() => {
         return () => {
@@ -4342,6 +4679,7 @@ function BlueprintWorkspace() {
                                     <EngineerWalkthroughController
                                         bounds={walkthroughBounds}
                                         humanModelUrl={ENGINEER_AVATAR_GLB_URL}
+                                        onAuditSample={handleEngineerAuditSample}
                                     />
                                 ) : (
                                     <WalkthroughController
@@ -4468,6 +4806,109 @@ function BlueprintWorkspace() {
                                         </span>
                                     </div>
                                 </div>
+                                {showWalkthroughHuman && (
+                                    <>
+                                        <div className="absolute top-24 right-6 pointer-events-auto z-[100] w-[min(360px,calc(100vw-2rem))]">
+                                            <div className="rounded-2xl border border-white/10 bg-black/45 backdrop-blur-xl shadow-2xl overflow-hidden">
+                                                <button
+                                                    type="button"
+                                                    className="w-full px-4 py-3 flex items-start justify-between gap-3 text-left"
+                                                    onClick={() => setIsEngineerAuditExpanded((prev) => !prev)}
+                                                >
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <AlertTriangle className="h-4 w-4 text-amber-300" />
+                                                            <span className="text-[10px] font-black tracking-[0.18em] uppercase text-amber-100">
+                                                                Engineer Audit
+                                                            </span>
+                                                            <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[9px] font-black text-white/80">
+                                                                {engineerAuditIssues.length}
+                                                            </span>
+                                                        </div>
+                                                        <p className="mt-1 text-[10px] leading-snug text-white/65">
+                                                            Walk near rooms and walls to build a blueprint mismatch checklist, then push fixes into the edit dock.
+                                                        </p>
+                                                    </div>
+                                                    <ChevronDown className={cn("h-4 w-4 text-white/70 transition-transform shrink-0", isEngineerAuditExpanded && "rotate-180")} />
+                                                </button>
+
+                                                {isEngineerAuditExpanded && (
+                                                    <div className="border-t border-white/10 px-4 py-3 space-y-3">
+                                                        {engineerAuditIssues.length === 0 ? (
+                                                            <div className="rounded-xl border border-dashed border-white/10 bg-white/5 px-3 py-3 text-[10px] leading-relaxed text-white/60">
+                                                                No audit issues logged yet. Walk into rooms or near suspicious walls and the engineer will add review points here.
+                                                            </div>
+                                                        ) : (
+                                                            <div className="max-h-[260px] overflow-y-auto space-y-2 pr-1">
+                                                                {engineerAuditIssues.slice(0, 6).map((issue) => (
+                                                                    <div key={issue.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                                                                        <div className="flex items-start justify-between gap-3">
+                                                                            <div className="min-w-0">
+                                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                                    <span className={cn(
+                                                                                        "rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.2em]",
+                                                                                        issue.severity === 'high'
+                                                                                            ? "bg-red-500/20 text-red-100"
+                                                                                            : issue.severity === 'medium'
+                                                                                                ? "bg-amber-500/20 text-amber-100"
+                                                                                                : "bg-sky-500/20 text-sky-100"
+                                                                                    )}>
+                                                                                        {issue.severity}
+                                                                                    </span>
+                                                                                    <span className="text-[9px] font-black uppercase tracking-widest text-white/45">
+                                                                                        F{issue.floorLevel + 1}
+                                                                                    </span>
+                                                                                    {issue.contextLabel && (
+                                                                                        <span className="text-[9px] font-black uppercase tracking-widest text-white/45 truncate max-w-[130px]">
+                                                                                            {issue.contextLabel}
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                                <p className="mt-1 text-[11px] font-bold text-white">{issue.title}</p>
+                                                                                <p className="mt-1 text-[10px] leading-snug text-white/65">
+                                                                                    {issue.description}
+                                                                                </p>
+                                                                            </div>
+                                                                            <button
+                                                                                type="button"
+                                                                                className="h-7 w-7 rounded-full border border-white/10 bg-white/5 text-white/50 hover:text-white/90 flex items-center justify-center shrink-0"
+                                                                                onClick={() => dismissEngineerAuditIssue(issue.id)}
+                                                                            >
+                                                                                <X className="h-3.5 w-3.5" />
+                                                                            </button>
+                                                                        </div>
+                                                                        <div className="mt-3 flex items-center gap-2">
+                                                                            <Button
+                                                                                type="button"
+                                                                                size="sm"
+                                                                                className="h-8 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground px-3 text-[10px] font-black uppercase tracking-widest"
+                                                                                onClick={() => useEngineerAuditIssueFix(issue)}
+                                                                            >
+                                                                                <Wand2 className="h-3.5 w-3.5 mr-1.5" />
+                                                                                Use Fix
+                                                                            </Button>
+                                                                            <span className="text-[9px] text-white/45 truncate">
+                                                                                {issue.source.replace(/-/g, ' ')}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {engineerAuditFeed && (
+                                            <div className="absolute bottom-28 right-6 pointer-events-none z-[100]">
+                                                <div className="bg-amber-500/18 border border-amber-300/35 text-amber-50 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider shadow-xl">
+                                                    Audit Logged: {engineerAuditFeed}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                                 {!showWalkthroughHuman && (
                                     <>
                                         <div className="absolute top-24 left-6 pointer-events-none z-[100]">
@@ -4650,6 +5091,7 @@ function BlueprintWorkspace() {
 
                                         <div className="flex-1 rounded-full border border-white/10 bg-white/5 px-4 py-2 shadow-inner min-w-0">
                                             <textarea
+                                                ref={modelEditTextareaRef}
                                                 value={modelEditPrompt}
                                                 onChange={(e) => setModelEditPrompt(e.target.value)}
                                                 onKeyDown={(e) => {
