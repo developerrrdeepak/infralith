@@ -81,11 +81,11 @@ import { BIMProvider, useBIM } from '@/contexts/bim-context';
 import { exportToDXF, exportToSVG, downloadStringAsFile } from '@/lib/cad-exporter';
 import { estimateConstructionCost } from '@/lib/cost-estimator';
 
-// -- Optional custom civil-engineer model (GLB) for walkthrough --
-// Prefer /public/models/civil-engineer.glb via NEXT_PUBLIC_CIVIL_ENGINEER_GLB_URL.
-// Legacy default path /public/models/human.glb is still supported.
-const CUSTOM_HUMAN_GLB_URL: string | null =
-    process.env.NEXT_PUBLIC_CIVIL_ENGINEER_GLB_URL ||
+// -- Optional human models (GLB) --
+// Engineer walkthrough intentionally defaults to the procedural in-app avatar
+// so the third-person character stays reliable without requiring an external GLB.
+const ENGINEER_AVATAR_GLB_URL: string | null = null;
+const SCENE_HUMAN_GLB_URL: string | null =
     process.env.NEXT_PUBLIC_CUSTOM_HUMAN_GLB_URL ||
     "/models/human.glb";
 const CUSTOM_HUMAN_GLB_SCALE = 1.04;
@@ -239,6 +239,21 @@ const shiftPlanPoint = (point: [number, number], dx: number, dy: number): [numbe
     Number((point[1] + dy).toFixed(3)),
 ];
 
+const scalePlanPointFromCenter = (point: [number, number], center: [number, number], factor: number): [number, number] => [
+    Number((center[0] + (point[0] - center[0]) * factor).toFixed(3)),
+    Number((center[1] + (point[1] - center[1]) * factor).toFixed(3)),
+];
+
+const extractScaleFactorFromInstruction = (text: string): number | null => {
+    const scaleIntent = /\b(scale|resize|grow|shrink|expand|enlarge|reduce|decrease|increase|widen|narrow)\b/i.test(text);
+    if (!scaleIntent) return null;
+    const percentMatch = text.match(/(-?\d+(?:\.\d+)?)\s*%/);
+    const magnitude = clampScalar(Math.abs(Number(percentMatch?.[1] || 8)) / 100, 0.02, 0.35);
+    const shrinkIntent = /\b(shrink|reduce|decrease|smaller|down|narrow)\b/i.test(text);
+    const factor = shrinkIntent ? 1 - magnitude : 1 + magnitude;
+    return Number(clampScalar(factor, 0.65, 1.35).toFixed(4));
+};
+
 const tryApplyRealtimeLocalEdit = (
     model: GeometricReconstruction,
     selectedElement: { type: 'room' | 'wall', data: any } | null,
@@ -252,6 +267,7 @@ const tryApplyRealtimeLocalEdit = (
     const moveDelta = extractMoveDeltaFromInstruction(text, moveDistance || null);
     const color = extractEditColor(text);
     const renameMatch = instruction.match(/\brename\b.*\bto\b\s+["']?(.+?)["']?\s*$/i);
+    const scaleFactor = extractScaleFactorFromInstruction(text);
     const deleteIntent = /\b(delete|remove)\b/i.test(text);
     const moveIntent = /\b(move|shift|drag|slide)\b/i.test(text);
     const heightIntent = /\bheight\b/i.test(text);
@@ -314,6 +330,38 @@ const tryApplyRealtimeLocalEdit = (
                     message: `Selected wall moved instantly by ${moveDistance}m.`,
                     nextSelectedElement: { type: 'wall', data: clone.walls[wallIndex] },
                 };
+            }
+
+            if (scaleFactor != null) {
+                const center: [number, number] = [
+                    Number(((baseWall.start[0] + baseWall.end[0]) * 0.5).toFixed(3)),
+                    Number(((baseWall.start[1] + baseWall.end[1]) * 0.5).toFixed(3)),
+                ];
+                const nextStart = scalePlanPointFromCenter(baseWall.start, center, scaleFactor);
+                const nextEnd = scalePlanPointFromCenter(baseWall.end, center, scaleFactor);
+                const nextLength = Math.hypot(nextEnd[0] - nextStart[0], nextEnd[1] - nextStart[1]);
+                if (nextLength >= 0.45 && nextLength <= 40) {
+                    clone.walls[wallIndex] = {
+                        ...baseWall,
+                        start: nextStart,
+                        end: nextEnd,
+                    };
+                    clone.doors = clone.doors.map((door) =>
+                        String(door.host_wall_id) === String(selection.id)
+                            ? { ...door, position: scalePlanPointFromCenter(door.position, center, scaleFactor) }
+                            : door
+                    );
+                    clone.windows = clone.windows.map((win) =>
+                        String(win.host_wall_id) === String(selection.id)
+                            ? { ...win, position: scalePlanPointFromCenter(win.position, center, scaleFactor) }
+                            : win
+                    );
+                    return {
+                        model: clone,
+                        message: `Selected wall scaled instantly by ${Math.round((scaleFactor - 1) * 100)}%.`,
+                        nextSelectedElement: { type: 'wall', data: clone.walls[wallIndex] },
+                    };
+                }
             }
 
             if (heightIntent) {
@@ -384,6 +432,31 @@ const tryApplyRealtimeLocalEdit = (
                     message: `Selected room moved instantly by ${moveDistance}m.`,
                     nextSelectedElement: { type: 'room', data: clone.rooms[roomIndex] },
                 };
+            }
+
+            if (scaleFactor != null) {
+                const center = computeRoomCenter(baseRoom.polygon);
+                if (center) {
+                    const scaledPolygon = baseRoom.polygon.map((point) => scalePlanPointFromCenter(point, center, scaleFactor));
+                    const scaledArea = Math.abs(polygonArea2D(scaledPolygon));
+                    if (scaledArea >= 1 && scaledArea <= 5000) {
+                        clone.rooms[roomIndex] = {
+                            ...baseRoom,
+                            polygon: scaledPolygon,
+                            area: Number(scaledArea.toFixed(2)),
+                        };
+                        clone.furnitures = (clone.furnitures || []).map((item) =>
+                            String(item.room_id) === String(selection.id)
+                                ? { ...item, position: scalePlanPointFromCenter(item.position, center, scaleFactor) }
+                                : item
+                        );
+                        return {
+                            model: clone,
+                            message: `Selected room scaled instantly by ${Math.round((scaleFactor - 1) * 100)}%.`,
+                            nextSelectedElement: { type: 'room', data: clone.rooms[roomIndex] },
+                        };
+                    }
+                }
             }
 
             if (renameMatch?.[1]) {
@@ -2339,6 +2412,14 @@ function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { mo
                 <capsuleGeometry args={[0.085, 0.54, 8, 14]} />
                 <meshStandardMaterial color="#334155" roughness={0.62} />
             </mesh>
+            <mesh position={[-0.13, 0.42, 0.11]} castShadow>
+                <boxGeometry args={[0.12, 0.12, 0.06]} />
+                <meshStandardMaterial color="#94a3b8" roughness={0.5} metalness={0.15} />
+            </mesh>
+            <mesh position={[0.13, 0.42, 0.11]} castShadow>
+                <boxGeometry args={[0.12, 0.12, 0.06]} />
+                <meshStandardMaterial color="#94a3b8" roughness={0.5} metalness={0.15} />
+            </mesh>
 
             {/* Torso */}
             <mesh position={[0, 1.02, 0]} castShadow>
@@ -2358,6 +2439,38 @@ function FallbackCivilEngineerAvatar({ moving = false, sprinting = false }: { mo
             <mesh position={[0, 1.12, 0.23]} castShadow>
                 <boxGeometry args={[0.38, 0.06, 0.02]} />
                 <meshStandardMaterial color="#f8fafc" roughness={0.25} metalness={0.35} />
+            </mesh>
+            <mesh position={[-0.12, 0.98, 0.24]} rotation={[0, 0, 0.42]} castShadow>
+                <boxGeometry args={[0.04, 0.34, 0.02]} />
+                <meshStandardMaterial color="#f8fafc" roughness={0.22} metalness={0.34} />
+            </mesh>
+            <mesh position={[0.12, 0.98, 0.24]} rotation={[0, 0, -0.42]} castShadow>
+                <boxGeometry args={[0.04, 0.34, 0.02]} />
+                <meshStandardMaterial color="#f8fafc" roughness={0.22} metalness={0.34} />
+            </mesh>
+            <mesh position={[0, 0.73, 0.05]} castShadow>
+                <boxGeometry args={[0.42, 0.08, 0.18]} />
+                <meshStandardMaterial color="#1f2937" roughness={0.56} metalness={0.08} />
+            </mesh>
+            <mesh position={[-0.17, 0.71, 0.14]} castShadow>
+                <boxGeometry args={[0.09, 0.12, 0.06]} />
+                <meshStandardMaterial color="#475569" roughness={0.62} metalness={0.08} />
+            </mesh>
+            <mesh position={[0.17, 0.71, 0.14]} castShadow>
+                <boxGeometry args={[0.09, 0.12, 0.06]} />
+                <meshStandardMaterial color="#475569" roughness={0.62} metalness={0.08} />
+            </mesh>
+            <mesh position={[0.21, 1.13, 0.16]} rotation={[0.08, 0, -0.06]} castShadow>
+                <boxGeometry args={[0.09, 0.18, 0.05]} />
+                <meshStandardMaterial color="#1e293b" roughness={0.6} metalness={0.1} />
+            </mesh>
+            <mesh position={[0.21, 1.21, 0.19]} castShadow>
+                <boxGeometry args={[0.03, 0.03, 0.01]} />
+                <meshStandardMaterial color="#ef4444" roughness={0.34} metalness={0.16} />
+            </mesh>
+            <mesh position={[-0.16, 1.08, 0.15]} rotation={[0.18, 0, 0]} castShadow>
+                <boxGeometry args={[0.1, 0.14, 0.03]} />
+                <meshStandardMaterial color="#f8fafc" roughness={0.28} metalness={0.12} />
             </mesh>
 
             {/* Sleeves / arms */}
@@ -2536,6 +2649,7 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
     const controlsRef = useRef<any>(null);
     const playerRef = useRef<THREE.Group>(null);
     const playerPosition = useRef(new THREE.Vector3(0, 0, 0));
+    const horizontalVelocityRef = useRef(new THREE.Vector3());
     const movementRef = useRef({
         forward: false,
         backward: false,
@@ -2549,24 +2663,18 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
     const cameraRightRef = useRef(new THREE.Vector3());
     const upAxisRef = useRef(new THREE.Vector3(0, 1, 0));
     const followTargetRef = useRef(new THREE.Vector3());
+    const bobOffsetRef = useRef(0);
 
     const syncAnimationState = useCallback(() => {
-        const moving =
-            movementRef.current.forward ||
-            movementRef.current.backward ||
-            movementRef.current.left ||
-            movementRef.current.right;
-        const sprinting = moving && movementRef.current.sprint;
-        setAnimationState((prev) => {
-            if (prev.moving === moving && prev.sprinting === sprinting) return prev;
-            return { moving, sprinting };
-        });
+        // actual moving/sprinting state is derived from smoothed velocity in-frame
     }, []);
 
     React.useEffect(() => {
         if (bounds) {
             const spawn = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, 0, bounds.maxZ + 1.2);
             playerPosition.current.copy(spawn);
+            horizontalVelocityRef.current.set(0, 0, 0);
+            bobOffsetRef.current = 0;
             camera.position.set(spawn.x, 2.2, spawn.z + 4.2);
             camera.lookAt(spawn.x, 1.2, spawn.z);
         }
@@ -2642,20 +2750,43 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
 
         if (moveDir.lengthSq() > 0) {
             moveDir.normalize();
-            const speed = (movementRef.current.sprint ? 7.6 : 4.9) * dt;
-            playerPosition.current.addScaledVector(moveDir, speed);
+        }
+        const hasMovementInput = moveDir.lengthSq() > 1e-6;
+        const isSprinting = hasMovementInput && movementRef.current.sprint;
+        const targetSpeed = isSprinting ? 7.1 : 4.45;
+        const desiredVelocity = hasMovementInput
+            ? moveDir.clone().multiplyScalar(targetSpeed)
+            : new THREE.Vector3();
+        const acceleration = hasMovementInput ? 9.5 : 6.8;
+        horizontalVelocityRef.current.lerp(desiredVelocity, Math.min(1, dt * acceleration));
+        const horizontalSpeed = Math.hypot(horizontalVelocityRef.current.x, horizontalVelocityRef.current.z);
 
-            if (bounds) {
-                playerPosition.current.x = Math.max(bounds.minX - 12, Math.min(bounds.maxX + 12, playerPosition.current.x));
-                playerPosition.current.z = Math.max(bounds.minZ - 12, Math.min(bounds.maxZ + 12, playerPosition.current.z));
-            }
+        playerPosition.current.addScaledVector(horizontalVelocityRef.current, dt);
 
-            const targetYaw = Math.atan2(moveDir.x, moveDir.z);
-            player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, Math.min(1, dt * 12));
+        if (bounds) {
+            playerPosition.current.x = Math.max(bounds.minX - 12, Math.min(bounds.maxX + 12, playerPosition.current.x));
+            playerPosition.current.z = Math.max(bounds.minZ - 12, Math.min(bounds.maxZ + 12, playerPosition.current.z));
         }
 
-        const runningBob = moveDir.lengthSq() > 0 ? Math.sin(state.clock.elapsedTime * (movementRef.current.sprint ? 14 : 9)) * 0.04 : 0;
-        player.position.set(playerPosition.current.x, runningBob, playerPosition.current.z);
+        if (horizontalSpeed > 0.05) {
+            const targetYaw = Math.atan2(horizontalVelocityRef.current.x, horizontalVelocityRef.current.z);
+            player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, Math.min(1, dt * 10));
+        }
+
+        const bobTarget = horizontalSpeed > 0.08
+            ? Math.sin(state.clock.elapsedTime * (isSprinting ? 12 : 8.5)) * (isSprinting ? 0.038 : 0.024)
+            : 0;
+        bobOffsetRef.current = THREE.MathUtils.lerp(bobOffsetRef.current, bobTarget, Math.min(1, dt * 10));
+        player.position.set(playerPosition.current.x, bobOffsetRef.current, playerPosition.current.z);
+
+        setAnimationState((prev) => {
+            const next = {
+                moving: horizontalSpeed > 0.18,
+                sprinting: horizontalSpeed > 5.2,
+            };
+            if (prev.moving === next.moving && prev.sprinting === next.sprinting) return prev;
+            return next;
+        });
 
         const target = followTargetRef.current.set(playerPosition.current.x, 1.15, playerPosition.current.z);
         controls.target.lerp(target, Math.min(1, dt * 11));
@@ -2670,7 +2801,7 @@ function EngineerWalkthroughController({ bounds, humanModelUrl }: { bounds?: any
                 enablePan={false}
                 enableZoom={false}
                 enableDamping
-                dampingFactor={0.06}
+                dampingFactor={0.08}
                 minDistance={3.6}
                 maxDistance={6.8}
                 minPolarAngle={0.25}
@@ -2999,52 +3130,6 @@ function BlueprintWorkspace() {
         }
     }, [selectedElement, elements, setElements, setSelectedElement, toast]);
 
-    React.useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-            if (e.key === 'Escape') {
-                setIsFullscreen(false);
-                setSelectedElement(null);
-            } else if (e.key === 'Delete' || e.key === 'Backspace') {
-                handleDeleteElement();
-            } else if (e.key.toLowerCase() === 'v') {
-                setActiveTool('select');
-            } else if (e.key.toLowerCase() === 'm') {
-                setActiveTool('move');
-                toast({ title: 'Move', description: 'Select element and drag to move (Coming Soon in v2)' });
-            } else if (e.key.toLowerCase() === 's') {
-                setActiveTool('scale');
-                toast({ title: 'Scale', description: 'Select element corners to scale (Coming Soon in v2)' });
-            } else if (e.key.toLowerCase() === 'p') {
-                setIsWalkthrough((prev) => {
-                    const next = !prev;
-                    if (next) setIsTopView(false);
-                    return next;
-                });
-            } else if (e.key.toLowerCase() === 'h') {
-                if (isWalkthrough) {
-                    setShowWalkthroughHuman(prev => !prev);
-                }
-            } else if (e.key.toLowerCase() === 'l') {
-                setTimeOfDay(prev => prev === 14 ? 22 : 14);
-            } else if (e.key.toLowerCase() === 'c') {
-                if (!isWalkthrough) {
-                    setIsTopView((prev) => {
-                        const next = !prev;
-                        if (next) {
-                            setIsWalkthrough(false);
-                            setShowWalkthroughHuman(false);
-                        }
-                        return next;
-                    });
-                }
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleDeleteElement, isWalkthrough]);
-
     const costEstimate = useMemo(() => elements ? estimateConstructionCost(elements) : null, [elements]);
 
     const ACCEPTED_TYPES = [
@@ -3160,6 +3245,158 @@ function BlueprintWorkspace() {
         setStatus('complete');
         setProgress(1);
     }, [activeSiteBuildingId, setElements, setSelectedElement]);
+
+    const applyInstantSelectionEdit = useCallback((
+        instruction: string,
+        successTitle: string,
+        missingSelectionMessage: string
+    ) => {
+        if (!elements) {
+            toast({ title: 'No Model Loaded', description: 'Generate or load a blueprint model first.', variant: 'destructive' });
+            return false;
+        }
+        if (!selectedElement) {
+            toast({ title: 'Nothing Selected', description: missingSelectionMessage, variant: 'destructive' });
+            return false;
+        }
+
+        const localEdit = tryApplyRealtimeLocalEdit(elements, selectedElement, instruction);
+        if (!localEdit) {
+            toast({
+                title: 'Edit Not Available',
+                description: 'This selected element cannot be updated with that control yet.',
+                variant: 'destructive',
+            });
+            return false;
+        }
+
+        applyUpdatedModelToWorkspace(localEdit.model, localEdit.nextSelectedElement);
+        toast({ title: successTitle, description: localEdit.message });
+        return true;
+    }, [applyUpdatedModelToWorkspace, elements, selectedElement, toast]);
+
+    const activateMoveTool = useCallback(() => {
+        setActiveTool('move');
+        toast({
+            title: 'Move Tool Ready',
+            description: 'Select a wall or room, then use arrow keys to nudge it. Hold Shift for larger steps.',
+        });
+    }, [toast]);
+
+    const activateScaleTool = useCallback(() => {
+        setActiveTool('scale');
+        toast({
+            title: 'Scale Tool Ready',
+            description: 'Select a wall or room, then use [ or ] to resize it. Hold Shift for larger changes.',
+        });
+    }, [toast]);
+
+    const toggleInspectorPanel = useCallback(() => {
+        const nextVisible = !isInspectorVisible;
+        setActiveTool(nextVisible ? 'settings' : 'select');
+        setIsInspectorVisible(nextVisible);
+        toast({
+            title: nextVisible ? 'Inspector Opened' : 'Inspector Hidden',
+            description: nextVisible
+                ? 'Project inspector is now visible on the right.'
+                : 'Project inspector was collapsed.',
+        });
+    }, [isInspectorVisible, toast]);
+
+    React.useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+            if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+
+            if (!isWalkthrough && selectedElement && activeTool === 'move') {
+                const step = e.shiftKey ? 1 : 0.25;
+                const moveInstructionMap: Record<string, string> = {
+                    ArrowUp: `move ${step}m up`,
+                    ArrowDown: `move ${step}m down`,
+                    ArrowLeft: `move ${step}m left`,
+                    ArrowRight: `move ${step}m right`,
+                };
+                const instruction = moveInstructionMap[e.key];
+                if (instruction) {
+                    e.preventDefault();
+                    applyInstantSelectionEdit(
+                        instruction,
+                        'Element Moved',
+                        'Select a wall or room first, then use the move tool.'
+                    );
+                    return;
+                }
+            }
+
+            if (!isWalkthrough && selectedElement && activeTool === 'scale') {
+                const scaleStep = e.shiftKey ? 12 : 6;
+                if (e.key === '[' || e.key === '-' || e.key === '_') {
+                    e.preventDefault();
+                    applyInstantSelectionEdit(
+                        `scale down ${scaleStep}%`,
+                        'Element Scaled',
+                        'Select a wall or room first, then use the scale tool.'
+                    );
+                    return;
+                }
+                if (e.key === ']' || e.key === '=' || e.key === '+') {
+                    e.preventDefault();
+                    applyInstantSelectionEdit(
+                        `scale up ${scaleStep}%`,
+                        'Element Scaled',
+                        'Select a wall or room first, then use the scale tool.'
+                    );
+                    return;
+                }
+            }
+
+            if (e.key === 'Escape') {
+                setIsFullscreen(false);
+                setSelectedElement(null);
+            } else if (e.key === 'Delete' || e.key === 'Backspace') {
+                handleDeleteElement();
+            } else if (e.key.toLowerCase() === 'v') {
+                setActiveTool('select');
+            } else if (e.key.toLowerCase() === 'm') {
+                activateMoveTool();
+            } else if (e.key.toLowerCase() === 's') {
+                activateScaleTool();
+            } else if (e.key.toLowerCase() === 'p') {
+                setIsWalkthrough((prev) => {
+                    const next = !prev;
+                    if (next) setIsTopView(false);
+                    return next;
+                });
+            } else if (e.key.toLowerCase() === 'h') {
+                if (isWalkthrough) {
+                    setShowWalkthroughHuman(prev => !prev);
+                }
+            } else if (e.key.toLowerCase() === 'l') {
+                setTimeOfDay(prev => prev === 14 ? 22 : 14);
+            } else if (e.key.toLowerCase() === 'c') {
+                if (!isWalkthrough) {
+                    setIsTopView((prev) => {
+                        const next = !prev;
+                        if (next) {
+                            setIsWalkthrough(false);
+                            setShowWalkthroughHuman(false);
+                        }
+                        return next;
+                    });
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [
+        activateMoveTool,
+        activateScaleTool,
+        activeTool,
+        applyInstantSelectionEdit,
+        handleDeleteElement,
+        isWalkthrough,
+        selectedElement,
+    ]);
 
     const handleApplyModelEdit = useCallback(async () => {
         const instruction = modelEditPrompt.trim();
@@ -3727,7 +3964,7 @@ function BlueprintWorkspace() {
                                 icon={<Move className="h-4 w-4" />}
                                 label="Move"
                                 active={activeTool === 'move'}
-                                onClick={() => { setActiveTool('move'); toast({ title: 'Move', description: 'Select element and drag to move (Coming Soon)' }); }}
+                                onClick={activateMoveTool}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="M"
                             />
@@ -3735,7 +3972,7 @@ function BlueprintWorkspace() {
                                 icon={<Scaling className="h-4 w-4" />}
                                 label="Scale"
                                 active={activeTool === 'scale'}
-                                onClick={() => { setActiveTool('scale'); toast({ title: 'Scale', description: 'Select element corners to scale (Coming Soon)' }); }}
+                                onClick={activateScaleTool}
                                 expanded={isLeftPanelExpanded}
                                 shortcut="S"
                             />
@@ -3820,7 +4057,7 @@ function BlueprintWorkspace() {
                             icon={<Settings className="h-4 w-4" />}
                             label="Settings"
                             active={activeTool === 'settings'}
-                            onClick={() => setActiveTool('settings')}
+                            onClick={toggleInspectorPanel}
                             expanded={isLeftPanelExpanded}
                             className="mt-auto"
                         />
@@ -4104,7 +4341,7 @@ function BlueprintWorkspace() {
                                 showWalkthroughHuman ? (
                                     <EngineerWalkthroughController
                                         bounds={walkthroughBounds}
-                                        humanModelUrl={CUSTOM_HUMAN_GLB_URL}
+                                        humanModelUrl={ENGINEER_AVATAR_GLB_URL}
                                     />
                                 ) : (
                                     <WalkthroughController
@@ -4164,7 +4401,7 @@ function BlueprintWorkspace() {
                                     visibleElements={visibleElements}
                                     onSelect={setSelectedElement}
                                     isWalkthrough={isWalkthrough}
-                                    humanModelUrl={CUSTOM_HUMAN_GLB_URL}
+                                    humanModelUrl={SCENE_HUMAN_GLB_URL}
                                     openedDoorIds={walkOpenedDoorIds}
                                     hiddenFurnitureIds={walkCollectedItemIds}
                                 />
