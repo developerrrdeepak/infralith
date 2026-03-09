@@ -2934,6 +2934,19 @@ type OpeningRecoveryDecision = {
   promptGuidance: string;
 };
 
+type InteriorRecoveryDecision = {
+  shouldAttempt: boolean;
+  placeholder: boolean;
+  reasons: string[];
+  denseFloors: number;
+  gridLikeFloors: number;
+  averageInteriorWallsPerFloor: number;
+  interiorWallCount: number;
+  semanticAnchorCount: number;
+  dimensionHintCount: number;
+  dimensionMismatchCount: number;
+};
+
 const shouldAttemptOpeningRecovery = (
   result: GeometricReconstruction,
   layoutHints: BlueprintLayoutHints | null,
@@ -2990,20 +3003,79 @@ const shouldAttemptOpeningRecovery = (
   };
 };
 
-const shouldAttemptInteriorLayoutRecovery = (
+const assessInteriorLayoutRecovery = (
   result: GeometricReconstruction,
   layoutHints: BlueprintLayoutHints | null
-): boolean => {
+): InteriorRecoveryDecision => {
   const interiorSignal = analyzeInteriorLayoutSignal(result);
-  if (!interiorSignal.placeholder) return false;
-
   const floorSignals = estimateFloorHintCount(layoutHints);
   const inferredFloorCount = Math.max(1, estimateResultFloorCount(result));
   const walls = result?.walls?.length || 0;
   const rooms = result?.rooms?.length || 0;
-  if (walls < 8 || rooms < 5) return false;
+  const interiorWallCount = (result?.walls || []).filter((wall) => wall?.is_exterior === false).length;
+  const semanticAnchorCount = collectLayoutSemanticAnchors(layoutHints).length;
+  const dimensionAssessment = estimateRoomDimensionAlignment(layoutHints, result);
+  const dimensionHintCount = dimensionAssessment.hintCount;
+  const dimensionMismatchCount = dimensionAssessment.mismatches.length;
+  const reasons = [...interiorSignal.reasons];
 
-  return Math.max(floorSignals, inferredFloorCount) >= 2 || interiorSignal.gridLikeFloors >= 1;
+  if (walls < 8 || rooms < 3) {
+    return {
+      shouldAttempt: false,
+      placeholder: interiorSignal.placeholder,
+      reasons: reasons.slice(0, 5),
+      denseFloors: interiorSignal.denseFloors,
+      gridLikeFloors: interiorSignal.gridLikeFloors,
+      averageInteriorWallsPerFloor: interiorSignal.averageInteriorWallsPerFloor,
+      interiorWallCount,
+      semanticAnchorCount,
+      dimensionHintCount,
+      dimensionMismatchCount,
+    };
+  }
+
+  const placeholderDriven =
+    interiorSignal.placeholder &&
+    (Math.max(floorSignals, inferredFloorCount) >= 2 || interiorSignal.gridLikeFloors >= 1 || rooms >= 6);
+  const dimensionDriven =
+    dimensionAssessment.shouldRetry &&
+    dimensionHintCount >= 2 &&
+    dimensionMismatchCount >= Math.max(2, Math.min(5, Math.ceil(dimensionHintCount * 0.4)));
+  const semanticDensityDriven =
+    semanticAnchorCount >= 4 &&
+    rooms < Math.max(2, Math.ceil(semanticAnchorCount * 0.7));
+  const lowInteriorWallDensityDriven =
+    (dimensionHintCount >= 6 || semanticAnchorCount >= 5) &&
+    interiorWallCount < Math.max(3, Math.ceil(rooms * 0.5));
+
+  if (dimensionDriven) {
+    reasons.push(
+      `Interior wall placement appears inconsistent with room dimension anchors (${dimensionMismatchCount}/${dimensionHintCount} mismatches).`
+    );
+  }
+  if (semanticDensityDriven) {
+    reasons.push(
+      `Blueprint exposes ${semanticAnchorCount} room/space label anchor(s) but reconstruction only yields ${rooms} room polygon(s); recover room-defining interior partitions.`
+    );
+  }
+  if (lowInteriorWallDensityDriven) {
+    reasons.push(
+      `Interior wall count (${interiorWallCount}) is low relative to semantic/dimension evidence; likely missing or misplaced partitions.`
+    );
+  }
+
+  return {
+    shouldAttempt: placeholderDriven || dimensionDriven || semanticDensityDriven || lowInteriorWallDensityDriven,
+    placeholder: interiorSignal.placeholder,
+    reasons: Array.from(new Set(reasons.map((reason) => reason.trim()).filter(Boolean))).slice(0, 6),
+    denseFloors: interiorSignal.denseFloors,
+    gridLikeFloors: interiorSignal.gridLikeFloors,
+    averageInteriorWallsPerFloor: interiorSignal.averageInteriorWallsPerFloor,
+    interiorWallCount,
+    semanticAnchorCount,
+    dimensionHintCount,
+    dimensionMismatchCount,
+  };
 };
 
 const shouldAttemptRoomDimensionRecovery = (
@@ -8765,27 +8837,34 @@ NON-TEXT STAIR SYMBOL RECOVERY:
       }
     }
 
-    if (shouldAttemptInteriorLayoutRecovery(bestResult, layoutHints) && canRunVisionPass('interior-layout-recovery')) {
-      const interiorSignal = analyzeInteriorLayoutSignal(bestResult);
+    const interiorRecoveryDecision = assessInteriorLayoutRecovery(bestResult, layoutHints);
+    if (interiorRecoveryDecision.shouldAttempt && canRunVisionPass('interior-layout-recovery')) {
       traceLog('Infralith Vision Engine', traceId, '5/9', 'interior layout refinement triggered to avoid placeholder partitions', {
-        denseFloors: interiorSignal.denseFloors,
-        gridLikeFloors: interiorSignal.gridLikeFloors,
-        averageInteriorWallsPerFloor: Number(interiorSignal.averageInteriorWallsPerFloor.toFixed(2)),
-        reasons: interiorSignal.reasons,
+        denseFloors: interiorRecoveryDecision.denseFloors,
+        gridLikeFloors: interiorRecoveryDecision.gridLikeFloors,
+        averageInteriorWallsPerFloor: Number(interiorRecoveryDecision.averageInteriorWallsPerFloor.toFixed(2)),
+        interiorWallCount: interiorRecoveryDecision.interiorWallCount,
+        semanticAnchorCount: interiorRecoveryDecision.semanticAnchorCount,
+        dimensionHintCount: interiorRecoveryDecision.dimensionHintCount,
+        dimensionMismatchCount: interiorRecoveryDecision.dimensionMismatchCount,
+        reasons: interiorRecoveryDecision.reasons,
       }, 'warn');
 
       const interiorPromptSeed = `${prompt}
 
 INTERIOR PARTITION REFINEMENT:
-- Current reconstruction appears over-regularized with repetitive equal-size room blocks.
+- Current reconstruction shows underfit or misplaced interior partitioning.
 - Reconstruct interior walls and room polygons from visible wall-line evidence on each floor.
-- Do not clone the same split grid across floors unless the drawing explicitly matches.
 - Preserve validated exterior shell, scale, and floor_count while improving interior partition placement.
+- Use room labels and room-size annotations as localization hints for where partitions should separate spaces.
+- Interior walls must terminate at real wall junctions or perimeter walls; do not leave floating mid-room wall fragments.
+- Do not run a partition through the center of a labeled room unless the drawing clearly shows a wall crossing that space.
+- Do not clone the same split grid across floors unless the drawing explicitly matches.
 - Keep stairs/bathrooms/circulation spaces when evidence exists.
 - If a boundary is uncertain, keep geometry conservative and emit explicit conflict instead of forcing symmetric quadrants.
 `;
-      const recoveryDiagnostics = interiorSignal.reasons.length > 0
-        ? interiorSignal.reasons
+      const recoveryDiagnostics = interiorRecoveryDecision.reasons.length > 0
+        ? interiorRecoveryDecision.reasons
         : ['Interior partition placement appears underfit and overly repetitive; refine using visible line evidence only.'];
       const interiorPrompt = buildBlueprintRetryPrompt(interiorPromptSeed, recoveryDiagnostics.slice(0, 4));
 
@@ -8872,6 +8951,70 @@ ROOM DIMENSION + POSITION ENFORCEMENT:
         }
       } catch (error) {
         traceLog('Infralith Vision Engine', traceId, '5/9', 'room dimension-position enforcement failed; continuing with current reconstruction', {
+          reason: error instanceof Error ? error.message : String(error),
+        }, 'warn');
+      }
+    }
+
+    const interiorWallPlacementDecision = assessInteriorLayoutRecovery(bestResult, layoutHints);
+    if (
+      interiorWallPlacementDecision.shouldAttempt &&
+      (interiorWallPlacementDecision.dimensionMismatchCount >= 2 || interiorWallPlacementDecision.semanticAnchorCount >= 4) &&
+      canRunVisionPass('interior-wall-placement-enforcement')
+    ) {
+      traceLog('Infralith Vision Engine', traceId, '5/9', 'interior wall placement enforcement triggered', {
+        interiorWallCount: interiorWallPlacementDecision.interiorWallCount,
+        semanticAnchorCount: interiorWallPlacementDecision.semanticAnchorCount,
+        dimensionHintCount: interiorWallPlacementDecision.dimensionHintCount,
+        dimensionMismatchCount: interiorWallPlacementDecision.dimensionMismatchCount,
+        reasons: interiorWallPlacementDecision.reasons,
+      }, 'warn');
+
+      const interiorWallPromptSeed = `${prompt}
+
+INTERIOR WALL PLACEMENT ENFORCEMENT:
+- Preserve validated exterior shell, floor_count, scale, and any already-correct major walls.
+- Correct interior wall positions using visible partition lines, room labels, and room dimension annotations.
+- Shift/add/remove interior wall segments only when supported by visible drawing evidence.
+- Interior walls must terminate at real junctions or perimeter walls; avoid floating or center-split wall fragments.
+- Use labeled rooms as interior targets: walls should separate labeled spaces, not bisect the center of a labeled room unless a wall line is clearly visible there.
+- If a room-size annotation is localizable, adjust nearby interior walls so the enclosed room polygon matches that width/depth as closely as visible evidence allows.
+- Prefer fewer evidence-backed partitions over guessed symmetric grids.
+- If evidence remains ambiguous, keep the simpler conservative partition and emit explicit conflict instead of guessing.
+`;
+      const interiorWallDiagnostics = interiorWallPlacementDecision.reasons.length > 0
+        ? interiorWallPlacementDecision.reasons
+        : ['Interior wall placement is not aligning well with semantic room anchors and dimension annotations.'];
+      const interiorWallPrompt = buildBlueprintRetryPrompt(interiorWallPromptSeed, interiorWallDiagnostics.slice(0, 5));
+
+      try {
+        const interiorWallCandidate = await runVisionPass('interior-wall-placement-enforcement', '5/9', interiorWallPrompt, focusedVisionImage);
+        if (hasNonEmptyWalls(interiorWallCandidate)) {
+          const promotedInteriorWalls = promoteBestCandidate(interiorWallCandidate, 'interior-wall-placement-enforcement', {
+            minScoreGain: 0.25,
+            allowOpeningBoost: true,
+            allowFidelityBoost: true,
+            allowConflictBoost: true,
+            allowSemanticBoost: true,
+          });
+          if (promotedInteriorWalls) {
+            result = bestResult;
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'interior wall placement enforcement improved reconstruction', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+              ...summarizeReconstruction(bestResult),
+            }, 'warn');
+          } else {
+            traceLog('Infralith Vision Engine', traceId, '5/9', 'interior wall placement candidate kept as fallback; current reconstruction remained stronger', {
+              selected: bestCandidateLabel,
+              bestScore,
+              bestOpenings,
+            }, 'warn');
+          }
+        }
+      } catch (error) {
+        traceLog('Infralith Vision Engine', traceId, '5/9', 'interior wall placement enforcement failed; continuing with current reconstruction', {
           reason: error instanceof Error ? error.message : String(error),
         }, 'warn');
       }
