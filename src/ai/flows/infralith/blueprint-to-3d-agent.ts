@@ -20,6 +20,7 @@ import { applyBuildingCodes } from './building-codes';
 import {
   buildAssetPrompt,
   buildAssetRetryPrompt,
+  buildBlueprintModelEditPrompt,
   buildBlueprintRetryPrompt,
   buildBlueprintVisionPrompt,
   buildTextToBuildingPrompt,
@@ -9548,6 +9549,81 @@ export async function generateBuildingFromDescription(description: string): Prom
   } catch (e) {
     traceLog('Infralith Architect Engine', traceId, 'error', 'Text-to-3D Pipeline Error', { error: String(e) }, 'error');
     throw e;
+  }
+}
+
+const serializeModelForEditPrompt = (model: GeometricReconstruction): string => JSON.stringify({
+  building_name: model.building_name,
+  exterior_color: model.exterior_color,
+  meta: model.meta,
+  walls: model.walls || [],
+  doors: model.doors || [],
+  windows: model.windows || [],
+  rooms: model.rooms || [],
+  furnitures: model.furnitures || [],
+  roof: model.roof,
+  topology_checks: model.topology_checks,
+  conflicts: model.conflicts || [],
+}, null, 2);
+
+export async function applyPromptEditToReconstruction(
+  currentModel: GeometricReconstruction,
+  editRequest: string,
+  referenceImage?: string | null
+): Promise<GeometricReconstruction> {
+  const traceId = createTraceId('editbim');
+  const startedAt = Date.now();
+  const trimmedRequest = String(editRequest || '').trim();
+  if (!trimmedRequest) {
+    throw new Error('Model edit request is empty.');
+  }
+  if (!hasNonEmptyWalls(currentModel)) {
+    throw new Error('No editable model is loaded yet.');
+  }
+
+  const prompt = buildBlueprintModelEditPrompt(
+    serializeModelForEditPrompt(currentModel),
+    trimmedRequest,
+    !!referenceImage
+  );
+
+  traceLog('Infralith Edit Engine', traceId, '0/2', 'starting prompt-driven model edit', {
+    instructionChars: trimmedRequest.length,
+    hasReferenceImage: !!referenceImage,
+    walls: currentModel.walls?.length || 0,
+    rooms: currentModel.rooms?.length || 0,
+  });
+
+  try {
+    const edited = referenceImage
+      ? await generateAzureVisionObject<GeometricReconstruction>(prompt, referenceImage)
+      : await generateAzureObject<GeometricReconstruction>(prompt);
+
+    if (!hasNonEmptyWalls(edited)) {
+      throw new Error('Model edit did not return a valid wall graph.');
+    }
+
+    const normalized = applyBuildingCodes(inferRoofFromWallFootprint(normalizeReconstructionGeometry(edited)));
+    const mergedMeta = {
+      ...(currentModel.meta || {}),
+      ...(normalized.meta || {}),
+    };
+    const finalModel: GeometricReconstruction = {
+      ...normalized,
+      building_name: normalized.building_name || currentModel.building_name,
+      exterior_color: normalized.exterior_color || currentModel.exterior_color,
+      meta: mergedMeta,
+      debug_image: currentModel.debug_image,
+      is_vision_only: currentModel.is_vision_only,
+    };
+
+    traceLog('Infralith Edit Engine', traceId, '2/2', `model edit completed in ${Date.now() - startedAt}ms`, summarizeReconstruction(finalModel));
+    return finalModel;
+  } catch (error) {
+    traceLog('Infralith Edit Engine', traceId, 'error', 'model edit failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }, 'error');
+    throw error;
   }
 }
 

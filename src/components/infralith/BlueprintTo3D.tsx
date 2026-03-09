@@ -53,6 +53,10 @@ import {
     User,
     DoorOpen,
     AlertTriangle,
+    MessagesSquare,
+    Paperclip,
+    SendHorizontal,
+    X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -69,6 +73,7 @@ import {
     processBlueprintToSite3D,
     generateBuildingFromDescription,
     generateRealTimeAsset,
+    applyPromptEditToReconstruction,
 } from '@/ai/flows/infralith/blueprint-to-3d-agent';
 
 import { BIMProvider, useBIM } from '@/contexts/bim-context';
@@ -144,6 +149,20 @@ type BlueprintReviewSummary = {
     severity: 'low' | 'medium' | 'high';
     badges: string[];
     reasons: string[];
+};
+
+type ModelEditChatEntry = {
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    attachmentName?: string;
+    status?: 'pending' | 'success' | 'error';
+};
+
+type ModelEditAttachment = {
+    name: string;
+    base64: string;
+    previewUrl: string;
 };
 
 const formatConfidenceBadge = (value: unknown, fallback = 'n/a') => {
@@ -2342,6 +2361,10 @@ function BlueprintWorkspace() {
     const [activeTool, setActiveTool] = useState('select');
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
     const [isInspectorVisible, setIsInspectorVisible] = useState(true);
+    const [modelEditPrompt, setModelEditPrompt] = useState('');
+    const [modelEditAttachment, setModelEditAttachment] = useState<ModelEditAttachment | null>(null);
+    const [modelEditMessages, setModelEditMessages] = useState<ModelEditChatEntry[]>([]);
+    const [isApplyingModelEdit, setIsApplyingModelEdit] = useState(false);
     const [walkHud, setWalkHud] = useState<WalkthroughHudState>({
         hint: null,
         activeFloor: 0,
@@ -2356,6 +2379,7 @@ function BlueprintWorkspace() {
     const [visibleElements, setVisibleElements] = useState<Set<string | number>>(new Set());
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
+    const modelEditFileInputRef = useRef<HTMLInputElement | null>(null);
     const pendingAutoWalkRef = useRef(false);
     const hasAutoEnteredFullscreenRef = useRef(false);
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
@@ -2376,6 +2400,12 @@ function BlueprintWorkspace() {
     );
     const useImmersiveLayout = status === 'complete' && !!elements && isFullscreen;
     const isPerformanceSensitiveMode = isWalkthrough || showWalkthroughHuman;
+    const clearModelEditAttachment = useCallback(() => {
+        setModelEditAttachment((current) => {
+            if (current?.previewUrl) URL.revokeObjectURL(current.previewUrl);
+            return null;
+        });
+    }, []);
 
     const summarizeReconstruction = (result: GeometricReconstruction | null | undefined) => ({
         walls: result?.walls?.length || 0,
@@ -2502,13 +2532,17 @@ function BlueprintWorkspace() {
         pendingAutoWalkRef.current = true;
         setActiveSiteBuildingId(buildingId);
         setElements(selected.model);
+        setIsApplyingModelEdit(false);
+        setModelEditMessages([]);
+        setModelEditPrompt('');
+        clearModelEditAttachment();
         setStatus('complete');
         setProgress(1);
         toast({
             title: 'Building Switched',
             description: `${selected.name}: ${selected.floor_count} floor(s), ${selected.footprint_area.toFixed(0)} m² footprint.`,
         });
-    }, [setElements, siteResult, toast]);
+    }, [clearModelEditAttachment, setElements, siteResult, toast]);
 
     React.useEffect(() => {
         if (isWalkthrough) return;
@@ -2530,6 +2564,14 @@ function BlueprintWorkspace() {
         const timer = window.setTimeout(() => setWalkActionFeed(null), 2200);
         return () => window.clearTimeout(timer);
     }, [walkActionFeed]);
+
+    React.useEffect(() => {
+        return () => {
+            if (modelEditAttachment?.previewUrl) {
+                URL.revokeObjectURL(modelEditAttachment.previewUrl);
+            }
+        };
+    }, [modelEditAttachment]);
 
     React.useEffect(() => {
         // Keep browser scroll state consistent while the immersive shell is active.
@@ -2697,6 +2739,130 @@ function BlueprintWorkspace() {
         };
     });
 
+    const readImageAsDataUrl = (f: File): Promise<string> => new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(f);
+        reader.onload = () => res(reader.result as string);
+        reader.onerror = (error) => rej(error);
+    });
+
+    const handleModelEditAttachmentUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!isAcceptedFile(file)) {
+            toast({ title: 'Invalid File', description: 'Please upload PNG, JPG, JPEG, or WEBP.', variant: 'destructive' });
+            e.target.value = '';
+            return;
+        }
+
+        try {
+            const [base64, previewUrl] = await Promise.all([
+                readImageAsDataUrl(file),
+                Promise.resolve(URL.createObjectURL(file)),
+            ]);
+            setModelEditAttachment((current) => {
+                if (current?.previewUrl) URL.revokeObjectURL(current.previewUrl);
+                return {
+                    name: file.name,
+                    base64,
+                    previewUrl,
+                };
+            });
+        } catch (error) {
+            console.error('Failed to prepare edit attachment.', error);
+            toast({ title: 'Attachment Failed', description: 'Could not read the reference image.', variant: 'destructive' });
+        } finally {
+            e.target.value = '';
+        }
+    };
+
+    const handleApplyModelEdit = useCallback(async () => {
+        const instruction = modelEditPrompt.trim();
+        if (!elements) {
+            toast({ title: 'No Model Loaded', description: 'Generate or load a blueprint model first.', variant: 'destructive' });
+            return;
+        }
+        if (!instruction) {
+            toast({ title: 'Empty Instruction', description: 'Describe the change you want in the 3D model.', variant: 'destructive' });
+            return;
+        }
+        if (isApplyingModelEdit) return;
+
+        const userEntryId = `edit-user-${Date.now()}`;
+        const assistantEntryId = `edit-assistant-${Date.now()}`;
+        const attachmentName = modelEditAttachment?.name;
+        setIsApplyingModelEdit(true);
+        setModelEditMessages((prev) => [
+            ...prev,
+            { id: userEntryId, role: 'user', content: instruction, attachmentName, status: 'success' },
+            { id: assistantEntryId, role: 'assistant', content: 'Applying your changes to the current BIM model...', status: 'pending' },
+        ]);
+
+        try {
+            const updatedModel = await applyPromptEditToReconstruction(
+                elements,
+                instruction,
+                modelEditAttachment?.base64
+            );
+            setElements(updatedModel);
+            setSiteResult((prev) => {
+                if (!prev || !activeSiteBuildingId) return prev;
+                return {
+                    ...prev,
+                    buildings: prev.buildings.map((building) =>
+                        building.id === activeSiteBuildingId
+                            ? {
+                                ...building,
+                                name: updatedModel.building_name || building.name,
+                                floor_count: inferClientFloorCount(updatedModel),
+                                model: updatedModel,
+                              }
+                            : building
+                    ),
+                };
+            });
+            setStatus('complete');
+            setProgress(1);
+            setModelEditMessages((prev) => prev.map((entry) =>
+                entry.id === assistantEntryId
+                    ? {
+                        ...entry,
+                        status: 'success',
+                        content: 'Model updated. Review the geometry and send another prompt if you want more changes.',
+                    }
+                    : entry
+            ));
+            toast({
+                title: 'Model Updated',
+                description: updatedModel.building_name
+                    ? `${updatedModel.building_name} updated from your instruction.`
+                    : 'The BIM model was updated from your instruction.',
+            });
+            setModelEditPrompt('');
+            clearModelEditAttachment();
+        } catch (error) {
+            console.error('Prompt-driven model edit failed.', error);
+            const message = normalizeBlueprintErrorMessage(error);
+            setModelEditMessages((prev) => prev.map((entry) =>
+                entry.id === assistantEntryId
+                    ? { ...entry, status: 'error', content: message }
+                    : entry
+            ));
+            toast({ title: 'Edit Failed', description: message, variant: 'destructive' });
+        } finally {
+            setIsApplyingModelEdit(false);
+        }
+    }, [
+        activeSiteBuildingId,
+        clearModelEditAttachment,
+        elements,
+        isApplyingModelEdit,
+        modelEditAttachment,
+        modelEditPrompt,
+        setElements,
+        toast,
+    ]);
+
     const resetState = useCallback(() => {
         flowRunIdRef.current = null;
         pendingAutoWalkRef.current = false;
@@ -2706,7 +2872,11 @@ function BlueprintWorkspace() {
         setSiteResult(null);
         setActiveSiteBuildingId(null);
         setIsFullscreen(false);
-    }, [setElements]);
+        setIsApplyingModelEdit(false);
+        setModelEditPrompt('');
+        setModelEditMessages([]);
+        clearModelEditAttachment();
+    }, [clearModelEditAttachment, setElements]);
 
     const animateProgress = (result: GeometricReconstruction, runId: string) => {
         if (!isCurrentFlowRun(runId)) {
@@ -2764,6 +2934,10 @@ function BlueprintWorkspace() {
         setElements(null);
         setSiteResult(null);
         setActiveSiteBuildingId(null);
+        setIsApplyingModelEdit(false);
+        setModelEditMessages([]);
+        setModelEditPrompt('');
+        clearModelEditAttachment();
         setStatus('preprocessing'); setProgress(0);
 
         try {
@@ -2866,6 +3040,10 @@ function BlueprintWorkspace() {
         setSiteResult(null);
         setActiveSiteBuildingId(null);
         setElements(null);
+        setIsApplyingModelEdit(false);
+        setModelEditMessages([]);
+        setModelEditPrompt('');
+        clearModelEditAttachment();
         setStatus('analyzing'); setProgress(0);
         let cur = 0;
         const iv = setInterval(() => { cur += 0.012; if (cur <= 0.45) setProgress(cur); }, 80);
@@ -2927,6 +3105,10 @@ function BlueprintWorkspace() {
             pendingAutoWalkRef.current = true;
             setSiteResult(null);
             setActiveSiteBuildingId(null);
+            setIsApplyingModelEdit(false);
+            setModelEditMessages([]);
+            setModelEditPrompt('');
+            clearModelEditAttachment();
             setStatus('complete'); setProgress(1);
             setShowProjects(false);
             toast({ title: "Project Loaded", description: "Successfully retrieved from Azure Cosmos DB." });
@@ -3627,6 +3809,147 @@ function BlueprintWorkspace() {
                             <div className="absolute bottom-6 right-6">
                                 <div className="w-24 h-24 rounded-xl overflow-hidden border-2 border-primary/30 shadow-2xl">
                                     <img src={preview} alt="Blueprint" className="w-full h-full object-cover" />
+                                </div>
+                            </div>
+                        )}
+
+                        {status === 'complete' && elements && (
+                            <div
+                                className={cn(
+                                    "absolute left-1/2 -translate-x-1/2 w-[min(880px,calc(100%-1rem))] z-40 pointer-events-auto",
+                                    useImmersiveLayout ? "bottom-6" : "bottom-24"
+                                )}
+                            >
+                                <div className="rounded-[28px] border border-white/15 bg-background/88 backdrop-blur-2xl shadow-2xl overflow-hidden">
+                                    <div className="px-4 pt-4 pb-3 border-b border-white/10 flex items-center justify-between gap-3">
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className="h-10 w-10 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                                                <MessagesSquare className="h-5 w-5 text-primary" />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-primary">Model Edit Bar</p>
+                                                <p className="text-[12px] font-bold text-foreground truncate">
+                                                    {activeSiteBuilding?.name || elements.building_name || 'Current BIM Model'}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <p className="hidden md:block text-[10px] text-muted-foreground/80 font-medium">
+                                            Type changes like "kitchen wall shift right" or attach an updated blueprint crop.
+                                        </p>
+                                    </div>
+
+                                    {modelEditMessages.length > 0 ? (
+                                        <div className="max-h-44 overflow-y-auto px-4 py-3 space-y-2 bg-white/5">
+                                            {modelEditMessages.slice(-4).map((entry) => (
+                                                <div
+                                                    key={entry.id}
+                                                    className={cn(
+                                                        "flex",
+                                                        entry.role === 'user' ? "justify-end" : "justify-start"
+                                                    )}
+                                                >
+                                                    <div
+                                                        className={cn(
+                                                            "max-w-[88%] rounded-2xl px-3 py-2 border text-[11px] leading-snug shadow-sm",
+                                                            entry.role === 'user'
+                                                                ? "bg-primary text-primary-foreground border-primary/20"
+                                                                : entry.status === 'error'
+                                                                    ? "bg-red-500/10 text-red-600 border-red-500/20"
+                                                                    : "bg-background/90 text-foreground border-white/10"
+                                                        )}
+                                                    >
+                                                        {entry.attachmentName && (
+                                                            <p className="text-[9px] font-black uppercase tracking-widest opacity-75 mb-1">
+                                                                Attachment: {entry.attachmentName}
+                                                            </p>
+                                                        )}
+                                                        <p>{entry.content}</p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="px-4 py-3 bg-white/5">
+                                            <p className="text-[11px] text-muted-foreground/80">
+                                                Ask for geometry edits in natural language. Example: "Move the left bedroom wall 1m out", "add a powder room near the foyer", or "follow this new blueprint crop for the second floor".
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    <div className="p-3 space-y-3">
+                                        {modelEditAttachment && (
+                                            <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                                                <img
+                                                    src={modelEditAttachment.previewUrl}
+                                                    alt={modelEditAttachment.name}
+                                                    className="h-12 w-12 rounded-xl object-cover border border-white/10"
+                                                />
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest text-primary">Reference Blueprint</p>
+                                                    <p className="text-[11px] font-bold text-foreground truncate">{modelEditAttachment.name}</p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="h-8 w-8 rounded-full border border-white/10 bg-background/90 text-muted-foreground hover:text-foreground transition-colors flex items-center justify-center"
+                                                    onClick={clearModelEditAttachment}
+                                                >
+                                                    <X className="h-4 w-4" />
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        <div className="flex items-end gap-2">
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="icon"
+                                                className="h-11 w-11 rounded-2xl border-white/10 bg-white/5 hover:bg-white/10 shrink-0"
+                                                onClick={() => modelEditFileInputRef.current?.click()}
+                                            >
+                                                <Paperclip className="h-4 w-4" />
+                                            </Button>
+                                            <div className="flex-1 rounded-[22px] border border-white/10 bg-white/5 px-4 py-3 shadow-inner">
+                                                <textarea
+                                                    value={modelEditPrompt}
+                                                    onChange={(e) => setModelEditPrompt(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                                            e.preventDefault();
+                                                            void handleApplyModelEdit();
+                                                        }
+                                                    }}
+                                                    rows={2}
+                                                    placeholder="Tell the model what to change..."
+                                                    className="w-full resize-none bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
+                                                />
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                className="h-11 px-5 rounded-2xl bg-primary hover:bg-primary/90 text-primary-foreground font-black uppercase tracking-widest text-[10px] shrink-0"
+                                                disabled={isApplyingModelEdit || !modelEditPrompt.trim()}
+                                                onClick={() => void handleApplyModelEdit()}
+                                            >
+                                                {isApplyingModelEdit ? <RefreshCw className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+                                            </Button>
+                                        </div>
+
+                                        <div className="flex items-center justify-between gap-3 px-1">
+                                            <p className="text-[10px] text-muted-foreground/80">
+                                                Shift+Enter for newline. Attach a fresh blueprint crop if you want edits to follow a revised plan.
+                                            </p>
+                                            <p className="hidden sm:block text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">
+                                                Realtime edit mode
+                                            </p>
+                                        </div>
+
+                                        <input
+                                            ref={modelEditFileInputRef}
+                                            type="file"
+                                            accept={ACCEPTED_TYPES.join(',')}
+                                            className="hidden"
+                                            onChange={handleModelEditAttachmentUpload}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         )}

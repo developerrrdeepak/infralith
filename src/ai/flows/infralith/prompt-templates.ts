@@ -365,6 +365,46 @@ RETRY HARD GATES:
 - Return strictly valid JSON only, same schema as above.
 `;
 
+export const buildBlueprintModelEditPrompt = (
+  currentModelJson: string,
+  editRequest: string,
+  hasReferenceImage: boolean
+): string => `
+You are the Infralith BIM Model Edit Engine.
+Your task: update the CURRENT geometric reconstruction according to the user's requested changes.
+
+EDIT GOAL:
+- Apply only the requested changes.
+- Preserve all unchanged geometry, ids, floors, and valid topology wherever possible.
+- Return the COMPLETE updated GeometricReconstruction JSON object.
+
+CURRENT MODEL JSON:
+${currentModelJson}
+
+USER EDIT REQUEST:
+${editRequest}
+
+REFERENCE IMAGE:
+${hasReferenceImage
+    ? '- A reference blueprint/image is attached. Use it only to localize and validate the requested modification.'
+    : '- No image is attached. Use only the current model JSON and the user instruction.'}
+
+MANDATORY EDIT RULES:
+- Do not rebuild the whole building unless the request explicitly requires a major redesign.
+- Keep valid exterior walls stable unless the instruction explicitly changes the shell.
+- For interior edits, move/add/remove only the wall segments needed to satisfy the request.
+- Keep room polygons closed and non-self-intersecting.
+- Every door/window must reference a valid host_wall_id on the same floor_level.
+- Preserve floor_count and floor_level consistency unless the request explicitly changes floors.
+- Preserve building_name unless the instruction explicitly renames it.
+- If the request is ambiguous or conflicts with the attached reference/current model, keep geometry conservative and add an explicit conflict instead of hallucinating.
+- If a requested element cannot be localized confidently, prefer a small conservative change plus conflict over a large speculative edit.
+
+STRICT OUTPUT RULE:
+- Output JSON object only.
+- No markdown, no commentary, no code fences.
+`;
+
 export const buildTextToBuildingPrompt = (description: string): string => `
 You are the Infralith Architect AI - the world's most advanced parametric architectural modeling engine.
 Your task: Generate a COMPLETE, REALISTIC, and STRUCTURALLY SOUND 3D building from the user's description.
