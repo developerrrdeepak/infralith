@@ -1591,6 +1591,15 @@ function GeneratedStructure({
             const roomPolygons = (roomPolygonsByFloor.get(level) || [])
                 .map((polygon) => insetPolygonToCentroid(polygon, 0.02))
                 .filter((polygon) => polygon.length >= 3 && Math.abs(polygonArea2D(polygon)) >= 0.1);
+            const roomArea = sumPolygonArea2D(roomPolygons);
+            const isSparseMultiFloorShell = floorMetrics.levels.length > 1 && roomArea < 3;
+            if (isSparseMultiFloorShell) {
+                continue;
+            }
+            if (roomPolygons.length >= 2 && roomArea >= 4) {
+                grouped.set(level, roomPolygons);
+                continue;
+            }
             const trustedPolygons = selectTrustedFloorShellPolygons(wallPolygons, roomPolygons);
             if (trustedPolygons.length > 0) grouped.set(level, trustedPolygons);
         }
