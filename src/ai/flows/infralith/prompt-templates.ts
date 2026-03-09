@@ -2,6 +2,25 @@ import type { BlueprintLayoutHints } from "@/ai/azure-ai";
 import type { BlueprintLineRecord } from "./blueprint-line-database";
 import { buildArchitecturalLineSemanticsReference } from "./architectural-line-semantics";
 
+type PromptSheetAnalysis = {
+  kind: 'floor_plan' | 'mixed_sheet' | 'site_plan' | 'elevation_only' | 'unknown';
+  confidence: number;
+  planRegionCount: number;
+  planRegionConfidence: number;
+  manualReviewRecommended: boolean;
+  reasons: string[];
+  regions: Array<{
+    label: string;
+    level: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    source: 'cluster' | 'band' | 'whole';
+    confidence: number;
+  }>;
+};
+
 const PROMPT_DIMENSION_ANCHOR_LIMIT = 24;
 const PROMPT_LINE_BBOX_LIMIT = 48;
 const PROMPT_LINE_TEXT_LIMIT = 22;
@@ -122,10 +141,31 @@ const summarizeLayoutHintsForPrompt = (layoutHints: BlueprintLayoutHints | null)
   }, null, 2);
 };
 
+const summarizeSheetAnalysisForPrompt = (sheetAnalysis?: PromptSheetAnalysis): string => {
+  if (!sheetAnalysis) return "Not available.";
+
+  return JSON.stringify({
+    kind: sheetAnalysis.kind,
+    confidence: Number(sheetAnalysis.confidence.toFixed(3)),
+    planRegionCount: sheetAnalysis.planRegionCount,
+    planRegionConfidence: Number(sheetAnalysis.planRegionConfidence.toFixed(3)),
+    manualReviewRecommended: sheetAnalysis.manualReviewRecommended,
+    reasons: sheetAnalysis.reasons.slice(0, 4),
+    regions: sheetAnalysis.regions.slice(0, 4).map((region) => ({
+      label: region.label,
+      level: region.level,
+      source: region.source,
+      confidence: Number(region.confidence.toFixed(3)),
+      bbox: [region.left, region.top, region.left + region.width, region.top + region.height],
+    })),
+  }, null, 2);
+};
+
 export const buildBlueprintVisionPrompt = (
   layoutHints: BlueprintLayoutHints | null,
   options?: {
     lineRecords?: BlueprintLineRecord[];
+    sheetAnalysis?: PromptSheetAnalysis;
   }
 ): string => `
 You are Infralith Blueprint Reconstruction Engine v7.
@@ -145,10 +185,14 @@ ANTI-HALLUCINATION HARD RULES:
 - If the sheet mixes floor plans with elevation views, title blocks, area schedules, legends, or project metadata, reconstruct ONLY the actual floor-plan views.
 - Ignore facade/elevation artwork, schedule tables, and text blocks such as level summaries unless they directly localize a floor-plan block.
 - If the sheet contains thumbnail duplicates, alternate mini plans, or repeated floor captions, use the largest most detailed floor-plan block for each floor and ignore duplicate inset versions.
+- If heuristic sheet analysis marks the page as mixed, site-like, elevation-only, or low-confidence, trust only the highest-confidence plan regions and emit conflicts instead of guessing missing geometry.
 
 INPUT EVIDENCE SUMMARY:
 AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS:
 ${summarizeLayoutHintsForPrompt(layoutHints)}
+
+HEURISTIC_SHEET_ANALYSIS:
+${summarizeSheetAnalysisForPrompt(options?.sheetAnalysis)}
 
 RESEARCH-INFORMED STRATEGY (MANDATORY):
 - Graph-first vectorization: infer junctions and wall edges before semantic room naming.

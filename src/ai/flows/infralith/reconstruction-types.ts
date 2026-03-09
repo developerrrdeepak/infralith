@@ -83,12 +83,37 @@ export interface ConstructionConflict {
     location: [number, number];
 }
 
+export type BlueprintSheetType =
+    | 'floor_plan'
+    | 'mixed_sheet'
+    | 'site_plan'
+    | 'elevation_only'
+    | 'unknown';
+
+export interface BlueprintPlanRegionHint {
+    label: string;
+    level: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    confidence?: number;
+    source?: 'cluster' | 'band' | 'whole';
+}
+
 export interface ReconstructionMeta {
     unit?: 'm' | 'cm' | 'mm' | 'ft' | 'in' | 'unknown';
     scale_m_per_px?: number;
     scale_confidence?: number;
     rotation_deg?: number;
     floor_count?: number;
+    sheet_type?: BlueprintSheetType;
+    sheet_confidence?: number;
+    plan_region_count?: number;
+    plan_region_confidence?: number;
+    manual_review_recommended?: boolean;
+    sheet_analysis_reasons?: string[];
+    plan_regions?: BlueprintPlanRegionHint[];
 }
 
 export interface TopologyChecks {

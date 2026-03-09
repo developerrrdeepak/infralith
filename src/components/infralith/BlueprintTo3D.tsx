@@ -52,6 +52,7 @@ import {
     Camera,
     User,
     DoorOpen,
+    AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -135,6 +136,87 @@ type WalkthroughInteractable = {
     floorLevel: number;
     useHint: string;
     collectible?: boolean;
+};
+
+type BlueprintReviewSummary = {
+    title: string;
+    description: string;
+    severity: 'low' | 'medium' | 'high';
+    badges: string[];
+    reasons: string[];
+};
+
+const formatConfidenceBadge = (value: unknown, fallback = 'n/a') => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return `${Math.round(Math.max(0, Math.min(1, numeric)) * 100)}%`;
+};
+
+const summarizeBlueprintReview = (
+    model: GeometricReconstruction | null | undefined,
+    siteModeEnabled: boolean
+): BlueprintReviewSummary | null => {
+    if (!model) return null;
+
+    const meta = model.meta || {};
+    const sheetType = meta.sheet_type || 'unknown';
+    const manualReview = !!meta.manual_review_recommended;
+    const planRegionConfidence = Number(meta.plan_region_confidence);
+    const planRegionCount = Number(meta.plan_region_count || 0);
+    const reasons = Array.isArray(meta.sheet_analysis_reasons)
+        ? meta.sheet_analysis_reasons.filter(Boolean).slice(0, 4)
+        : [];
+
+    const relevantConflict = (model.conflicts || []).find((conflict) =>
+        /manual review|plan-region|mixed blueprint sheet|site\/master-plan|elevation\/section|plan view/i.test(conflict.description)
+    );
+
+    if (!manualReview && !relevantConflict) return null;
+
+    let title = 'Blueprint Review Suggested';
+    let description = 'The uploaded sheet looks ambiguous for fully automatic blueprint-to-3D extraction.';
+    let severity: 'low' | 'medium' | 'high' = 'medium';
+
+    if (sheetType === 'mixed_sheet') {
+        title = 'Mixed Sheet Detected';
+        description = `Detected ${planRegionCount} candidate plan region(s). Review the blueprint crop because elevation/title content is mixed into the same sheet.`;
+        severity = Number.isFinite(planRegionConfidence) && planRegionConfidence < 0.5 ? 'high' : 'medium';
+    } else if (sheetType === 'site_plan') {
+        title = 'Site Plan Signal Detected';
+        description = siteModeEnabled
+            ? 'This sheet looks site-oriented. Review the generated building selection before trusting the model.'
+            : 'This sheet looks site-oriented. Turn on Site Mode or upload an isolated building floor plan.';
+        severity = 'medium';
+    } else if (sheetType === 'elevation_only') {
+        title = 'Plan View Missing';
+        description = 'The uploaded image appears dominated by elevation/section content. Use a floor plan sheet or crop only the plan block.';
+        severity = 'high';
+    } else if (Number.isFinite(planRegionConfidence) && planRegionConfidence < 0.58) {
+        title = 'Low Plan Confidence';
+        description = `Plan-region detection confidence is ${formatConfidenceBadge(planRegionConfidence)}. Review the result before production use.`;
+        severity = planRegionConfidence < 0.42 ? 'high' : 'medium';
+    } else if (relevantConflict) {
+        description = relevantConflict.description;
+        severity = relevantConflict.severity;
+    } else if (reasons.length > 0) {
+        description = reasons[0];
+    }
+
+    const badges = [
+        `Sheet: ${sheetType.replace(/_/g, ' ')}`,
+        `Plan confidence: ${formatConfidenceBadge(planRegionConfidence)}`,
+        `Regions: ${Number.isFinite(planRegionCount) ? planRegionCount : 0}`,
+    ];
+
+    if (siteModeEnabled) badges.push('Site mode on');
+
+    return {
+        title,
+        description,
+        severity,
+        badges,
+        reasons,
+    };
 };
 
 type WalkthroughInteractionAction = 'toggle-door' | 'pickup' | 'use' | 'stairs';
@@ -2278,6 +2360,10 @@ function BlueprintWorkspace() {
         () => siteResult?.buildings.find((building) => building.id === activeSiteBuildingId) || null,
         [siteResult, activeSiteBuildingId]
     );
+    const blueprintReviewSummary = useMemo(
+        () => summarizeBlueprintReview(elements, siteModeEnabled),
+        [elements, siteModeEnabled]
+    );
     const useImmersiveLayout = status === 'complete' && !!elements && isFullscreen;
     const isPerformanceSensitiveMode = isWalkthrough || showWalkthroughHuman;
 
@@ -2289,6 +2375,8 @@ function BlueprintWorkspace() {
         conflicts: result?.conflicts?.length || 0,
         hasRoof: !!result?.roof,
         buildingName: result?.building_name || 'N/A',
+        sheetType: result?.meta?.sheet_type || 'n/a',
+        planRegionConfidence: result?.meta?.plan_region_confidence ?? null,
     });
 
     const isCurrentFlowRun = useCallback((runId: string) => flowRunIdRef.current === runId, []);
@@ -2634,10 +2722,18 @@ function BlueprintWorkspace() {
                     clearInterval(t);
                     setStatus('complete');
                     logBlueprintFlow('Step 9/9 generation complete and scene ready.', { progress: 1, status: 'complete' });
+                    const reviewSummary = summarizeBlueprintReview(result, siteModeEnabled);
                     toast({
                         title: "Building Constructed",
                         description: `${result.building_name || 'Building'}: ${result.walls.length} walls, ${result.rooms?.length || 0} rooms`,
                     });
+                    if (reviewSummary) {
+                        toast({
+                            title: reviewSummary.title,
+                            description: reviewSummary.description,
+                            variant: reviewSummary.severity === 'high' ? 'destructive' : 'default',
+                        });
+                    }
                     return 1.0;
                 }
                 return next;
@@ -2900,6 +2996,26 @@ function BlueprintWorkspace() {
                             </Button>
                         </div>
                     </div>
+
+                    {status === 'complete' && elements && blueprintReviewSummary && (
+                        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-[110] pointer-events-auto">
+                            <div className="max-w-[640px] rounded-2xl border border-amber-500/25 bg-white/85 backdrop-blur-xl shadow-xl px-4 py-3">
+                                <div className="flex items-start gap-3">
+                                    <div className="h-9 w-9 rounded-xl bg-amber-500/15 border border-amber-500/20 flex items-center justify-center shrink-0">
+                                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-600">
+                                            {blueprintReviewSummary.title}
+                                        </p>
+                                        <p className="text-[11px] font-medium text-slate-700 leading-snug mt-1">
+                                            {blueprintReviewSummary.description}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* --- LEFT NAVIGATION BAR (Tool System) --- */}
                     <div
@@ -3843,6 +3959,47 @@ function BlueprintWorkspace() {
                                 </div>
 
                                 <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
+                                    {blueprintReviewSummary && (
+                                        <div className="space-y-2">
+                                            <h5 className="text-[8px] font-black uppercase text-amber-500 tracking-widest px-1">Review</h5>
+                                            <div className="p-3 rounded-xl bg-amber-500/8 border border-amber-500/25 space-y-3">
+                                                <div className="flex items-start gap-2">
+                                                    <div className="h-8 w-8 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+                                                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">
+                                                            {blueprintReviewSummary.title}
+                                                        </p>
+                                                        <p className="text-[10px] text-muted-foreground/90 leading-snug mt-1">
+                                                            {blueprintReviewSummary.description}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {blueprintReviewSummary.badges.map((badge, index) => (
+                                                        <Badge
+                                                            key={`${badge}-${index}`}
+                                                            variant="outline"
+                                                            className="border-amber-500/25 bg-amber-500/8 text-[8px] font-black uppercase tracking-widest text-amber-600"
+                                                        >
+                                                            {badge}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                                {blueprintReviewSummary.reasons.length > 0 && (
+                                                    <div className="space-y-1">
+                                                        {blueprintReviewSummary.reasons.map((reason, index) => (
+                                                            <p key={`${reason}-${index}`} className="text-[9px] text-muted-foreground/80 leading-snug">
+                                                                {reason}
+                                                            </p>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* Debug Image from layout parsing */}
                                     {elements.debug_image && (
                                         <div className="space-y-2">

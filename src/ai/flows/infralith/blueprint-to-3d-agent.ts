@@ -12,6 +12,8 @@ import {
   RoofGeometry,
   SiteReconstruction,
   SiteBuildingReconstruction,
+  type BlueprintSheetType,
+  type BlueprintPlanRegionHint,
 } from './reconstruction-types';
 import { getBlueprintLineDatabase, type BlueprintLineRecord } from './blueprint-line-database';
 import { applyBuildingCodes } from './building-codes';
@@ -71,6 +73,10 @@ const LAYOUT_SEMANTIC_ANCHOR_LIMIT = 96;
 const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 const LAYOUT_FLOOR_LABEL_REGEX = /\b((?:basement|cellar|lower\s*ground|stilt|ground|first|second|third|fourth|fifth|terrace|roof)\s*floor|(?:level|lvl|floor|flr)\s*[-_:]?\s*[a-z0-9]+|(?:g|b|l|f)\s*[-_:]?\s*\d{1,2})\b/i;
 const FLOOR_PLAN_CAPTION_NOISE_REGEX = /\b(?:clg|ceiling|height|living|under\s*roof|overall|total|width|depth|job|project|sheet|area|sq(?:uare)?|sr|schedule|legend|detail|elevation|section|notes?|scale)\b|:/i;
+const SHEET_ELEVATION_SIGNAL_REGEX = /\b(?:elevation|section|facade|front\s+elev|rear\s+elev|side\s+elev|roof\s+plan|reflected\s+ceiling)\b/i;
+const SHEET_METADATA_SIGNAL_REGEX = /\b(?:project|job|sheet|legend|schedule|overall|total\s+living|under\s+roof|clg|notes?|scale|detail)\b/i;
+const SHEET_SITE_SIGNAL_REGEX = /\b(?:site\s+plan|plot|road|setback|north\s+arrow|parking|landscape|vicinity|block|lot)\b/i;
+const ROOM_SEMANTIC_SIGNAL_REGEX = /\b(?:kitchen|pantry|bed(?:room)?|bdrm|master\s*suite|bath(?:room)?|toilet|wc|powder|lav(?:atory)?|wash(?:room)?|living|family(?:\s*room)?|lounge|great\s*room|dining|breakfast|stair(?:case)?s?|stairwell|study|office|utility|laundry|service|storage|store(?:room)?|closet|garage|carport|foyer|entry|vestibule|balcony|terrace|patio|den)\b/i;
 
 const FLOOR_LEVEL_WORD_TO_NUMBER: Record<string, string> = {
   one: '1',
@@ -6181,8 +6187,20 @@ type FloorCropPlan = {
   top: number;
   width: number;
   height: number;
-  source: 'cluster' | 'band';
+  source: 'cluster' | 'band' | 'whole';
   signalScore: number;
+};
+
+type BlueprintSheetAnalysis = {
+  kind: BlueprintSheetType;
+  confidence: number;
+  planRegionCount: number;
+  planRegionConfidence: number;
+  manualReviewRecommended: boolean;
+  reasons: string[];
+  regions: Array<BlueprintPlanRegionHint & { source: 'cluster' | 'band' | 'whole'; confidence: number }>;
+  explicitPlanCaptionCount: number;
+  floorSignalCount: number;
 };
 
 type BoundingBox2D = [number, number, number, number];
@@ -6648,6 +6666,246 @@ const deriveFloorCropPlans = (
   const clustered = deriveClusteredFloorCropPlans(layoutHints, imageWidth, imageHeight);
   if (clustered.length >= 2) return clustered;
   return deriveBandFloorCropPlans(layoutHints, imageWidth, imageHeight);
+};
+
+const clampConfidence01 = (value: number): number =>
+  Number(Math.max(0, Math.min(1, value)).toFixed(3));
+
+const countBlueprintTextSignals = (texts: string[], pattern: RegExp): number =>
+  texts.reduce((count, text) => count + (pattern.test(text) ? 1 : 0), 0);
+
+const deriveWholeSheetPlanFallback = (
+  layoutHints: BlueprintLayoutHints | null,
+  imageWidth: number,
+  imageHeight: number
+): FloorCropPlan[] => {
+  if (!layoutHints || imageWidth <= 0 || imageHeight <= 0) return [];
+
+  const texts = collectLayoutSemanticText(layoutHints);
+  const semanticSignalCount = countBlueprintTextSignals(texts, ROOM_SEMANTIC_SIGNAL_REGEX);
+  const dimensionSignalCount = layoutHints.dimensionAnchors?.length || 0;
+  const elevationSignalCount = countBlueprintTextSignals(texts, SHEET_ELEVATION_SIGNAL_REGEX);
+  const metadataSignalCount = countBlueprintTextSignals(texts, SHEET_METADATA_SIGNAL_REGEX);
+  const explicitFloorAnchor = (layoutHints.floorLabelAnchors || []).find((anchor) =>
+    isExplicitFloorPlanCaption(String(anchor?.text || ''))
+  );
+
+  const likelySinglePlanSheet =
+    semanticSignalCount >= 3 &&
+    dimensionSignalCount >= 2 &&
+    elevationSignalCount === 0 &&
+    metadataSignalCount <= 3;
+  if (!likelySinglePlanSheet) return [];
+
+  return [{
+    label: String(explicitFloorAnchor?.text || 'Primary floor plan').trim(),
+    level: floorLabelToLevel(String(explicitFloorAnchor?.text || ''), 0),
+    left: 0,
+    top: 0,
+    width: imageWidth,
+    height: imageHeight,
+    source: 'whole',
+    signalScore: Number((10 + (semanticSignalCount * 3) + Math.min(18, dimensionSignalCount * 2)).toFixed(3)),
+  }];
+};
+
+const derivePlanCropPlansForAnalysis = (
+  layoutHints: BlueprintLayoutHints | null,
+  imageWidth: number,
+  imageHeight: number
+): FloorCropPlan[] => {
+  const plans = deriveFloorCropPlans(layoutHints, imageWidth, imageHeight);
+  if (plans.length > 0) return plans;
+  return deriveWholeSheetPlanFallback(layoutHints, imageWidth, imageHeight);
+};
+
+const analyzeBlueprintSheet = (
+  layoutHints: BlueprintLayoutHints | null,
+  imageWidth: number,
+  imageHeight: number
+): BlueprintSheetAnalysis | null => {
+  if (!layoutHints) return null;
+
+  const texts = collectLayoutSemanticText(layoutHints);
+  const explicitPlanCaptionCount = estimateExplicitFloorPlanHintCount(layoutHints);
+  const floorSignalCount = estimateFloorHintCount(layoutHints);
+  const elevationSignalCount = countBlueprintTextSignals(texts, SHEET_ELEVATION_SIGNAL_REGEX);
+  const metadataSignalCount = countBlueprintTextSignals(texts, SHEET_METADATA_SIGNAL_REGEX);
+  const siteSignalCount = countBlueprintTextSignals(texts, SHEET_SITE_SIGNAL_REGEX);
+  const semanticSignalCount = countBlueprintTextSignals(texts, ROOM_SEMANTIC_SIGNAL_REGEX);
+  const dimensionSignalCount = layoutHints.dimensionAnchors?.length || 0;
+  const planCandidates = derivePlanCropPlansForAnalysis(layoutHints, imageWidth, imageHeight);
+  const averageSignalScore =
+    planCandidates.length > 0
+      ? planCandidates.reduce((sum, plan) => sum + Math.max(0, plan.signalScore), 0) / planCandidates.length
+      : 0;
+
+  let kind: BlueprintSheetType = 'unknown';
+  if (siteSignalCount >= 3 && explicitPlanCaptionCount === 0 && semanticSignalCount < 5) {
+    kind = 'site_plan';
+  } else if (elevationSignalCount >= 2 && explicitPlanCaptionCount === 0 && planCandidates.length === 0) {
+    kind = 'elevation_only';
+  } else if (
+    (explicitPlanCaptionCount >= 2 || planCandidates.length >= 2) &&
+    (elevationSignalCount >= 1 || metadataSignalCount >= 3 || siteSignalCount >= 2)
+  ) {
+    kind = 'mixed_sheet';
+  } else if (
+    explicitPlanCaptionCount >= 1 ||
+    (planCandidates.length >= 1 && semanticSignalCount >= 3 && dimensionSignalCount >= 2)
+  ) {
+    kind = 'floor_plan';
+  } else if (elevationSignalCount >= 1 && semanticSignalCount < 3) {
+    kind = 'elevation_only';
+  }
+
+  const planRegionConfidence = clampConfidence01(
+    (planCandidates.length > 0 ? 0.2 : 0) +
+    Math.min(0.26, explicitPlanCaptionCount * 0.14) +
+    Math.min(0.18, semanticSignalCount * 0.025) +
+    Math.min(0.16, dimensionSignalCount * 0.018) +
+    Math.min(0.18, averageSignalScore / 70) -
+    Math.min(0.2, elevationSignalCount * 0.08) -
+    Math.min(0.16, metadataSignalCount * 0.03) -
+    (kind === 'mixed_sheet' ? 0.08 : 0) -
+    (kind === 'unknown' ? 0.1 : 0)
+  );
+
+  const confidence = clampConfidence01(
+    planRegionConfidence +
+    (kind === 'floor_plan' ? 0.1 : 0) +
+    (kind === 'mixed_sheet' ? 0.04 : 0) +
+    (kind === 'site_plan' || kind === 'elevation_only' ? -0.08 : 0)
+  );
+
+  const regions = planCandidates.map((plan) => {
+    const areaRatio = imageWidth > 0 && imageHeight > 0
+      ? (plan.width * plan.height) / Math.max(1, imageWidth * imageHeight)
+      : 0;
+    const regionConfidence = clampConfidence01(
+      (plan.source === 'cluster' ? 0.48 : plan.source === 'band' ? 0.36 : 0.3) +
+      (isExplicitFloorPlanCaption(plan.label) ? 0.16 : 0) +
+      Math.min(0.22, plan.signalScore / 65) +
+      Math.min(0.1, areaRatio * 0.35) -
+      (kind === 'mixed_sheet' && plan.source === 'whole' ? 0.18 : 0)
+    );
+    return {
+      label: plan.label,
+      level: plan.level,
+      left: plan.left,
+      top: plan.top,
+      width: plan.width,
+      height: plan.height,
+      source: plan.source,
+      confidence: regionConfidence,
+    };
+  });
+
+  const reasons: string[] = [];
+  if (kind === 'mixed_sheet') {
+    reasons.push('Mixed blueprint sheet detected with floor-plan content plus elevation/metadata noise.');
+  } else if (kind === 'site_plan') {
+    reasons.push('Sheet appears site/master-plan oriented rather than a single isolated floor plan.');
+  } else if (kind === 'elevation_only') {
+    reasons.push('Sheet appears dominated by elevation/section style content instead of plan view.');
+  }
+  if (planCandidates.length === 0) reasons.push('No high-confidence plan region was isolated from the sheet.');
+  if (explicitPlanCaptionCount >= 2 && planCandidates.length < explicitPlanCaptionCount) {
+    reasons.push('Detected floor captions exceed isolated plan regions, indicating incomplete crop recovery.');
+  }
+  if (planRegionConfidence < 0.58) {
+    reasons.push(`Plan-region detection confidence is low (${Math.round(planRegionConfidence * 100)}%).`);
+  }
+
+  const manualReviewRecommended =
+    kind === 'mixed_sheet' ||
+    kind === 'site_plan' ||
+    kind === 'elevation_only' ||
+    kind === 'unknown' ||
+    planRegionConfidence < 0.58 ||
+    (explicitPlanCaptionCount >= 2 && planCandidates.length < explicitPlanCaptionCount);
+
+  return {
+    kind,
+    confidence,
+    planRegionCount: regions.length,
+    planRegionConfidence,
+    manualReviewRecommended,
+    reasons: reasons.slice(0, 5),
+    regions: regions.slice(0, 6),
+    explicitPlanCaptionCount,
+    floorSignalCount,
+  };
+};
+
+const applySheetAnalysisToResult = (
+  payload: GeometricReconstruction,
+  sheetAnalysis: BlueprintSheetAnalysis | null
+): GeometricReconstruction => {
+  if (!sheetAnalysis) return payload;
+
+  const baseLocation =
+    payload?.rooms?.[0]?.polygon?.[0] ||
+    payload?.walls?.[0]?.start ||
+    [0, 0];
+  const nextMeta = {
+    ...(payload.meta || {}),
+    sheet_type: sheetAnalysis.kind,
+    sheet_confidence: sheetAnalysis.confidence,
+    plan_region_count: sheetAnalysis.planRegionCount,
+    plan_region_confidence: sheetAnalysis.planRegionConfidence,
+    manual_review_recommended: sheetAnalysis.manualReviewRecommended,
+    sheet_analysis_reasons: sheetAnalysis.reasons,
+    plan_regions: sheetAnalysis.regions.map((region) => ({
+      label: region.label,
+      level: region.level,
+      left: region.left,
+      top: region.top,
+      width: region.width,
+      height: region.height,
+      confidence: region.confidence,
+      source: region.source,
+    })),
+  };
+
+  let sheetConflict: GeometricReconstruction['conflicts'][number] | null = null;
+  if (sheetAnalysis.kind === 'mixed_sheet') {
+    sheetConflict = {
+      type: 'structural',
+      severity: sheetAnalysis.planRegionConfidence < 0.5 ? 'high' : 'medium',
+      description: `Mixed blueprint sheet detected. Isolated ${sheetAnalysis.planRegionCount} candidate plan region(s) at ${Math.round(sheetAnalysis.planRegionConfidence * 100)}% confidence. Manual crop review is recommended before trusting the generated 3D.`,
+      location: [Number(baseLocation[0] || 0), Number(baseLocation[1] || 0)] as [number, number],
+    };
+  } else if (sheetAnalysis.kind === 'site_plan') {
+    sheetConflict = {
+      type: 'code',
+      severity: 'medium',
+      description: 'Sheet appears site/master-plan oriented. Use Site Mode or upload an isolated building floor plan for more reliable 3D generation.',
+      location: [Number(baseLocation[0] || 0), Number(baseLocation[1] || 0)] as [number, number],
+    };
+  } else if (sheetAnalysis.kind === 'elevation_only') {
+    sheetConflict = {
+      type: 'structural',
+      severity: 'high',
+      description: 'Sheet appears dominated by elevation/section content instead of a usable floor plan. Upload a plan view or crop the plan block manually.',
+      location: [Number(baseLocation[0] || 0), Number(baseLocation[1] || 0)] as [number, number],
+    };
+  } else if (sheetAnalysis.manualReviewRecommended) {
+    sheetConflict = {
+      type: 'structural',
+      severity: sheetAnalysis.planRegionConfidence < 0.42 ? 'high' : 'medium',
+      description: `Plan-region detection confidence is ${Math.round(sheetAnalysis.planRegionConfidence * 100)}%. Manual review is recommended because the sheet layout is ambiguous for fully automatic reconstruction.`,
+      location: [Number(baseLocation[0] || 0), Number(baseLocation[1] || 0)] as [number, number],
+    };
+  }
+
+  return {
+    ...payload,
+    meta: nextMeta,
+    conflicts: sheetConflict
+      ? [...(payload.conflicts || []), sheetConflict]
+      : [...(payload.conflicts || [])],
+  };
 };
 
 async function cropImageRect(base64Image: string, left: number, top: number, width: number, height: number): Promise<string | null> {
@@ -7751,6 +8009,17 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       ...summarizeLayoutHints(layoutHints),
     });
   }
+  const sheetAnalysis = analyzeBlueprintSheet(layoutHints, preprocessed.width, preprocessed.height);
+  if (sheetAnalysis) {
+    traceLog('Infralith Vision Engine', traceId, '1/9', 'heuristic sheet analysis', {
+      kind: sheetAnalysis.kind,
+      confidence: sheetAnalysis.confidence,
+      planRegionCount: sheetAnalysis.planRegionCount,
+      planRegionConfidence: sheetAnalysis.planRegionConfidence,
+      manualReviewRecommended: sheetAnalysis.manualReviewRecommended,
+      reasons: sheetAnalysis.reasons,
+    }, sheetAnalysis.manualReviewRecommended ? 'warn' : 'log');
+  }
   const requiredSemanticMentions = extractRequiredSemanticMentionKeys(layoutHints);
   if (requiredSemanticMentions.length > 0) {
     traceLog('Infralith Vision Engine', traceId, '1/9', 'semantic anchors detected from blueprint text', {
@@ -7785,6 +8054,15 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
   }
   const prompt = buildBlueprintVisionPrompt(layoutHints, {
     lineRecords,
+    sheetAnalysis: sheetAnalysis ? {
+      kind: sheetAnalysis.kind,
+      confidence: sheetAnalysis.confidence,
+      planRegionCount: sheetAnalysis.planRegionCount,
+      planRegionConfidence: sheetAnalysis.planRegionConfidence,
+      manualReviewRecommended: sheetAnalysis.manualReviewRecommended,
+      reasons: sheetAnalysis.reasons,
+      regions: sheetAnalysis.regions,
+    } : undefined,
   });
   const effectiveBudgetMs = Math.min(VISION_TOTAL_BUDGET_MS, VISION_REQUEST_HARD_BUDGET_MS);
   const getRemainingBudgetMs = () => effectiveBudgetMs - (Date.now() - startedAt);
@@ -8708,12 +8986,16 @@ OPENING-RECOVERY OVERRIDE:
       }, 'warn');
     }
     traceLog('Infralith Vision Engine', traceId, '7/9', 'validation complete', summarizeReconstruction(validatedResult));
+    const reviewedResult = applySheetAnalysisToResult(validatedResult, sheetAnalysis);
     const finalPayload: GeometricReconstruction = {
-      ...validatedResult,
+      ...reviewedResult,
       is_vision_only: !layoutHints,
     };
     traceLog('Infralith Vision Engine', traceId, '8/9', 'final payload assembled', {
       is_vision_only: finalPayload.is_vision_only,
+      sheetType: finalPayload.meta?.sheet_type || 'na',
+      planRegionCount: finalPayload.meta?.plan_region_count ?? 0,
+      planRegionConfidence: finalPayload.meta?.plan_region_confidence ?? null,
       layoutHints: summarizeLayoutHints(layoutHints),
     });
     const durationMs = Date.now() - startedAt;
