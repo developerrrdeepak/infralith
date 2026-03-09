@@ -70,6 +70,16 @@ const LAYOUT_FLOOR_LABEL_LIMIT = 36;
 const LAYOUT_SEMANTIC_ANCHOR_LIMIT = 96;
 const LAYOUT_DIMENSION_REGEX = /(\d+(\.\d+)?\s?(mm|cm|m|ft|feet|in|inch|\"|')|\d+'\s?\d*\"?)/i;
 const LAYOUT_FLOOR_LABEL_REGEX = /\b((?:basement|cellar|lower\s*ground|stilt|ground|first|second|third|fourth|fifth|terrace|roof)\s*floor|(?:level|lvl|floor|flr)\s*[-_:]?\s*[a-z0-9]+|(?:g|b|l|f)\s*[-_:]?\s*\d{1,2})\b/i;
+const FLOOR_PLAN_CAPTION_NOISE_REGEX = /\b(?:clg|ceiling|height|living|under\s*roof|overall|total|width|depth|job|project|sheet|area|sq(?:uare)?|sr|schedule|legend|detail|elevation|section|notes?|scale)\b|:/i;
+
+const FLOOR_LEVEL_WORD_TO_NUMBER: Record<string, string> = {
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+};
 
 type LayoutHintMode = 'auto' | 'azure' | 'local' | 'hybrid';
 
@@ -442,6 +452,77 @@ const normalizeFloorLabelText = (value: string): string | null => {
   return null;
 };
 
+const normalizeExplicitFloorPlanCaption = (value: string): string | null => {
+  const text = value.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text || FLOOR_PLAN_CAPTION_NOISE_REGEX.test(text)) return null;
+
+  const compact = text.replace(/\s*-\s*plan$/, '').replace(/\s+plan$/, '').trim();
+  if (!compact) return null;
+
+  const namedFloor = compact.match(
+    /^(basement|cellar|lower\s*ground|stilt|ground|first|second|third|fourth|fifth)\s*floor$/
+  );
+  if (namedFloor?.[1]) {
+    return namedFloor[1].replace(/\s+/g, ' ');
+  }
+
+  const roofLike = compact.match(/^(terrace|roof)(?:\s*floor)?$/);
+  if (roofLike?.[1]) {
+    return roofLike[1];
+  }
+
+  const ordinalFloor = compact.match(/^(\d{1,2})(?:st|nd|rd|th)\s*floor$/);
+  if (ordinalFloor?.[1]) {
+    return `level-${ordinalFloor[1]}`;
+  }
+
+  const floorPrefix = compact.match(/^(?:floor|flr)\s*(one|two|three|four|five|six|\d{1,2})$/);
+  if (floorPrefix?.[1]) {
+    return `level-${FLOOR_LEVEL_WORD_TO_NUMBER[floorPrefix[1]] || floorPrefix[1]}`;
+  }
+
+  const levelPrefix = compact.match(/^(?:level|lvl)\s*(one|two|three|four|five|six|\d{1,2})(?:\s*floor)?$/);
+  if (levelPrefix?.[1]) {
+    return `level-${FLOOR_LEVEL_WORD_TO_NUMBER[levelPrefix[1]] || levelPrefix[1]}`;
+  }
+
+  return null;
+};
+
+const isExplicitFloorPlanCaption = (value: string): boolean =>
+  normalizeExplicitFloorPlanCaption(value) != null;
+
+const estimateExplicitFloorPlanHintCount = (layoutHints: BlueprintLayoutHints | null): number => {
+  if (!layoutHints) return 0;
+
+  const labels = new Set<string>();
+  for (const anchor of layoutHints.floorLabelAnchors || []) {
+    const normalized = normalizeExplicitFloorPlanCaption(String(anchor?.text || ''));
+    if (!normalized) continue;
+    labels.add(normalized);
+    if (labels.size >= 6) break;
+  }
+
+  for (const lineText of layoutHints.lineTexts || []) {
+    const normalized = normalizeExplicitFloorPlanCaption(String(lineText || ''));
+    if (!normalized) continue;
+    labels.add(normalized);
+    if (labels.size >= 6) break;
+  }
+
+  return labels.size;
+};
+
+const selectPreferredFloorCaptionAnchors = <T extends { text: string }>(anchors: T[]): T[] => {
+  const explicit = anchors.filter((anchor) => isExplicitFloorPlanCaption(anchor.text));
+  if (explicit.length >= 2) return explicit;
+
+  const filtered = anchors.filter((anchor) => !FLOOR_PLAN_CAPTION_NOISE_REGEX.test(String(anchor.text || '')));
+  if (filtered.length >= 2) return filtered;
+
+  return explicit.length > 0 ? explicit : anchors;
+};
+
 const estimateFloorHintCount = (layoutHints: BlueprintLayoutHints | null): number => {
   if (!layoutHints) return 0;
 
@@ -452,8 +533,6 @@ const estimateFloorHintCount = (layoutHints: BlueprintLayoutHints | null): numbe
     labels.add(normalized);
     if (labels.size >= 6) break;
   }
-
-  if (labels.size > 0) return labels.size;
 
   for (const lineText of layoutHints.lineTexts || []) {
     const normalized = normalizeFloorLabelText(String(lineText || ''));
@@ -790,6 +869,12 @@ const parseFloorLabelToLevel = (label: string): number | null => {
   if (/\bthird\b/.test(text)) return 3;
   if (/\bfourth\b/.test(text)) return 4;
   if (/\bfifth\b/.test(text)) return 5;
+
+  const wordBased = text.match(/\b(?:level|lvl|floor|flr)\s*[-_:]?\s*(one|two|three|four|five|six)\b/);
+  if (wordBased?.[1]) {
+    const parsed = Number(FLOOR_LEVEL_WORD_TO_NUMBER[wordBased[1]] || 0);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
 
   const numeric = text.match(/\b(?:level|lvl|floor|flr)\s*[-_:]?\s*(\d{1,2})\b/);
   if (numeric?.[1]) {
@@ -6211,6 +6296,39 @@ const createFloorPlanFromBoundingBox = (
   };
 };
 
+const compareFloorPlanStrength = (left: FloorCropPlan, right: FloorCropPlan): number => {
+  if (left.signalScore !== right.signalScore) return right.signalScore - left.signalScore;
+  const leftArea = left.width * left.height;
+  const rightArea = right.width * right.height;
+  if (leftArea !== rightArea) return rightArea - leftArea;
+  return left.top - right.top;
+};
+
+const selectBestFloorPlanPerLevel = (plans: FloorCropPlan[]): FloorCropPlan[] => {
+  if (plans.length <= 1) return plans;
+
+  const bestByLevel = new Map<number, FloorCropPlan>();
+  for (const plan of plans) {
+    const existing = bestByLevel.get(plan.level);
+    if (!existing) {
+      bestByLevel.set(plan.level, plan);
+      continue;
+    }
+
+    const existingArea = existing.width * existing.height;
+    const nextArea = plan.width * plan.height;
+    const preferCurrent =
+      plan.signalScore > existing.signalScore + 0.25 ||
+      (plan.signalScore >= existing.signalScore - 0.1 && nextArea > existingArea * 1.08) ||
+      (plan.signalScore === existing.signalScore && nextArea === existingArea && plan.top < existing.top);
+    if (preferCurrent) bestByLevel.set(plan.level, plan);
+  }
+
+  return [...bestByLevel.values()]
+    .sort((a, b) => (a.level - b.level) || compareFloorPlanStrength(a, b))
+    .slice(0, 6);
+};
+
 const resolveHintImageSize = (
   layoutHints: BlueprintLayoutHints | null,
   fallbackWidth = 0,
@@ -6277,10 +6395,7 @@ const deriveBandFloorCropPlans = (
     )
     .sort((a, b) => a.centerY - b.centerY);
 
-  const planCaptionAnchors = allAnchors.filter((anchor) =>
-    /\b(?:floor|basement|cellar|terrace|roof)\b/i.test(anchor.text)
-  );
-  const anchors = planCaptionAnchors.length >= 2 ? planCaptionAnchors : allAnchors;
+  const anchors = selectPreferredFloorCaptionAnchors(allAnchors);
 
   if (anchors.length < 2) return [];
 
@@ -6328,7 +6443,7 @@ const deriveBandFloorCropPlans = (
     });
   }
 
-  return plans.slice(0, 6);
+  return selectBestFloorPlanPerLevel(plans);
 };
 
 const deriveClusteredFloorCropPlans = (
@@ -6380,6 +6495,9 @@ const deriveClusteredFloorCropPlans = (
 
   if (anchors.length < 2) return [];
 
+  const preferredAnchors = selectPreferredFloorCaptionAnchors(anchors);
+  if (preferredAnchors.length < 2) return [];
+
   const dimensionBoxes = (layoutHints.dimensionAnchors || [])
     .map((anchor) => polygonToBoundingBox(anchor?.polygon || []))
     .filter((box): box is BoundingBox2D => !!box);
@@ -6395,13 +6513,13 @@ const deriveClusteredFloorCropPlans = (
   const horizontalReach = Math.max(160, imageWidth * 0.18);
 
   const assignSeedBoxes = (boxes: BoundingBox2D[]) => {
-    const assignments = anchors.map(() => [] as BoundingBox2D[]);
+    const assignments = preferredAnchors.map(() => [] as BoundingBox2D[]);
     for (const box of boxes) {
       const [cx, cy] = getBoundingBoxCenter(box);
       let bestIndex = -1;
       let bestScore = Number.POSITIVE_INFINITY;
-      for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex += 1) {
-        const anchor = anchors[anchorIndex];
+      for (let anchorIndex = 0; anchorIndex < preferredAnchors.length; anchorIndex += 1) {
+        const anchor = preferredAnchors[anchorIndex];
         if (Math.abs(cx - anchor.centerX) > horizontalReach * 1.35) continue;
         const dy = cy - anchor.centerY;
         if (dy < -maxAbove || dy > maxBelow * 1.8) continue;
@@ -6425,9 +6543,9 @@ const deriveClusteredFloorCropPlans = (
   const semanticAssignments = assignSeedBoxes(semanticBoxes);
 
   const candidatePlans: FloorCropPlan[] = [];
-  for (let index = 0; index < anchors.length; index += 1) {
-    const anchor = anchors[index];
-    const looksLikePlanCaption = /\b(?:floor|basement|cellar|terrace|roof)\b/i.test(anchor.text);
+  for (let index = 0; index < preferredAnchors.length; index += 1) {
+    const anchor = preferredAnchors[index];
+    const looksLikePlanCaption = isExplicitFloorPlanCaption(anchor.text);
     const seedBoxes = [
       ...dimensionAssignments[index],
       ...semanticAssignments[index],
@@ -6467,6 +6585,7 @@ const deriveClusteredFloorCropPlans = (
       imageHeight
     );
     const signalScore =
+      (looksLikePlanCaption ? 10 : 0) +
       (dimensionAssignments[index].length * 6) +
       (semanticAssignments[index].length * 8) +
       (lineSupport.length * 0.12);
@@ -6518,7 +6637,7 @@ const deriveClusteredFloorCropPlans = (
     if (preferCurrent) filtered[overlappingIndex] = plan;
   }
 
-  return filtered.slice(0, 6);
+  return selectBestFloorPlanPerLevel(filtered);
 };
 
 const deriveFloorCropPlans = (
@@ -7758,6 +7877,9 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
         allowFidelityBoost?: boolean;
         allowConflictBoost?: boolean;
         allowSemanticBoost?: boolean;
+        allowFloorBoost?: boolean;
+        floorBoostTarget?: number;
+        floorBoostScoreTolerance?: number;
       }
     ) => {
       if (!hasNonEmptyWalls(candidate)) return false;
@@ -7766,14 +7888,19 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       const allowFidelityBoost = options?.allowFidelityBoost ?? true;
       const allowConflictBoost = options?.allowConflictBoost ?? true;
       const allowSemanticBoost = options?.allowSemanticBoost ?? true;
+      const allowFloorBoost = options?.allowFloorBoost ?? false;
+      const floorBoostTarget = Math.max(0, Math.round(options?.floorBoostTarget ?? 0));
+      const floorBoostScoreTolerance = Math.max(0, options?.floorBoostScoreTolerance ?? 3);
 
       const candidateScore = scoreReconstructionDensity(candidate, layoutHints);
       const candidateOpenings = getOpeningCount(candidate);
       const candidateFidelity = evaluateReconstructionFidelity(candidate, layoutHints);
       const candidateHighSeverityConflicts = (candidate?.conflicts || []).filter((conflict) => conflict?.severity === 'high').length;
       const candidateMissingSemanticMentions = getMissingSemanticMentionKeys(requiredSemanticMentions, candidate).length;
+      const candidateFloorCount = estimateResultFloorCount(candidate);
       const candidateRooms = candidate?.rooms?.length || 0;
       const candidateWalls = candidate?.walls?.length || 0;
+      const bestFloorCount = estimateResultFloorCount(bestResult);
       const bestRooms = bestResult?.rooms?.length || 0;
       const bestWalls = bestResult?.walls?.length || 0;
 
@@ -7797,8 +7924,15 @@ export async function processBlueprintTo3D(imageUrl: string): Promise<GeometricR
       const structuralDetailImproved =
         candidateScore >= bestScore - 0.5 &&
         (candidateRooms > bestRooms + 2 || candidateWalls > bestWalls + 4);
+      const floorRecovered =
+        allowFloorBoost &&
+        floorBoostTarget >= 2 &&
+        candidateFloorCount >= Math.min(6, floorBoostTarget) &&
+        candidateFloorCount > bestFloorCount &&
+        candidateScore >= bestScore - floorBoostScoreTolerance &&
+        (candidateRooms >= bestRooms + 1 || candidateWalls >= bestWalls + 4);
 
-      if (!(scoreImproved || openingImproved || fidelityImproved || conflictImproved || semanticImproved || structuralDetailImproved)) {
+      if (!(scoreImproved || openingImproved || fidelityImproved || conflictImproved || semanticImproved || structuralDetailImproved || floorRecovered)) {
         return false;
       }
 
@@ -8269,8 +8403,11 @@ OPENING-RECOVERY OVERRIDE:
     }
 
     const hintedFloorCount = estimateFloorHintCount(layoutHints);
+    const explicitPlanCaptionCount = estimateExplicitFloorPlanHintCount(layoutHints);
+    const segmentationFloorSignal = Math.max(hintedFloorCount, explicitPlanCaptionCount);
+    const strongPlanCaptionSignal = explicitPlanCaptionCount >= 2;
     const inferredFloorCount = estimateResultFloorCount(result);
-    const sparseMultiFloorShell = isLikelySparseMultiFloorShell(result, hintedFloorCount);
+    const sparseMultiFloorShell = isLikelySparseMultiFloorShell(result, segmentationFloorSignal);
     const interiorLayoutSignal = analyzeInteriorLayoutSignal(result);
     const placeholderInterior = interiorLayoutSignal.placeholder;
     const dimensionAlignmentSignal = estimateRoomDimensionAlignment(layoutHints, result);
@@ -8278,16 +8415,19 @@ OPENING-RECOVERY OVERRIDE:
     const densityFloorCount = Math.max(1, inferredFloorCount);
     const roomDensityPerFloor = (result?.rooms?.length || 0) / densityFloorCount;
     const wallDensityPerFloor = (result?.walls?.length || 0) / densityFloorCount;
-    const lowRoomDensity = hintedFloorCount >= 2 && roomDensityPerFloor < 1.4;
-    const lowWallDensity = hintedFloorCount >= 2 && wallDensityPerFloor < 4.8 && roomDensityPerFloor < 2.2;
+    const lowRoomDensity = segmentationFloorSignal >= 2 && roomDensityPerFloor < 1.4;
+    const lowWallDensity = segmentationFloorSignal >= 2 && wallDensityPerFloor < 4.8 && roomDensityPerFloor < 2.2;
     const shouldAttemptSegmentation =
-      hintedFloorCount >= 2 &&
+      segmentationFloorSignal >= 2 &&
       (inferredFloorCount <= 1 || sparseMultiFloorShell || lowRoomDensity || lowWallDensity || placeholderInterior || significantDimensionMismatch);
 
     if (shouldAttemptSegmentation && canRunVisionPass('segmented-floor-recovery', true, VISION_PASS_ESTIMATED_COST_MS * 3)) {
       const monolithicScore = scoreReconstructionDensity(result, layoutHints);
       traceLog('Infralith Vision Engine', traceId, '5/9', 'segmentation candidate triggered for multi-floor quality recovery', {
         hintedFloorCount,
+        explicitPlanCaptionCount,
+        segmentationFloorSignal,
+        strongPlanCaptionSignal,
         inferredFloorCount,
         sparseMultiFloorShell,
         lowRoomDensity,
@@ -8312,14 +8452,18 @@ OPENING-RECOVERY OVERRIDE:
       if (segmentedResult && hasNonEmptyWalls(segmentedResult)) {
         const segmentedScore = scoreReconstructionDensity(segmentedResult, layoutHints);
         const promotedSegmented = promoteBestCandidate(segmentedResult, 'segmented-floor-recovery', {
-          minScoreGain: 4,
+          minScoreGain: strongPlanCaptionSignal ? 1.2 : 4,
           allowOpeningBoost: true,
           allowFidelityBoost: true,
           allowConflictBoost: true,
+          allowFloorBoost: strongPlanCaptionSignal,
+          floorBoostTarget: explicitPlanCaptionCount || segmentationFloorSignal,
+          floorBoostScoreTolerance: 3.5,
         });
         if (promotedSegmented) {
           traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented multi-floor recovery replaced monolithic output', {
             hintedFloorCount,
+            explicitPlanCaptionCount,
             previousFloorCount: inferredFloorCount,
             recoveredFloorCount: estimateResultFloorCount(bestResult),
             monolithicScore,
@@ -8330,6 +8474,7 @@ OPENING-RECOVERY OVERRIDE:
         } else {
           traceLog('Infralith Vision Engine', traceId, '5/9', 'segmented result kept as fallback only; monolithic output scored higher', {
             hintedFloorCount,
+            explicitPlanCaptionCount,
             inferredFloorCount,
             monolithicScore,
             segmentedScore,
