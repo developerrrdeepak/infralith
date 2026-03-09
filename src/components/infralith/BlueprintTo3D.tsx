@@ -22,6 +22,7 @@ import { motion } from 'framer-motion';
 import {
     Upload,
     Box,
+    Bell,
     Wand2,
     CheckCircle2,
     RefreshCw,
@@ -2648,7 +2649,8 @@ function BlueprintWorkspace() {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [activeTool, setActiveTool] = useState('select');
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(false);
-    const [isInspectorVisible, setIsInspectorVisible] = useState(true);
+    const [isInspectorVisible, setIsInspectorVisible] = useState(false);
+    const [isReviewPopoverOpen, setIsReviewPopoverOpen] = useState(false);
     const [modelEditPrompt, setModelEditPrompt] = useState('');
     const [modelEditAttachment, setModelEditAttachment] = useState<ModelEditAttachment | null>(null);
     const [modelEditMessages, setModelEditMessages] = useState<ModelEditChatEntry[]>([]);
@@ -2669,6 +2671,7 @@ function BlueprintWorkspace() {
     const { model: elements, setModel: setElements, activeFloor, setActiveFloor, selectedElement, setSelectedElement, updateWallColor, updateRoomColor, saveToCloud, loadModel } = useBIM();
     const flowRunIdRef = useRef<string | null>(null);
     const modelEditFileInputRef = useRef<HTMLInputElement | null>(null);
+    const reviewPopoverRef = useRef<HTMLDivElement | null>(null);
     const pendingAutoWalkRef = useRef(false);
     const hasAutoEnteredFullscreenRef = useRef(false);
     const walkthroughBounds = useMemo(() => computeWalkBounds(elements), [elements]);
@@ -2687,6 +2690,9 @@ function BlueprintWorkspace() {
         () => summarizeBlueprintReview(elements, siteModeEnabled),
         [elements, siteModeEnabled]
     );
+    const reviewNotificationCount = blueprintReviewSummary
+        ? Math.max(1, blueprintReviewSummary.reasons.length || blueprintReviewSummary.badges.length)
+        : 0;
     const useImmersiveLayout = status === 'complete' && !!elements && isFullscreen;
     const isPerformanceSensitiveMode = isWalkthrough || showWalkthroughHuman;
     const clearModelEditAttachment = useCallback(() => {
@@ -3440,6 +3446,129 @@ function BlueprintWorkspace() {
         }
     };
 
+    React.useEffect(() => {
+        if (!blueprintReviewSummary) {
+            setIsReviewPopoverOpen(false);
+        }
+    }, [blueprintReviewSummary]);
+
+    React.useEffect(() => {
+        if (status === 'complete') return;
+        setIsInspectorVisible(false);
+        setIsReviewPopoverOpen(false);
+    }, [status]);
+
+    React.useEffect(() => {
+        if (!isReviewPopoverOpen) return;
+
+        const handlePointerDown = (event: MouseEvent) => {
+            if (reviewPopoverRef.current && !reviewPopoverRef.current.contains(event.target as Node)) {
+                setIsReviewPopoverOpen(false);
+            }
+        };
+
+        window.addEventListener('mousedown', handlePointerDown);
+        return () => window.removeEventListener('mousedown', handlePointerDown);
+    }, [isReviewPopoverOpen]);
+
+    const renderReviewBell = (mode: 'immersive' | 'standard') => {
+        if (!(status === 'complete' && elements && blueprintReviewSummary)) return null;
+
+        const buttonClassName = mode === 'immersive'
+            ? "relative h-11 w-11 p-0 rounded-2xl bg-white/55 backdrop-blur-md border border-white/40 text-slate-600 hover:text-slate-900 shadow-sm transition-all"
+            : "relative h-8 w-8 p-0 rounded-xl border border-amber-500/20 bg-amber-500/8 text-amber-600 hover:bg-amber-500/12 hover:text-amber-700";
+
+        return (
+            <div ref={reviewPopoverRef} className="relative">
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    className={buttonClassName}
+                    onClick={() => setIsReviewPopoverOpen((open) => !open)}
+                    aria-label="Open blueprint review notifications"
+                    aria-expanded={isReviewPopoverOpen}
+                >
+                    <Bell className={mode === 'immersive' ? "h-5 w-5" : "h-4 w-4"} />
+                    <span className="absolute -right-1 -top-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[9px] font-black leading-none flex items-center justify-center shadow-sm">
+                        {Math.min(reviewNotificationCount, 9)}
+                    </span>
+                </Button>
+
+                {isReviewPopoverOpen && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        className={cn(
+                            "absolute right-0 top-full mt-3 w-[320px] rounded-2xl border border-amber-500/20 bg-white/95 backdrop-blur-xl shadow-2xl overflow-hidden",
+                            mode === 'standard' && "sm:w-[340px]"
+                        )}
+                    >
+                        <div className="px-4 py-3 border-b border-slate-100 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-600">
+                                    Blueprint Review
+                                </p>
+                                <p className="text-[11px] font-bold text-slate-800 mt-1 truncate">
+                                    {blueprintReviewSummary.title}
+                                </p>
+                            </div>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 shrink-0"
+                                onClick={() => setIsReviewPopoverOpen(false)}
+                            >
+                                <X className="h-4 w-4" />
+                            </Button>
+                        </div>
+
+                        <div className="px-4 py-3 space-y-3">
+                            <p className="text-[11px] leading-relaxed text-slate-600">
+                                {blueprintReviewSummary.description}
+                            </p>
+
+                            <div className="flex flex-wrap gap-1.5">
+                                {blueprintReviewSummary.badges.map((badge, index) => (
+                                    <Badge
+                                        key={`${badge}-${index}`}
+                                        variant="outline"
+                                        className="border-amber-500/25 bg-amber-500/8 text-[8px] font-black uppercase tracking-widest text-amber-600"
+                                    >
+                                        {badge}
+                                    </Badge>
+                                ))}
+                            </div>
+
+                            {blueprintReviewSummary.reasons.length > 0 && (
+                                <div className="space-y-1.5">
+                                    {blueprintReviewSummary.reasons.map((reason, index) => (
+                                        <p key={`${reason}-${index}`} className="text-[10px] leading-snug text-slate-500">
+                                            {reason}
+                                        </p>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/90">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 rounded-xl border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-100"
+                                onClick={() => {
+                                    setIsInspectorVisible(true);
+                                    setIsReviewPopoverOpen(false);
+                                }}
+                            >
+                                Open Inspector
+                            </Button>
+                        </div>
+                    </motion.div>
+                )}
+            </div>
+        );
+    };
+
     return (
         <div
             ref={viewerRootRef}
@@ -3488,6 +3617,7 @@ function BlueprintWorkspace() {
                         </div>
 
                         <div className="flex items-center gap-3 pointer-events-auto">
+                            {renderReviewBell('immersive')}
                             <Button variant="outline" size="sm" className="h-11 px-5 rounded-2xl bg-[#2d334a] border-none text-white hover:bg-[#1e2235] font-black uppercase text-[11px] tracking-widest shadow-xl transition-all active:scale-95" onClick={resetState}>
                                 <RefreshCw className="h-4 w-4 mr-2" /> New
                             </Button>
@@ -3508,26 +3638,6 @@ function BlueprintWorkspace() {
                             </Button>
                         </div>
                     </div>
-
-                    {status === 'complete' && elements && blueprintReviewSummary && (
-                        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-[110] pointer-events-auto">
-                            <div className="max-w-[640px] rounded-2xl border border-amber-500/25 bg-white/85 backdrop-blur-xl shadow-xl px-4 py-3">
-                                <div className="flex items-start gap-3">
-                                    <div className="h-9 w-9 rounded-xl bg-amber-500/15 border border-amber-500/20 flex items-center justify-center shrink-0">
-                                        <AlertTriangle className="h-4 w-4 text-amber-500" />
-                                    </div>
-                                    <div className="min-w-0">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-600">
-                                            {blueprintReviewSummary.title}
-                                        </p>
-                                        <p className="text-[11px] font-medium text-slate-700 leading-snug mt-1">
-                                            {blueprintReviewSummary.description}
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     {/* --- LEFT NAVIGATION BAR (Tool System) --- */}
                     <div
@@ -3826,6 +3936,7 @@ function BlueprintWorkspace() {
                         <div className="flex items-center gap-1.5">
                             {status === 'complete' && elements && (
                                 <>
+                                    {renderReviewBell('standard')}
                                     <Button variant="ghost" size="sm" className="h-8 text-primary font-black hover:bg-primary/10 text-[10px] uppercase tracking-widest px-3" onClick={() => setIsFullscreen(true)}>
                                         <Maximize2 className="h-3.5 w-3.5 mr-1.5" /> Fullscreen
                                     </Button>
