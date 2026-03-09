@@ -2291,6 +2291,8 @@ function BlueprintWorkspace() {
         buildingName: result?.building_name || 'N/A',
     });
 
+    const isCurrentFlowRun = useCallback((runId: string) => flowRunIdRef.current === runId, []);
+
     const logBlueprintFlow = (step: string, details?: Record<string, unknown>) => {
         const runId = flowRunIdRef.current || 'no-run';
         if (details) {
@@ -2566,6 +2568,7 @@ function BlueprintWorkspace() {
                 return;
             }
             await startFileGeneration(f);
+            e.target.value = '';
         }
     };
 
@@ -2597,6 +2600,7 @@ function BlueprintWorkspace() {
     });
 
     const resetState = useCallback(() => {
+        flowRunIdRef.current = null;
         pendingAutoWalkRef.current = false;
         hasAutoEnteredFullscreenRef.current = false;
         setPreview(null); setDescription('');
@@ -2606,13 +2610,25 @@ function BlueprintWorkspace() {
         setIsFullscreen(false);
     }, [setElements]);
 
-    const animateProgress = (result: GeometricReconstruction) => {
+    const animateProgress = (result: GeometricReconstruction, runId: string) => {
+        if (!isCurrentFlowRun(runId)) {
+            console.warn(`[Blueprint Flow][${runId}] Ignored stale geometry update.`);
+            return;
+        }
         pendingAutoWalkRef.current = true;
         logBlueprintFlow('Step 8/9 applying generated JSON into BIM state.', summarizeReconstruction(result));
         setElements(result);
         setStatus('generating');
         const t = setInterval(() => {
+            if (!isCurrentFlowRun(runId)) {
+                clearInterval(t);
+                return;
+            }
             setProgress(prev => {
+                if (!isCurrentFlowRun(runId)) {
+                    clearInterval(t);
+                    return prev;
+                }
                 const next = prev + 0.035;
                 if (next >= 1.0) {
                     clearInterval(t);
@@ -2630,12 +2646,18 @@ function BlueprintWorkspace() {
     };
 
     const startFileGeneration = async (f: File) => {
-        flowRunIdRef.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        flowRunIdRef.current = runId;
         logBlueprintFlow('Step 1/9 blueprint file accepted.', {
             name: f.name,
             type: f.type || 'unknown',
             sizeBytes: f.size,
         });
+        pendingAutoWalkRef.current = false;
+        hasAutoEnteredFullscreenRef.current = false;
+        setElements(null);
+        setSiteResult(null);
+        setActiveSiteBuildingId(null);
         setStatus('preprocessing'); setProgress(0);
 
         try {
@@ -2653,6 +2675,11 @@ function BlueprintWorkspace() {
             setStatus('analyzing');
 
             const b64 = await fileToBase64(f);
+            if (!isCurrentFlowRun(runId)) {
+                clearInterval(iv);
+                console.warn(`[Blueprint Flow][${runId}] Aborted after base64 conversion because a newer blueprint superseded it.`);
+                return;
+            }
             logBlueprintFlow('Step 6/9 executing vision blueprint pipeline.', {
                 base64Chars: b64.length,
                 siteModeEnabled,
@@ -2660,6 +2687,11 @@ function BlueprintWorkspace() {
 
             if (siteModeEnabled) {
                 const site = await processBlueprintToSite3D(b64);
+                if (!isCurrentFlowRun(runId)) {
+                    clearInterval(iv);
+                    console.warn(`[Blueprint Flow][${runId}] Ignored stale site decomposition result.`);
+                    return;
+                }
                 clearInterval(iv);
                 setSiteResult(site);
                 const primary = site.buildings[0];
@@ -2671,7 +2703,7 @@ function BlueprintWorkspace() {
                         floors: primary.floor_count,
                         footprintArea: primary.footprint_area,
                     });
-                    animateProgress(primary.model);
+                    animateProgress(primary.model, runId);
                     toast({
                         title: 'Site Blueprint Parsed',
                         description: `${site.buildings.length} building cluster(s) detected. Viewing ${primary.name}.`,
@@ -2681,7 +2713,7 @@ function BlueprintWorkspace() {
                     logBlueprintFlow('Step 7/9 site decomposition produced no isolated buildings; fallback to source model.', {
                         conflicts: site.conflicts.length,
                     });
-                    animateProgress(site.source_model);
+                    animateProgress(site.source_model, runId);
                     toast({
                         title: 'Site Mode Fallback',
                         description: 'No separate building clusters detected. Showing consolidated model.',
@@ -2693,11 +2725,25 @@ function BlueprintWorkspace() {
             setSiteResult(null);
             setActiveSiteBuildingId(null);
             const result = await processBlueprintTo3D(b64);
+            if (!isCurrentFlowRun(runId)) {
+                clearInterval(iv);
+                console.warn(`[Blueprint Flow][${runId}] Ignored stale geometry result.`);
+                return;
+            }
             clearInterval(iv);
             logBlueprintFlow('Step 7/9 structured geometry received from AI pipeline.', summarizeReconstruction(result));
-            animateProgress(result);
+            animateProgress(result, runId);
         } catch (error: unknown) {
-            clearInterval(iv); setStatus('idle'); setPreview(null);
+            clearInterval(iv);
+            if (!isCurrentFlowRun(runId)) {
+                console.warn(`[Blueprint Flow][${runId}] Ignored stale failure after a newer blueprint took over.`, error);
+                return;
+            }
+            setStatus('idle');
+            setPreview(null);
+            setElements(null);
+            setSiteResult(null);
+            setActiveSiteBuildingId(null);
             console.error('[Blueprint Flow] Generation failed.', error);
             const message = error instanceof Error
                 ? error.message
@@ -2711,17 +2757,26 @@ function BlueprintWorkspace() {
             toast({ title: 'Empty Description', description: 'Please describe the building you want.', variant: 'destructive' });
             return;
         }
+        const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        flowRunIdRef.current = runId;
         setSiteResult(null);
         setActiveSiteBuildingId(null);
+        setElements(null);
         setStatus('analyzing'); setProgress(0);
         let cur = 0;
         const iv = setInterval(() => { cur += 0.012; if (cur <= 0.45) setProgress(cur); }, 80);
         try {
             const result = await generateBuildingFromDescription(description);
+            if (!isCurrentFlowRun(runId)) {
+                clearInterval(iv);
+                return;
+            }
             clearInterval(iv);
-            animateProgress(result);
+            animateProgress(result, runId);
         } catch {
-            clearInterval(iv); setStatus('idle');
+            clearInterval(iv);
+            if (!isCurrentFlowRun(runId)) return;
+            setStatus('idle');
             toast({ title: "Generation Failed", description: "Could not generate. Try again.", variant: 'destructive' });
         }
     };

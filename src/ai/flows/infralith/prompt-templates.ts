@@ -142,6 +142,8 @@ ANTI-HALLUCINATION HARD RULES:
 - If evidence is weak, output fewer elements and add explicit conflicts.
 - Prefer "unknown by omission" over wrong geometry.
 - OCR text-line polygons are NOT wall segments. Treat them as weak text-localization hints only.
+- If the sheet mixes floor plans with elevation views, title blocks, area schedules, legends, or project metadata, reconstruct ONLY the actual floor-plan views.
+- Ignore facade/elevation artwork, schedule tables, and text blocks such as level summaries unless they directly localize a floor-plan block.
 
 INPUT EVIDENCE SUMMARY:
 AZURE_DOCUMENT_INTELLIGENCE_LAYOUT_HINTS:
@@ -159,6 +161,7 @@ MANDATORY PIPELINE:
 - Derive scale from readable dimensions first (m, mm, cm, ft, in) and preserve proportional consistency across rooms.
 - If scale is inferred from priors, keep geometry conservative and add a scale-related conflict.
 - Keep one global coordinate frame across all floors.
+- When multiple plan blocks exist on one sheet, separate them by plan-block evidence rather than treating the whole page as one monolithic floor.
 
 1.5) EVIDENCE WEIGHTING (STRICT)
 - Highest confidence: visible wall lines, junctions, and opening symbols.

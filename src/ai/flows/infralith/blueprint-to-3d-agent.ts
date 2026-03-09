@@ -5466,6 +5466,7 @@ const reconcileStackedFloorAlignment = (
 
   result = {
     ...result,
+    roof: undefined,
     conflicts: [
       ...(result.conflicts || []),
       {
@@ -6091,11 +6092,17 @@ async function runLocalOcrLayoutHints(
 type FloorCropPlan = {
   label: string;
   level: number;
+  left: number;
   top: number;
+  width: number;
   height: number;
+  source: 'cluster' | 'band';
+  signalScore: number;
 };
 
-const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, number, number, number] | null => {
+type BoundingBox2D = [number, number, number, number];
+
+const polygonToBoundingBox = (polygon: number[] | null | undefined): BoundingBox2D | null => {
   if (!Array.isArray(polygon) || polygon.length < 6) return null;
   const xs: number[] = [];
   const ys: number[] = [];
@@ -6108,6 +6115,100 @@ const polygonToBoundingBox = (polygon: number[] | null | undefined): [number, nu
   }
   if (xs.length === 0 || ys.length === 0) return null;
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+};
+
+const getBoundingBoxCenter = (bbox: BoundingBox2D): [number, number] => [
+  (bbox[0] + bbox[2]) / 2,
+  (bbox[1] + bbox[3]) / 2,
+];
+
+const getBoundingBoxArea = (bbox: BoundingBox2D): number =>
+  Math.max(0, bbox[2] - bbox[0]) * Math.max(0, bbox[3] - bbox[1]);
+
+const mergeBoundingBoxes = (boxes: Array<BoundingBox2D | null | undefined>): BoundingBox2D | null => {
+  const valid = boxes.filter((box): box is BoundingBox2D => Array.isArray(box) && box.length === 4);
+  if (valid.length === 0) return null;
+  return [
+    Math.min(...valid.map((box) => box[0])),
+    Math.min(...valid.map((box) => box[1])),
+    Math.max(...valid.map((box) => box[2])),
+    Math.max(...valid.map((box) => box[3])),
+  ];
+};
+
+const clampBoundingBoxToImage = (
+  bbox: BoundingBox2D,
+  imageWidth: number,
+  imageHeight: number
+): BoundingBox2D => {
+  const x0 = Math.max(0, Math.min(imageWidth, bbox[0]));
+  const y0 = Math.max(0, Math.min(imageHeight, bbox[1]));
+  const x1 = Math.max(x0, Math.min(imageWidth, bbox[2]));
+  const y1 = Math.max(y0, Math.min(imageHeight, bbox[3]));
+  return [x0, y0, x1, y1];
+};
+
+const expandBoundingBox = (
+  bbox: BoundingBox2D,
+  padX: number,
+  padY: number,
+  imageWidth: number,
+  imageHeight: number
+): BoundingBox2D =>
+  clampBoundingBoxToImage(
+    [
+      bbox[0] - Math.max(0, padX),
+      bbox[1] - Math.max(0, padY),
+      bbox[2] + Math.max(0, padX),
+      bbox[3] + Math.max(0, padY),
+    ],
+    imageWidth,
+    imageHeight
+  );
+
+const boundingBoxesIntersect = (a: BoundingBox2D, b: BoundingBox2D): boolean =>
+  !(a[2] <= b[0] || a[0] >= b[2] || a[3] <= b[1] || a[1] >= b[3]);
+
+const computeBoundingBoxIoU = (a: BoundingBox2D, b: BoundingBox2D): number => {
+  const overlapW = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+  const overlapH = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  const overlap = overlapW * overlapH;
+  if (overlap <= 0) return 0;
+  const union = getBoundingBoxArea(a) + getBoundingBoxArea(b) - overlap;
+  return union > 0 ? overlap / union : 0;
+};
+
+const normalizeFloorLabelKey = (value: string): string =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const createFloorPlanFromBoundingBox = (
+  label: string,
+  level: number,
+  bbox: BoundingBox2D,
+  imageWidth: number,
+  imageHeight: number,
+  source: FloorCropPlan['source'],
+  signalScore: number
+): FloorCropPlan | null => {
+  const clamped = clampBoundingBoxToImage(bbox, imageWidth, imageHeight);
+  const width = Math.max(0, clamped[2] - clamped[0]);
+  const height = Math.max(0, clamped[3] - clamped[1]);
+  const minWidth = Math.max(120, imageWidth * 0.08);
+  const minHeight = Math.max(120, imageHeight * 0.1);
+  if (width < minWidth || height < minHeight) return null;
+  return {
+    label,
+    level,
+    left: Math.round(clamped[0]),
+    top: Math.round(clamped[1]),
+    width: Math.round(width),
+    height: Math.round(height),
+    source,
+    signalScore: Number(signalScore.toFixed(3)),
+  };
 };
 
 const resolveHintImageSize = (
@@ -6149,14 +6250,14 @@ const floorLabelToLevel = (label: string, fallback: number): number => {
   return fallback;
 };
 
-const deriveFloorCropPlans = (
+const deriveBandFloorCropPlans = (
   layoutHints: BlueprintLayoutHints | null,
   imageWidth: number,
   imageHeight: number
 ): FloorCropPlan[] => {
   if (!layoutHints || imageWidth <= 0 || imageHeight <= 0) return [];
 
-  const anchors = (layoutHints.floorLabelAnchors || [])
+  const allAnchors = (layoutHints.floorLabelAnchors || [])
     .map((anchor, index) => {
       const bbox = polygonToBoundingBox(anchor?.polygon || []);
       if (!bbox) return null;
@@ -6175,6 +6276,11 @@ const deriveFloorCropPlans = (
       entry.centerY <= imageHeight
     )
     .sort((a, b) => a.centerY - b.centerY);
+
+  const planCaptionAnchors = allAnchors.filter((anchor) =>
+    /\b(?:floor|basement|cellar|terrace|roof)\b/i.test(anchor.text)
+  );
+  const anchors = planCaptionAnchors.length >= 2 ? planCaptionAnchors : allAnchors;
 
   if (anchors.length < 2) return [];
 
@@ -6213,15 +6319,219 @@ const deriveFloorCropPlans = (
     plans.push({
       label: current.text || `Floor ${level}`,
       level,
+      left: 0,
       top,
+      width: imageWidth,
       height: bandHeight,
+      source: 'band',
+      signalScore: 1,
     });
   }
 
   return plans.slice(0, 6);
 };
 
-async function cropImageBand(base64Image: string, top: number, height: number): Promise<string | null> {
+const deriveClusteredFloorCropPlans = (
+  layoutHints: BlueprintLayoutHints | null,
+  imageWidth: number,
+  imageHeight: number
+): FloorCropPlan[] => {
+  if (!layoutHints || imageWidth <= 0 || imageHeight <= 0) return [];
+
+  const rawAnchors = (layoutHints.floorLabelAnchors || [])
+    .map((anchor, index) => {
+      const bbox = polygonToBoundingBox(anchor?.polygon || []);
+      if (!bbox) return null;
+      const [centerX, centerY] = getBoundingBoxCenter(bbox);
+      return {
+        text: String(anchor?.text || '').trim(),
+        labelKey: normalizeFloorLabelKey(String(anchor?.text || '')),
+        bbox,
+        centerX,
+        centerY,
+        level: floorLabelToLevel(String(anchor?.text || ''), index),
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => !!entry)
+    .sort((a, b) => (a.centerY - b.centerY) || (a.centerX - b.centerX));
+
+  if (rawAnchors.length < 2) return [];
+
+  const dedupeX = Math.max(24, imageWidth * 0.025);
+  const dedupeY = Math.max(18, imageHeight * 0.025);
+  const anchors: typeof rawAnchors = [];
+  for (const anchor of rawAnchors) {
+    const duplicateIndex = anchors.findIndex((existing) =>
+      existing.labelKey === anchor.labelKey &&
+      Math.abs(existing.centerX - anchor.centerX) <= dedupeX &&
+      Math.abs(existing.centerY - anchor.centerY) <= dedupeY
+    );
+    if (duplicateIndex < 0) {
+      anchors.push(anchor);
+      continue;
+    }
+    const existing = anchors[duplicateIndex];
+    const existingArea = getBoundingBoxArea(existing.bbox);
+    const nextArea = getBoundingBoxArea(anchor.bbox);
+    if (nextArea > existingArea || anchor.text.length > existing.text.length) {
+      anchors[duplicateIndex] = anchor;
+    }
+  }
+
+  if (anchors.length < 2) return [];
+
+  const dimensionBoxes = (layoutHints.dimensionAnchors || [])
+    .map((anchor) => polygonToBoundingBox(anchor?.polygon || []))
+    .filter((box): box is BoundingBox2D => !!box);
+  const semanticBoxes = (layoutHints.semanticAnchors || [])
+    .map((anchor) => polygonToBoundingBox(anchor?.polygon || []))
+    .filter((box): box is BoundingBox2D => !!box);
+  const lineBoxes = (layoutHints.linePolygons || [])
+    .map((polygon) => polygonToBoundingBox(polygon))
+    .filter((box): box is BoundingBox2D => !!box);
+
+  const maxAbove = Math.max(140, imageHeight * 0.42);
+  const maxBelow = Math.max(90, imageHeight * 0.18);
+  const horizontalReach = Math.max(160, imageWidth * 0.18);
+
+  const assignSeedBoxes = (boxes: BoundingBox2D[]) => {
+    const assignments = anchors.map(() => [] as BoundingBox2D[]);
+    for (const box of boxes) {
+      const [cx, cy] = getBoundingBoxCenter(box);
+      let bestIndex = -1;
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex += 1) {
+        const anchor = anchors[anchorIndex];
+        if (Math.abs(cx - anchor.centerX) > horizontalReach * 1.35) continue;
+        const dy = cy - anchor.centerY;
+        if (dy < -maxAbove || dy > maxBelow * 1.8) continue;
+        const horizontalPenalty = Math.abs(cx - anchor.centerX) / horizontalReach;
+        const verticalPenalty = dy <= 0
+          ? Math.abs(dy) / maxAbove
+          : 0.85 + (dy / Math.max(maxBelow, 1));
+        const score = (horizontalPenalty * 1.2) + verticalPenalty;
+        if (score > 2.45) continue;
+        if (score < bestScore) {
+          bestScore = score;
+          bestIndex = anchorIndex;
+        }
+      }
+      if (bestIndex >= 0) assignments[bestIndex].push(box);
+    }
+    return assignments;
+  };
+
+  const dimensionAssignments = assignSeedBoxes(dimensionBoxes);
+  const semanticAssignments = assignSeedBoxes(semanticBoxes);
+
+  const candidatePlans: FloorCropPlan[] = [];
+  for (let index = 0; index < anchors.length; index += 1) {
+    const anchor = anchors[index];
+    const looksLikePlanCaption = /\b(?:floor|basement|cellar|terrace|roof)\b/i.test(anchor.text);
+    const seedBoxes = [
+      ...dimensionAssignments[index],
+      ...semanticAssignments[index],
+    ];
+    const baseBox = mergeBoundingBoxes([anchor.bbox, ...seedBoxes]);
+    if (!baseBox) continue;
+
+    const seedPadX = Math.max(48, imageWidth * 0.035);
+    const seedPadY = Math.max(42, imageHeight * 0.03);
+    const explorationBox = expandBoundingBox(
+      baseBox,
+      seedBoxes.length > 0 ? seedPadX * 1.6 : Math.max(seedPadX * 2.4, horizontalReach * 0.9),
+      seedBoxes.length > 0 ? seedPadY * 1.7 : Math.max(seedPadY * 2.6, imageHeight * 0.18),
+      imageWidth,
+      imageHeight
+    );
+
+    const lineSupport = lineBoxes.filter((box) => {
+      if (!boundingBoxesIntersect(box, explorationBox)) return false;
+      const [cx, cy] = getBoundingBoxCenter(box);
+      if (Math.abs(cx - anchor.centerX) > horizontalReach * 1.55) return false;
+      if (cy > anchor.centerY + maxBelow * 1.6) return false;
+      return true;
+    });
+
+    if (seedBoxes.length === 0) {
+      if (!looksLikePlanCaption) continue;
+      if (lineSupport.length < 18) continue;
+    }
+
+    const mergedBox = mergeBoundingBoxes([baseBox, ...lineSupport]) || baseBox;
+    const paddedBox = expandBoundingBox(
+      mergedBox,
+      Math.max(36, imageWidth * 0.025),
+      Math.max(30, imageHeight * 0.022),
+      imageWidth,
+      imageHeight
+    );
+    const signalScore =
+      (dimensionAssignments[index].length * 6) +
+      (semanticAssignments[index].length * 8) +
+      (lineSupport.length * 0.12);
+    const plan = createFloorPlanFromBoundingBox(
+      anchor.text || `Floor ${anchor.level}`,
+      anchor.level,
+      paddedBox,
+      imageWidth,
+      imageHeight,
+      'cluster',
+      signalScore
+    );
+    if (!plan) continue;
+    candidatePlans.push(plan);
+  }
+
+  if (candidatePlans.length < 2) return [];
+
+  candidatePlans.sort((a, b) => {
+    if (a.level !== b.level) return a.level - b.level;
+    return b.signalScore - a.signalScore;
+  });
+
+  const filtered: FloorCropPlan[] = [];
+  for (const plan of candidatePlans) {
+    const planBox: BoundingBox2D = [
+      plan.left,
+      plan.top,
+      plan.left + plan.width,
+      plan.top + plan.height,
+    ];
+    const overlappingIndex = filtered.findIndex((existing) => {
+      const existingBox: BoundingBox2D = [
+        existing.left,
+        existing.top,
+        existing.left + existing.width,
+        existing.top + existing.height,
+      ];
+      return computeBoundingBoxIoU(planBox, existingBox) >= 0.52;
+    });
+    if (overlappingIndex < 0) {
+      filtered.push(plan);
+      continue;
+    }
+    const existing = filtered[overlappingIndex];
+    const preferCurrent =
+      plan.signalScore > existing.signalScore ||
+      (plan.signalScore === existing.signalScore && (plan.width * plan.height) > (existing.width * existing.height));
+    if (preferCurrent) filtered[overlappingIndex] = plan;
+  }
+
+  return filtered.slice(0, 6);
+};
+
+const deriveFloorCropPlans = (
+  layoutHints: BlueprintLayoutHints | null,
+  imageWidth: number,
+  imageHeight: number
+): FloorCropPlan[] => {
+  const clustered = deriveClusteredFloorCropPlans(layoutHints, imageWidth, imageHeight);
+  if (clustered.length >= 2) return clustered;
+  return deriveBandFloorCropPlans(layoutHints, imageWidth, imageHeight);
+};
+
+async function cropImageRect(base64Image: string, left: number, top: number, width: number, height: number): Promise<string | null> {
   if (sharpUnsupported) return null;
 
   try {
@@ -6235,18 +6545,26 @@ async function cropImageBand(base64Image: string, top: number, height: number): 
     if (!inputBuffer.length) return null;
     const instance = sharp(inputBuffer, { limitInputPixels: false }).rotate();
     const metadata = await instance.metadata();
-    const width = Number(metadata?.width || 0);
+    const imageWidth = Number(metadata?.width || 0);
     const imageHeight = Number(metadata?.height || 0);
-    if (width <= 0 || imageHeight <= 0) return null;
+    if (imageWidth <= 0 || imageHeight <= 0) return null;
 
+    const safeLeft = Math.max(0, Math.min(imageWidth - 1, Math.floor(left)));
     const safeTop = Math.max(0, Math.min(imageHeight - 1, Math.floor(top)));
+    const maxWidth = imageWidth - safeLeft;
     const maxHeight = imageHeight - safeTop;
+    const safeWidth = Math.max(1, Math.min(maxWidth, Math.floor(width)));
     const safeHeight = Math.max(1, Math.min(maxHeight, Math.floor(height)));
-    if (safeHeight < Math.max(96, imageHeight * 0.12)) return null;
+    if (
+      safeWidth < Math.max(96, imageWidth * 0.12) ||
+      safeHeight < Math.max(96, imageHeight * 0.12)
+    ) {
+      return null;
+    }
 
     const cropped = await sharp(inputBuffer, { limitInputPixels: false })
       .rotate()
-      .extract({ left: 0, top: safeTop, width, height: safeHeight })
+      .extract({ left: safeLeft, top: safeTop, width: safeWidth, height: safeHeight })
       .png({ compressionLevel: 9 })
       .toBuffer();
     return ensureDataUrlPng(cropped.toString('base64'));
@@ -6402,7 +6720,16 @@ async function attemptSegmentedMultiFloorReconstruction(
 
   traceLog('Infralith Vision Engine', traceId, '4/9', 'attempting segmented multi-floor reconstruction', {
     plannedBands: plans.length,
-    plans: plans.map((plan) => ({ level: plan.level, label: plan.label, top: plan.top, height: plan.height })),
+    plans: plans.map((plan) => ({
+      level: plan.level,
+      label: plan.label,
+      left: plan.left,
+      top: plan.top,
+      width: plan.width,
+      height: plan.height,
+      source: plan.source,
+      signalScore: plan.signalScore,
+    })),
   }, 'warn');
 
   const floorResults: Array<{ level: number; label: string; payload: GeometricReconstruction }> = [];
@@ -6410,13 +6737,13 @@ async function attemptSegmentedMultiFloorReconstruction(
 
   for (const plan of plans) {
     const cropped =
-      (await cropImageBand(structuralImage, plan.top, plan.height)) ||
-      (await cropImageBand(fallbackImage, plan.top, plan.height));
+      (await cropImageRect(structuralImage, plan.left, plan.top, plan.width, plan.height)) ||
+      (await cropImageRect(fallbackImage, plan.left, plan.top, plan.width, plan.height));
     if (!cropped) {
       decompositionConflicts.push({
         type: 'structural',
         severity: 'medium',
-        description: `Unable to crop floor band for label "${plan.label}".`,
+        description: `Unable to crop floor region for label "${plan.label}".`,
         location: [0, 0],
       });
       continue;
