@@ -706,6 +706,66 @@ const polygonArea2D = (polygon: [number, number][]): number => {
     return area / 2;
 };
 
+const computePolygonBounds2D = (polygon: [number, number][]): { minX: number; maxX: number; minZ: number; maxZ: number; } | null => {
+    if (!Array.isArray(polygon) || polygon.length < 3) return null;
+    const xs = polygon.map((point) => Number(point?.[0])).filter((value) => Number.isFinite(value));
+    const zs = polygon.map((point) => Number(point?.[1])).filter((value) => Number.isFinite(value));
+    if (xs.length < 3 || zs.length < 3) return null;
+    return {
+        minX: Math.min(...xs),
+        maxX: Math.max(...xs),
+        minZ: Math.min(...zs),
+        maxZ: Math.max(...zs),
+    };
+};
+
+const computeCombinedPolygonBounds2D = (polygons: [number, number][][]): { minX: number; maxX: number; minZ: number; maxZ: number; } | null => {
+    const bounds = polygons
+        .map((polygon) => computePolygonBounds2D(polygon))
+        .filter((value): value is { minX: number; maxX: number; minZ: number; maxZ: number; } => !!value);
+    if (bounds.length === 0) return null;
+    return {
+        minX: Math.min(...bounds.map((value) => value.minX)),
+        maxX: Math.max(...bounds.map((value) => value.maxX)),
+        minZ: Math.min(...bounds.map((value) => value.minZ)),
+        maxZ: Math.max(...bounds.map((value) => value.maxZ)),
+    };
+};
+
+const sumPolygonArea2D = (polygons: [number, number][][]): number =>
+    polygons.reduce((sum, polygon) => sum + Math.abs(polygonArea2D(polygon)), 0);
+
+const selectTrustedFloorShellPolygons = (
+    wallPolygons: [number, number][][],
+    roomPolygons: [number, number][][]
+): [number, number][][] => {
+    if (wallPolygons.length === 0) return roomPolygons;
+    if (roomPolygons.length === 0) return wallPolygons;
+
+    const wallArea = sumPolygonArea2D(wallPolygons);
+    const roomArea = sumPolygonArea2D(roomPolygons);
+    if (!(roomArea > 0.1) || !(wallArea > 0.1)) {
+        return wallArea > roomArea ? wallPolygons : roomPolygons;
+    }
+
+    const wallBounds = computeCombinedPolygonBounds2D(wallPolygons);
+    const roomBounds = computeCombinedPolygonBounds2D(roomPolygons);
+    if (!wallBounds || !roomBounds) return wallPolygons;
+
+    const roomSpan = Math.max(roomBounds.maxX - roomBounds.minX, roomBounds.maxZ - roomBounds.minZ, 1);
+    const maxDrift = clampScalar(roomSpan * 0.18, 0.8, 2.2);
+    const wallTooLarge =
+        wallArea > roomArea * 2.25 ||
+        wallArea < roomArea * 0.45;
+    const wallDriftsOutsideRoomEnvelope =
+        wallBounds.minX < roomBounds.minX - maxDrift ||
+        wallBounds.maxX > roomBounds.maxX + maxDrift ||
+        wallBounds.minZ < roomBounds.minZ - maxDrift ||
+        wallBounds.maxZ > roomBounds.maxZ + maxDrift;
+
+    return (wallTooLarge || wallDriftsOutsideRoomEnvelope) ? roomPolygons : wallPolygons;
+};
+
 const buildShapeFromPolygonPoints = (polygon: [number, number][]): THREE.Shape | null => {
     if (!Array.isArray(polygon) || polygon.length < 3) return null;
     const shape = new THREE.Shape();
@@ -1528,16 +1588,11 @@ function GeneratedStructure({
             const wallPolygons = buildFloorFootprintPolygonsFromWalls(levelWalls)
                 .map((polygon) => insetPolygonToCentroid(polygon, wallInset))
                 .filter((polygon) => polygon.length >= 3 && Math.abs(polygonArea2D(polygon)) >= 0.4);
-            if (wallPolygons.length > 0) {
-                grouped.set(level, wallPolygons);
-                continue;
-            }
-
-            // If walls are incomplete for a floor, use only same-floor room polygons from source data.
             const roomPolygons = (roomPolygonsByFloor.get(level) || [])
                 .map((polygon) => insetPolygonToCentroid(polygon, 0.02))
                 .filter((polygon) => polygon.length >= 3 && Math.abs(polygonArea2D(polygon)) >= 0.1);
-            if (roomPolygons.length > 0) grouped.set(level, roomPolygons);
+            const trustedPolygons = selectTrustedFloorShellPolygons(wallPolygons, roomPolygons);
+            if (trustedPolygons.length > 0) grouped.set(level, trustedPolygons);
         }
         return grouped;
     }, [floorMetrics.levels, roomPolygonsByFloor, wallsByFloor]);
