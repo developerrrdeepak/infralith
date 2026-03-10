@@ -283,9 +283,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Sync NextAuth Session and User State
   useEffect(() => {
+    const authTimeout = setTimeout(() => {
+      if (!isProfileChecked) {
+        console.warn('Auth check timeout - forcing profile check completion');
+        setIsProfileChecked(true);
+        setIsLoadingAuth(false);
+      }
+    }, 5000);
+
     if (status === 'loading') {
       setIsLoadingAuth(true);
-      return;
+      return () => clearTimeout(authTimeout);
     }
 
     if (status === 'authenticated' && session?.user) {
@@ -323,6 +331,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     setIsLoadingAuth(false);
     setIsProfileChecked(true);
+    clearTimeout(authTimeout);
+    return () => clearTimeout(authTimeout);
   }, [session, status]); // REMOVED user from dependencies to prevent infinite loop, as we use it inside. Using status and session is enough.
 
   useEffect(() => {
