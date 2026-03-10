@@ -12,7 +12,7 @@
     "postinstall": "node -e \"console.log('Postinstall complete')\""
   },
   "engines": {
-    "node": ">=20.10 <24"
+    "node": ">=20.10 <=24"
   },
   "dependencies": {
     "@ai-sdk/azure": "^3.0.40",
