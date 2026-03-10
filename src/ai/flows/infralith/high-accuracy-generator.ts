@@ -1,4 +1,4 @@
-'use server';
+'use client';
 
 import { analyzeBlueprintLayoutFromBase64 } from '@/ai/azure-ai';
 import { generateAdaptive3DModel } from './adaptive-3d-engine';
@@ -155,6 +155,4 @@ export async function generateWithProgressTracking(
   };
 }
 
-// Export for use in API routes
-export { validateModel, autoFixModel } from './model-validation';
-export { analyzeBlueprint, selectAdaptiveStrategy } from './blueprint-analyzer';
+

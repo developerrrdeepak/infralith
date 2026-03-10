@@ -1,4 +1,4 @@
-'use server';
+'use client';
 
 import type { BlueprintLayoutHints } from '@/ai/azure-ai';
 
