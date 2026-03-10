@@ -3,6 +3,11 @@ set -eu
 
 echo "Starting Infralith on Azure App Service..."
 
+if [ -f "server.js" ]; then
+  echo "Using packaged standalone server from deployment root."
+  exec node server.js
+fi
+
 if [ -f ".next/standalone/server.js" ]; then
   # Make sure standalone server can serve framework/static and public assets.
   if [ -d ".next/static" ]; then
